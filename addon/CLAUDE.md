@@ -1220,11 +1220,14 @@ same reason.
   from listing it as unused. **Re-edit**: edit mode shows Draw (the Masks
   Editor stays current) only when that file reads (`excal_tab.has_diagram`).
   A Use drawing on top of an earlier drawing reads svg-edit's masks back and
-  `remap_masks` carries them over: a mask with IoU >= 0.8 on an old label's
-  box follows its label and keeps its id (so the note updates in place);
-  every other mask shifts with the scene origin and goes once wholly outside
-  the new image. The PNG gets a new media name; the old image and its scene
-  stay for notes not yet updated.
+  `remap_masks` carries them over: the best mask with IoU >= 0.8 on an old
+  label's box follows its label and keeps its id (so the note updates in
+  place); every other mask shifts with the scene origin and goes once wholly
+  outside the new image. Only a label NEW to the scene gets a new mask (id
+  `klaus-new-<n>`, which ngen reads as a new card); one the old scene had
+  keeps what the user left, a resized mask stays theirs and a deleted one
+  stays deleted (R22). The PNG gets a new media name; the old image and its
+  scene stay for notes not yet updated.
 - `web/copilot.js`: injected into editor webviews; shadow-DOM-aware
   (`composedPath`). Ghost text and Ask are gone — this file now only tracks
   field focus (for PDF page-insert targeting) and the image-crop dblclick

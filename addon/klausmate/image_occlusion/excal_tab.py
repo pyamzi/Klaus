@@ -169,6 +169,7 @@ class DrawTab(QWidget):
         # per change through klausexcal:dirty: its scene version, the sum of
         # the element versions, moved away from the one it last exported.
         self.dirty = False
+        self.edits = 0  # dirty messages so far: a change during a pending use
         self._load_js: Optional[str] = None
         self.web = DrawWebView(parent=self)
         self.web._page = DrawPage(self.web._onBridgeCmd)
@@ -195,6 +196,12 @@ class DrawTab(QWidget):
         self._load_js = "klausExcalidraw.load(%s);" % arg
         if self._ready:
             self.web.eval(self._load_js)
+
+    def mark_used(self, edits: int) -> None:
+        """The drawing taken when `edits` dirty messages had come has landed:
+        clean, unless the page reported a change since."""
+        if self.edits == edits:
+            self.dirty = False
 
     def use(self, *_args) -> None:
         if self._on_use is None or not self._ready:
@@ -228,13 +235,13 @@ class DrawTab(QWidget):
                     self.web.eval(self._load_js)
             elif action == "dirty":
                 self.dirty = True
+                self.edits += 1
             elif action == "occlude":
                 if not isinstance(data, dict) or data.get("error"):
                     tooltip(_error_text(data.get("error") if isinstance(data, dict) else "?"),
                             parent=self)
                     return None
-                if self._on_use(data):
-                    self.dirty = False
+                self._on_use(data)  # it marks the drawing used once it lands
         except Exception as exc:  # a slot exception would abort Anki
             print(f"[klausmate] draw tab: {cmd[:40]}: {type(exc).__name__}: {exc}")
         return None

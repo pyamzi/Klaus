@@ -100,6 +100,8 @@ class ImgOccAdd(object):
         # the saved one in edit mode, else the last drawing used. A drawing
         # used on top of it carries the masks over (remap_masks).
         self.excal_scene = None
+        # A Use drawing waiting for svg-edit's masks: one at a time.
+        self.excal_pending = False
         loadConfig(self)
 
     def occlude(self, image_path=None, initial_svg=None, draw=False):
@@ -367,8 +369,10 @@ class ImgOccAdd(object):
             % (bkgd_url, width, height)
         )
         self.image_path = image_path
-        # Klaus: a picked image replaces any drawing: no sidecar, Add allowed.
+        # Klaus: a picked image replaces any drawing: no sidecar, no scene to
+        # carry masks over from, Add allowed.
         self.excal_sidecar = None
+        self.excal_scene = None
         self.imgoccedit.set_add_enabled(True)
 
     def _draw_folder(self):
@@ -386,10 +390,15 @@ class ImgOccAdd(object):
         earlier drawing (a repeat use, or a saved diagram in edit mode) the
         masks svg-edit holds are carried over by remap_masks, once svg-edit
         hands them back. False, changing nothing, when the result can't be
-        used (a tooltip says why) or the editor closed."""
+        used (a tooltip says why), one is still pending, or the editor
+        closed. The drawing turns clean only once it lands (_show_drawing)."""
         dialog = self.imgoccedit
         if dialog.svg_edit is None:  # closed meanwhile (Review Focus 4)
             return False
+        if self.excal_pending:
+            tooltip(_("Klaus: still using the last drawing…"), parent=dialog)
+            return False
+        edits = dialog.draw_tab.edits if dialog.draw_tab is not None else 0
         try:
             png_path, svg_path, sidecar = excal_tab.prepare_occlusion(
                 result, self._draw_folder(),
@@ -402,29 +411,29 @@ class ImgOccAdd(object):
             return False
         new, old = json.loads(sidecar), self.excal_scene
         if old is None:
-            self._show_drawing(png_path, svg, width, height, sidecar, new)
+            self._show_drawing(png_path, svg, width, height, sidecar, new, edits)
             return True
 
         def carry_over(current):
             # svg-edit's answer, on the main thread: a slot exception would abort Anki
+            self.excal_pending = False
             try:
                 if dialog.svg_edit is None:  # closed meanwhile
                     return
                 masks = remap_masks(current, old, old["klaus"], new, new["klaus"], width, height)
-                self._show_drawing(png_path, masks, width, height, sidecar, new)
-            except Exception as e:
+                self._show_drawing(png_path, masks, width, height, sidecar, new, edits)
+            except Exception as e:  # the drawing stays dirty: Use drawing is still to do
                 print("[klausmate] draw: masks not carried over: %s: %s" % (type(e).__name__, e))
                 tooltip(_("Klaus: couldn't carry the masks over; press Use drawing again"),
                         parent=dialog)
-                if dialog.draw_tab is not None:
-                    dialog.draw_tab.dirty = True
 
+        self.excal_pending = True
         # See onAddNotesButton about leaveContext().
         dialog.svg_edit.evalWithCallback(
             "svgCanvas.leaveContext(); svgCanvas.svgCanvasToString();", carry_over)
         return True
 
-    def _show_drawing(self, png_path, svg, width, height, sidecar, scene):
+    def _show_drawing(self, png_path, svg, width, height, sidecar, scene, edits):
         # setSvgString sizes the canvas from the SVG, so the background and
         # resolution come after it, as onChangeImage sets them.
         dialog = self.imgoccedit
@@ -437,6 +446,8 @@ class ImgOccAdd(object):
         self.image_path = png_path
         self.excal_sidecar = sidecar
         self.excal_scene = scene
+        if dialog.draw_tab is not None:
+            dialog.draw_tab.mark_used(edits)
         dialog.set_add_enabled(True)
         dialog.tab_widget.setCurrentIndex(0)
         dialog.fitImageCanvas()

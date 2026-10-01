@@ -125,7 +125,7 @@ def parse(svg):
 
 
 def by_id(masks):
-    return {a.get("id"): (tag, a) for tag, a in masks}
+    return {a.get("id") or "<no id %d>" % i: (tag, a) for i, (tag, a) in enumerate(masks)}
 
 
 def geom(attrs, tag="rect"):
@@ -254,23 +254,61 @@ if ok:
 else:
     check("remap_masks runs", False, str(out))
 
-section("a new label gets a new, id-less mask in the old masks' style")
+section("a truly new label gets exactly one new mask, id klaus-new-1, in the old style")
 T4 = {"id": "t4", "type": "text", "x": 20, "y": 120, "width": 60, "height": 20,
       "angle": 0, "isDeleted": False, "text": "Vena"}
 NEW4 = scene(extra=(T4,))
+want4 = {r[0]: r[1:] for r in em.label_rects(NEW4, 0, 0, 20, 2, 4)}
 ok, out = run(OLD_SVG, NEW4, META, W, H)
 if ok:
     masks4 = parse(out)[2]
-    fresh = [a for _t, a in masks4 if "id" not in a]
-    want4 = {r[0]: r[1:] for r in em.label_rects(NEW4, 0, 0, 20, 2, 4)}
-    check("one mask without an id (svg-edit names it; ngen makes it a new card)",
-          len(fresh) == 1, str(masks4))
-    check("...on the new label", len(fresh) == 1 and close(geom(fresh[0]), want4["t4"]))
+    g = by_id(masks4)
+    check("four masks: the three old ones and one new", len(masks4) == 4
+          and sorted(g) == ["abc-ao-1", "abc-ao-2", "abc-ao-3", "klaus-new-1"], str(sorted(g)))
+    fresh = g.get("klaus-new-1", ("", {}))[1]
+    check("...the new one on the new label", fresh and close(geom(fresh), want4["t4"]), str(fresh))
     check("...in the old masks' fill and stroke",
-          len(fresh) == 1 and fresh[0].get("fill") == "#ABCDEF" and fresh[0].get("stroke") == "#123456",
-          str(fresh))
+          fresh.get("fill") == "#ABCDEF" and fresh.get("stroke") == "#123456", str(fresh))
 else:
     check("remap_masks runs", False, str(out))
+ok, out = run(svg_edit_svg(W, H, [L1, L2, HAND, rect("klaus-new-1", 600, 10, 20, 20)]), NEW4, META, W, H)
+g = by_id(parse(out)[2]) if ok else {}
+check("a new mask's id never collides with one already there (klaus-new-2)",
+      len(g) == 5 and "klaus-new-2" in g and close(geom(g["klaus-new-2"][1]), want4["t4"]), str(sorted(g)))
+
+section("R22: a label the old scene had keeps what the user left of its mask")
+x, y, w_, h_ = OLD_LABELS["t1"]
+WIDE = rect("abc-ao-1", x, y, w_ * 1.65, h_)  # IoU 1/1.65 ~ 0.6: the user's now
+ok, out = run(svg_edit_svg(W, H, [WIDE, L2, HAND]), OLD, META, W, H)
+g = by_id(parse(out)[2]) if ok else {}
+check("a widened mask, unchanged scene: still three masks, no second rect for t1",
+      ok and len(parse(out)[2]) == 3, str(sorted(g)))
+check("...the widened mask keeps its id and its own box",
+      "abc-ao-1" in g and close(geom(g["abc-ao-1"][1]), (x, y, w_ * 1.65, h_)), str(g.get("abc-ao-1")))
+ok, out = run(svg_edit_svg(W, H, [WIDE, L2, HAND]), NEW1, META, W, H)
+check("...also when its label's text changed: three masks, abc-ao-1 unmoved",
+      ok and len(parse(out)[2]) == 3
+      and close(geom(by_id(parse(out)[2])["abc-ao-1"][1]), (x, y, w_ * 1.65, h_)), str(out)[:200])
+ok, out = run(svg_edit_svg(W, H, [L1, HAND]), OLD, META, W, H)
+g = by_id(parse(out)[2]) if ok else {}
+check("a label whose mask the user deleted gets none back (two masks)",
+      ok and len(parse(out)[2]) == 2 and sorted(g) == ["abc-ao-1", "abc-ao-3"], str(sorted(g)))
+ok, out = run(svg_edit_svg(W, H, [L1, HAND]), NEW4, META, W, H)
+g = by_id(parse(out)[2]) if ok else {}
+check("...while a new label beside it still gets exactly one (three masks)",
+      ok and len(parse(out)[2]) == 3 and sorted(g) == ["abc-ao-1", "abc-ao-3", "klaus-new-1"],
+      str(sorted(g)))
+
+section("two masks over one label: the best follows it, the other is the user's")
+DUP = rect("abc-ao-9", x + 8, y + 4, w_, h_)  # IoU ~0.84, below L1's 1.0
+ok, out = run(svg_edit_svg(W, H, [DUP, L1, L2, HAND]), NEW3, META3, W3, H3)
+g = by_id(parse(out)[2]) if ok else {}
+check("four masks, none removed", ok and len(parse(out)[2]) == 4
+      and sorted(g) == ["abc-ao-1", "abc-ao-2", "abc-ao-3", "abc-ao-9"], str(sorted(g)))
+check("the exact one (abc-ao-1) follows the label",
+      "abc-ao-1" in g and close(geom(g["abc-ao-1"][1]), want3["t1"]), str(g.get("abc-ao-1")))
+check("the other keeps its id and shifts like a hand mask (+100/+60)",
+      "abc-ao-9" in g and close(geom(g["abc-ao-9"][1]), (x + 108, y + 64, w_, h_)), str(g.get("abc-ao-9")))
 
 section("a label mask the user nudged still follows its label (IoU >= 0.8)")
 x, y, w_, h_ = OLD_LABELS["t1"]
@@ -677,6 +715,31 @@ if dlg is not None:
         check("the editor closed", not dlg.isVisible())
     dlg.close()
 
+section("Review Focus 1: remap_masks' output straight into ngen's edit path")
+media = tempfile.mkdtemp(prefix="io-media-", dir=TMP)
+with open(os.path.join(media, "_diagram-1.png.excalidraw"), "w", encoding="utf-8") as f:
+    json.dump(OLD_SIDE, f)
+c, editor, ia, dlg, _r = edit_session(media)
+if dlg is not None:
+    Note.flushed = []
+    ASKS.clear()
+    out5 = em.remap_masks(OLD_SVG, OLD, META, NEW4, META, W, H)
+    gen = ngen.IoGenHideAllRevealOne(editor, out5, os.path.join(media, "diagram-1.png"), ia.opref,
+                                     [], {}, 1)
+    done5 = []
+    ok, r = attempt(gen.updateNotes, done5.append)
+    check("updateNotes runs on it (every mask has an id)", ok and len(done5) == 1, str(r))
+    check("IOE asks: 0 deleted, 1 created", len(ASKS) == 1 and "delete 0 card" in ASKS[0]
+          and "create 1 new" in ASKS[0], str(ASKS))
+    check("the three notes update in place, exactly one note added, none removed",
+          sorted(Note.flushed) == [101, 102, 103] and len(c.added) == 1 and c.removed == [],
+          "%s %s %s" % (Note.flushed, len(c.added), c.removed))
+    check("...the old notes keep their ids, the new one is abc-ao-4",
+          [c.notes[n][F["id"]] for n in (101, 102, 103)] == ["abc-ao-1", "abc-ao-2", "abc-ao-3"]
+          and c.added and c.added[0][F["id"]] == "abc-ao-4",
+          str([n[F["id"]] for n in c.added]))
+    dlg.close()
+
 section("edit mode: Update without using the drawing writes no scene")
 media = tempfile.mkdtemp(prefix="io-media-", dir=TMP)
 with open(os.path.join(media, "_diagram-1.png.excalidraw"), "w", encoding="utf-8") as f:
@@ -750,11 +813,38 @@ if dlg is not None:
               "svg_3" in g and close(geom(g["svg_3"][1]), (110, 280, 50, 40))
               and close(geom(g["svg_1"][1]), want3["t1"]), str(g)[:300])
 
+    section("dirty is cleared only when the carried-over masks land; one pending use at a time")
+    sv.evals.clear()
+    sv.callbacks.clear()
+    TIPS.clear()
+    tab = dlg.draw_tab
+    tab.web._onBridgeCmd("klausexcal:dirty:" + base64.b64encode(b"{}").decode())
+    tab.web._onBridgeCmd("klausexcal:occlude:" + base64.b64encode(
+        json.dumps(result(NEW1, 0, 0, W, H)).encode()).decode())
+    check("Use drawing pressed: svg-edit is asked once", len(sv.callbacks) == 1, str(len(sv.callbacks)))
+    check("...and while that is pending the drawing is still dirty", tab.dirty is True)
+    files_before = sorted(os.listdir(ia.draw_dir))
+    ok, r = attempt(ia.use_drawing, result(NEW3, -50, -30, W3, H3))
+    check("a second press while one is pending is refused (False)", ok and r is False, str(r))
+    check("...with a tooltip, no second svg-edit read and no file written",
+          len(TIPS) == 1 and len(sv.callbacks) == 1 and sorted(os.listdir(ia.draw_dir)) == files_before,
+          str(TIPS))
+    if sv.callbacks:
+        attempt(sv.callbacks[-1], CUR2)
+    check("once the masks land the drawing is clean", tab.dirty is False)
+    ok, r = attempt(ia.use_drawing, result(NEW1, 0, 0, W, H))
+    check("...and the next press is taken again", ok and r is True and len(sv.callbacks) == 2, str(r))
+    tab.web._onBridgeCmd("klausexcal:dirty:" + base64.b64encode(b"{}").decode())
+    if len(sv.callbacks) == 2:
+        attempt(sv.callbacks[-1], CUR2)
+    check("an edit reported while the masks were pending keeps the drawing dirty", tab.dirty is True)
+
     section("svg-edit answers nothing: a tooltip; the drawing stays unused and dirty")
     sv.evals.clear()
     sv.callbacks.clear()
     TIPS.clear()
     before = ia.image_path
+    tab.web._onBridgeCmd("klausexcal:dirty:" + base64.b64encode(b"{}").decode())
     ok, r = attempt(ia.use_drawing, result(NEW1, 0, 0, W, H))
     if sv.callbacks:
         ok, r = attempt(sv.callbacks[-1], None)
@@ -762,9 +852,27 @@ if dlg is not None:
         check("a tooltip says so", len(TIPS) == 1, str(TIPS))
         check("nothing changed", ia.image_path == before
               and not any("loadFromString" in js for js in sv.evals))
-        check("the Draw tab is dirty again (Use drawing still to do)", dlg.draw_tab.dirty is True)
+        check("the Draw tab is still dirty (Use drawing still to do)", dlg.draw_tab.dirty is True)
+        ok, r = attempt(ia.use_drawing, result(NEW1, 0, 0, W, H))
+        check("...and Use drawing can be pressed again", ok and r is True and len(sv.callbacks) == 2, str(r))
+        if len(sv.callbacks) == 2:
+            attempt(sv.callbacks[-1], CUR2)
     else:
         check("the repeat use reads svg-edit", False)
+
+    section("Change Image to a photo: the next drawing is not remapped against the old scene")
+    photo = os.path.join(TMP, "photo.png")
+    with open(photo, "wb") as f:
+        f.write(png_bytes(400, 300))
+    ia.getNewImage = lambda *a, **k: photo
+    attempt(ia.onChangeImage)
+    check("the old scene is forgotten", getattr(ia, "excal_scene", "x") is None)
+    sv.evals.clear()
+    sv.callbacks.clear()
+    ok, r = attempt(ia.use_drawing, result(NEW3, -50, -30, W3, H3))
+    check("the next Use drawing is the plain replace: no svg-edit read, masks loaded at once",
+          ok and r is True and sv.callbacks == [] and any("loadFromString" in js for js in sv.evals),
+          str(r))
 
     section("the editor closes before svg-edit answers: nothing happens")
     sv.evals.clear()

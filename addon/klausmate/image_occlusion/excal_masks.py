@@ -14,6 +14,9 @@ from xml.sax.saxutils import quoteattr
 LABEL_IOU = 0.8
 # IOE's default mask colours, for a new label when no old mask has a style to copy.
 DEFAULT_FILL, DEFAULT_STROKE = "#FFEBA2", "#2D2D2D"
+# A new label's mask id. ngen's edit path reads every mask's id, and one that
+# doesn't start with the notes' uniq_id (hex) is a new card there.
+NEW_ID = "klaus-new-%d"
 
 
 def label_rects(scene: dict, origin_x: float, origin_y: float, padding: float = 20,
@@ -112,11 +115,14 @@ def remap_masks(old_svg: str, old_scene: dict, old_meta: dict, new_scene: dict,
     """old_svg's masks carried over to a new export of the drawing.
 
     1. An old mask is a label's when its rect has IoU >= LABEL_IOU with that
-       label's old box (label_rects of old_scene at old_meta's origin); every
-       other mask is the user's own ("hand").
+       label's old box (label_rects of old_scene at old_meta's origin), the
+       best one per label; every other mask is the user's own ("hand").
     2. Each new label gets the old mask of the same element (its id and
-       style kept, so the note updates in place) on its new box, or a new
-       id-less rect in the old masks' style.
+       style kept, so the note updates in place) on its new box. A label new
+       to the scene gets a new rect in the old masks' style, id NEW_ID. A
+       label the old scene had but no mask matched keeps what the user left
+       (Ruling R22): a mask resized or moved off it stays a hand mask, a
+       deleted one stays deleted.
     3. Hand masks, and svg-edit's Labels layer, move by the origin change
        ((old.originX - new.originX) * scale, likewise y), so they stay on the
        same spot of the drawing; one now wholly outside new_w x new_h goes.
@@ -136,29 +142,41 @@ def remap_masks(old_svg: str, old_scene: dict, old_meta: dict, new_scene: dict,
     dx = (float(old_meta["originX"]) - float(new_meta["originX"])) * scale
     dy = (float(old_meta["originY"]) - float(new_meta["originY"])) * scale
 
-    matched, hand = {}, []
+    taken = {n.getAttribute("id") for n in doc.getElementsByTagName("*")}
+    best, hand = {}, []  # best: element id -> (IoU, its mask)
     for node in _shapes(masks):
         masks.removeChild(node)
         box = _box(node) if node.nodeName == "rect" else None
         score, eid = max(((_iou(box, r[1:]), r[0]) for r in old_labels),
                          default=(0.0, None)) if box else (0.0, None)
-        if score >= LABEL_IOU:
-            matched.setdefault(eid, node)
-        else:
+        if score < LABEL_IOU:
             hand.append(node)
-
+        elif eid in best and best[eid][0] >= score:
+            hand.append(node)  # a second mask over the label is the user's
+        else:
+            if eid in best:
+                hand.append(best[eid][1])
+            best[eid] = (score, node)
+    matched = {eid: node for eid, (_score, node) in best.items()}
+    old_ids = {r[0] for r in old_labels}
     style = next(iter(matched.values()), None) or next(
         (n for n in hand if n.nodeName == "rect" and _box(n) is not None), None)
     for eid, x, y, w, h in labels(new_scene, new_meta):
         node = matched.get(eid)
-        if node is None and style is not None:
-            node = style.cloneNode(False)
-            if node.hasAttribute("id"):
-                node.removeAttribute("id")
-        elif node is None:
-            node = doc.createElement("rect")
-            node.setAttribute("fill", DEFAULT_FILL)
-            node.setAttribute("stroke", DEFAULT_STROKE)
+        if node is None and eid in old_ids:
+            continue  # R22: the user resized, moved or deleted its mask
+        if node is None:
+            if style is not None:
+                node = style.cloneNode(False)
+            else:
+                node = doc.createElement("rect")
+                node.setAttribute("fill", DEFAULT_FILL)
+                node.setAttribute("stroke", DEFAULT_STROKE)
+            n = 1
+            while NEW_ID % n in taken:
+                n += 1
+            taken.add(NEW_ID % n)
+            node.setAttribute("id", NEW_ID % n)
         for k, v in zip(("x", "y", "width", "height"), (x, y, w, h)):
             node.setAttribute(k, _num(v))
         masks.appendChild(node)
