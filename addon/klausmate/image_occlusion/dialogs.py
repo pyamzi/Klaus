@@ -265,7 +265,7 @@ def guarded(fn):
         except Exception as e:
             print("[klausmate] image occlusion: %s: %s" % (type(e).__name__, e))
             traceback.print_exc()
-            tooltip(_("Klaus: Image Occlusion ran into an error; nothing more was done"))
+            tooltip(_("Klaus: Image Occlusion ran into an error and may not have finished; check your notes"))
 
     return run
 
