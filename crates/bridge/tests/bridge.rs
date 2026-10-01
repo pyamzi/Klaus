@@ -126,7 +126,7 @@ async fn http_contract_matches_ankis_post_ts() {
     let klaus_dir = tempfile::tempdir().unwrap();
     std::fs::write(klaus_dir.path().join("index.html"), "<p>klaus</p>").unwrap();
     let anki_dir = tempfile::tempdir().unwrap();
-    std::fs::write(anki_dir.path().join("index.html"), "<p>anki</p>").unwrap();
+    std::fs::write(anki_dir.path().join("index.html"), "<html><head></head><p>anki</p></html>").unwrap();
     std::fs::create_dir(anki_dir.path().join("_app")).unwrap();
     std::fs::write(anki_dir.path().join("_app/start.mjs"), "// anki").unwrap();
     let hooked = Arc::new(Mutex::new(Vec::new()));
@@ -212,7 +212,10 @@ async fn http_contract_matches_ankis_post_ts() {
         let client = client.clone();
         async move { client.get(url).send().await.unwrap().text().await.unwrap() }
     };
-    assert_eq!(get("/import-anki-package/Users/me/biology.apkg").await, "<p>anki</p>");
+    // Anki pages get Klaus's host script and base styles before their own scripts.
+    let anki_page = r#"<html><head><link rel="stylesheet" href="/anki-host.css"><script src="/anki-host.js"></script></head><p>anki</p></html>"#;
+    assert_eq!(get("/import-anki-package/Users/me/biology.apkg").await, anki_page);
+    assert_eq!(get("/import-page/").await, anki_page);
     assert_eq!(get("/_app/start.mjs").await, "// anki");
     assert_eq!(get("/decks").await, "<p>klaus</p>");
 }
