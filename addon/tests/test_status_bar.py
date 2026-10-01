@@ -236,7 +236,7 @@ for night in (False, True):
     check(f"night={night}: names the bar and uses palette colours only",
           "QWidget#KlausStatusBar" in qss and hexes <= pal, str(hexes - pal))
 
-section("single window: a Close Browse control, no dock toggle")
+section("single window: no Close Browse ✕, no dock toggle")
 sw = importlib.import_module("klausmate.single_window")
 sw.is_active = lambda: True
 b4, _side4, _col4 = make_browser()
@@ -245,16 +245,12 @@ bar4.resize(800, sb.BAR_HEIGHT)
 bar4.show()
 app.processEvents()
 check("no dock toggle any more", bar4.dock_btn is None and not hasattr(sb.StatusBar, "_add_toggles_dock"))
-closed4: list = []
-b4.close = lambda: closed4.append(1) or True
 inst4 = sb.install_browser(b4)
-check("install adds a Close Browse control", inst4.close_btn is not None and inst4.close_btn.toolTip() == "Close Browse")
-inst4.close_btn.click()
-check("…which closes Browse", closed4 == [1])
+check("hosted Browse's strip holds no ✕ (a tab switch is enough, Pouya 2026-10-01)",
+      inst4 is not None and not hasattr(inst4, "close_btn")
+      and not [w for w in inst4.parentWidget().findChildren(QtWidgets.QToolButton)
+               if w.text() == "✕"])
 sw.is_active = lambda: False
-b5, _s5, _c5 = make_browser()
-bar5 = sb.StatusBar(b5, browser=b5)
-check("without the single window there is no close control", sb.install_browser(b5).close_btn is None)
 
 section("the Add tab's bar: Browse's strip, no toggles (they are in the top bar)")
 page = QtWidgets.QWidget()
@@ -271,7 +267,7 @@ strip6 = bar6.parentWidget()
 check("install_add_tab appends a Qt status strip holding the bar, no close control",
       bar6 is not None and isinstance(strip6, QtWidgets.QStatusBar)
       and page.layout().itemAt(page.layout().count() - 1).widget() is strip6
-      and bar6.close_btn is None and bar6.dock_btn is None)
+      and bar6.dock_btn is None)
 check("no pane toggles in the bar", bar6.sidebar_btn is None and bar6.editor_btn is None)
 check("the bar is tracked for theme changes", bar6 in sb._bars)
 

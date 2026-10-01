@@ -364,7 +364,7 @@ check("the editor slot starts with the placeholder, the splitter holds tree | re
       and sw._state.add.splitter.objectName() == "klausmate_add_splitter")
 check("the status bar sits under the splitter; its pane toggles are in the top bar",
       sw._state.add.bar is not None and sw._state.add.bar.sidebar_btn is None and sw._state.add.bar.editor_btn is None
-      and sw._state.add.bar.close_btn is None and sw._state.add.bar.dock_btn is None)
+      and sw._state.add.bar.dock_btn is None)
 
 with sw.hosted(host6.pages["browse"]):
     b = sw.embedded_class(FakeBrowser)()

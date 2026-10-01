@@ -1371,9 +1371,6 @@ def status_bar_qss(night: bool, scale: int = 100) -> str:
     QStatusBar::item {{
         border: none;
     }}
-    QStatusBar > QToolButton {{
-        font-size: {px(12)};
-    }}
     QWidget#KlausStatusBar {{
         background-color: {c['chrome']};
     }}

@@ -233,7 +233,6 @@ class StatusBar(QWidget):
         self.sidebar_btn = None
         self.editor_btn = None
         self.dock_btn = None
-        self.close_btn = None
         self._tasks: list = []
         row = QHBoxLayout(self)
         row.setContentsMargins(4, 0, 4, 0)
@@ -504,22 +503,8 @@ def install_browser(browser) -> StatusBar | None:
         # Hosted, the toggles are in the top bar beside the logo.
         bar = StatusBar(browser, browser=None if hosted else browser)
         native.addPermanentWidget(bar, 1)
-        try:
-            if hosted:
-                # Browse is a tab: the one way to close it lives here.
-                from aqt.qt import QToolButton
-
-                close_btn = QToolButton(native)
-                close_btn.setText("✕")
-                close_btn.setAutoRaise(True)
-                close_btn.setToolTip("Close Browse")
-                close_btn.setAccessibleName("Close Browse")
-                close_btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-                close_btn.clicked.connect(lambda *_a: browser.close())
-                native.addPermanentWidget(close_btn)
-                bar.close_btn = close_btn
-        except Exception as exc:  # noqa: BLE001
-            print(f"[klausmate] status bar close control failed: {exc}")
+        # No Close Browse ✕ (Pouya, 2026-10-01): hosted Browse is a tab,
+        # and switching tabs is enough; it stays loaded behind the stack.
         bar.apply_theme()
         browser._klausmate_status_bar = bar
         _track(bar)
