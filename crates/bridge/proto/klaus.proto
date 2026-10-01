@@ -1,0 +1,19 @@
+// Klaus's own bridge methods (answered by the bridge, not Anki's backend).
+// Compiled for Rust by crates/bridge/build.rs and for TypeScript by scripts/gen-ts.sh.
+syntax = "proto3";
+
+package klaus;
+
+// klausRenderCard: a card's question and answer HTML exactly as Anki's desktop
+// reviewer shows it (template render, {{FrontSide}}, LaTeX images, media path
+// escaping, play buttons, type-in answer input and comparison).
+message RenderCardRequest {
+  int64 card_id = 1;
+  // What the user typed into the type-in box; set when revealing the answer.
+  optional string typed_answer = 2;
+}
+
+message RenderCardResponse {
+  string question = 1;
+  string answer = 2;
+}

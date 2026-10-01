@@ -15,3 +15,7 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) plugin=$(cygpath -w "$PWD/$plugin.cm
 protoc --plugin=protoc-gen-es="$plugin" \
   --es_out="$out" --es_opt=target=ts \
   -I vendor/anki/proto vendor/anki/proto/anki/*.proto
+# Klaus's own bridge messages, as @generated/klaus_pb.
+protoc --plugin=protoc-gen-es="$plugin" \
+  --es_out="$out" --es_opt=target=ts \
+  -I crates/bridge/proto crates/bridge/proto/klaus.proto
