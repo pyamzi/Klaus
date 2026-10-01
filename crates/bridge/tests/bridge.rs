@@ -454,11 +454,12 @@ async fn http_contract_matches_ankis_post_ts() {
         async move { client.get(url).send().await.unwrap().headers()["content-security-policy"].to_str().unwrap().to_owned() }
     };
     let o = &base;
-    let untrusted = format!(
-        "script-src {o}/_anki/ {o}/_app/ {o}/native-dialogs.js {o}/anki-host.js 'sha256-abc='; form-action 'none'; frame-ancestors 'none'"
-    );
-    assert_eq!(csp("/editor/?mode=add").await, untrusted);
-    assert_eq!(csp("/image-occlusion/Users/me/a.png").await, untrusted);
+    let untrusted = |ancestors: &str| {
+        format!("script-src {o}/_anki/ {o}/_app/ {o}/native-dialogs.js {o}/anki-host.js 'sha256-abc='; form-action 'none'; frame-ancestors {ancestors}")
+    };
+    // Only the editor may be framed, by Klaus's own pages (the browser's side editor).
+    assert_eq!(csp("/editor/?mode=add").await, untrusted("'self'"));
+    assert_eq!(csp("/image-occlusion/Users/me/a.png").await, untrusted("'none'"));
     assert_eq!(csp("/deck-options/1").await, "frame-ancestors 'none'");
 
     // Reviewer assets are served for the card frame, readable cross-origin (fonts)…
@@ -647,4 +648,78 @@ fn builds_rebuilds_and_empties_filtered_decks() {
     assert_eq!((cram(&bridge), in_default(&bridge)), (0, 2));
     let rebuilt: anki_proto::collection::OpChangesWithCount = call(&bridge, "rebuildFilteredDeck", DeckId { did: id });
     assert_eq!((rebuilt.count, cram(&bridge)), (1, 1));
+}
+
+/// Adds a Basic note to `deck` with `tags`; returns (note id, card id).
+fn add_tagged(bridge: &Bridge, deck: i64, fields: [&str; 2], tags: &[&str]) -> (i64, i64) {
+    let names: NotetypeNames = call(bridge, "getNotetypeNames", Empty {});
+    let ntid = names.entries.iter().find(|n| n.name == "Basic").unwrap().id;
+    let mut note: Note = call(bridge, "newNote", NotetypeId { ntid });
+    note.fields = fields.iter().map(|f| f.to_string()).collect();
+    note.tags = tags.iter().map(|t| t.to_string()).collect();
+    let added: AddNoteResponse = call(bridge, "addNote", AddNoteRequest { note: Some(note), deck_id: deck });
+    let cards: anki_proto::cards::CardIds = call(bridge, "cardsOfNote", NoteId { nid: added.note_id });
+    (added.note_id, cards.cids[0])
+}
+
+/// #11: the browser's searches, sorting and rows, as Klaus's browser makes them.
+#[test]
+fn browser_searches_and_rows() {
+    use anki_proto::search::{search_node, sort_order, BrowserRow, SearchNode, SearchRequest, SearchResponse, SortOrder};
+    let (_dir, bridge) = open_temp();
+    let cells = create_deck(&bridge, "Biology::Cells");
+    let (heart_nid, heart) = add_tagged(&bridge, 1, ["Heart", "pumps blood"], &["cardio"]);
+    let (_, mito) = add_tagged(&bridge, cells, ["Mitochondria", "ATP"], &["cell::organelle"]);
+    let search = |s: &str| -> Vec<i64> {
+        let req = SearchRequest { search: s.into(), order: Some(SortOrder { value: Some(sort_order::Value::None(Empty {})) }) };
+        let mut ids = call::<SearchResponse>(&bridge, "searchCards", req).ids;
+        ids.sort();
+        ids
+    };
+    let mut both = vec![heart, mito];
+    both.sort();
+    // Anki's search syntax: decks (with children), tags (hierarchical), state,
+    // properties, regex, and fields.
+    assert_eq!(search("deck:Biology"), [mito]);
+    assert_eq!(search("tag:cell"), [mito]);
+    assert_eq!(search("tag:cardio"), [heart]);
+    assert_eq!(search("is:new"), both);
+    assert_eq!(search("is:due"), Vec::<i64>::new());
+    assert_eq!(search("prop:ivl=0"), both);
+    assert_eq!(search("re:^mito"), [mito]);
+    assert_eq!(search("back:ATP"), [mito]);
+    // Sidebar clicks build searches with Anki's escaping.
+    let node = SearchNode { filter: Some(search_node::Filter::Deck("Biology::Cells".into())) };
+    let built: generic::String = call(&bridge, "buildSearchString", node);
+    assert_eq!(search(&built.val), [mito]);
+
+    // Sorting by a column, as a header click does.
+    let sorted = |reverse: bool| {
+        let order = SortOrder { value: Some(sort_order::Value::Builtin(sort_order::Builtin { column: "noteFld".into(), reverse })) };
+        call::<SearchResponse>(&bridge, "searchCards", SearchRequest { search: "".into(), order: Some(order) }).ids
+    };
+    assert_eq!((sorted(false), sorted(true)), (vec![heart, mito], vec![mito, heart]));
+
+    // Rows hold the active columns' cells.
+    let cols = generic::StringList { vals: vec!["noteFld".into(), "deck".into(), "noteTags".into()] };
+    let _: Empty = call(&bridge, "setActiveBrowserColumns", cols);
+    let row: BrowserRow = call(&bridge, "browserRowForId", generic::Int64 { val: mito });
+    let texts: Vec<_> = row.cells.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(texts, ["Mitochondria", "Biology::Cells", "cell::organelle"]);
+
+    // Notes mode: the same search returns notes, and rows are per note.
+    use anki_proto::config::{config_key, SetConfigBoolRequest};
+    let notes_mode = SetConfigBoolRequest { key: config_key::Bool::BrowserTableShowNotesMode as i32, value: true, undoable: false };
+    let _: OpChanges = call(&bridge, "setConfigBool", notes_mode);
+    let req = SearchRequest { search: "tag:cardio".into(), order: None };
+    assert_eq!(call::<SearchResponse>(&bridge, "searchNotes", req).ids, [heart_nid]);
+    let row: BrowserRow = call(&bridge, "browserRowForId", generic::Int64 { val: heart_nid });
+    assert_eq!(row.cells[0].text, "Heart");
+
+    // The sidebar's tag tree and columns list.
+    let tags: anki_proto::tags::TagTreeNode = call(&bridge, "tagTree", Empty {});
+    let names: Vec<_> = tags.children.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["cardio", "cell"]);
+    let columns: anki_proto::search::BrowserColumns = call(&bridge, "allBrowserColumns", Empty {});
+    assert!(columns.columns.iter().any(|c| c.key == "cardDue"));
 }

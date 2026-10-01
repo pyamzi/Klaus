@@ -17,13 +17,14 @@ Klaus is a desktop app (Tauri + SvelteKit) that runs on [Anki](https://apps.anki
 - **Adding notes** with Anki's own editor, including pasted images.
 - **Importing `.apkg`** decks.
 - **Deck options and FSRS** with Anki's deck-options page: daily limits, learning steps, desired retention and parameter optimisation.
+- **Browser**: Anki's search syntax, a Cards/Notes table with sortable, configurable columns, a sidebar (saved searches, decks, note types, tags, flags), Anki's editor for the selected note, and a card preview.
 - **Deck management**: create, rename and nest (`Parent::Child`), delete with undo, collapse and expand, plus filtered decks (build, rebuild and empty).
 
 ## Roadmap
 
 Milestone 1 is tracked in [issue #4](../../issues/4). Still to come:
 
-- Browser: search, table, sidebar and bulk edits
+- Browser bulk actions
 - Review actions: bury, suspend, flag and edit; card info; audio
 - AnkiWeb sync, including the full-sync choice
 - Note types, change notetype and image occlusion

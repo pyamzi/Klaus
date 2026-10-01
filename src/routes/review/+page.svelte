@@ -4,15 +4,12 @@
   // JS; this page owns the queue, grading and undo.
   import { answerCard, describeNextStates, getQueuedCards, setCurrentDeck, undo } from "@generated/backend";
   import { CardAnswer_Rating, type QueuedCards_QueuedCard } from "@generated/anki/scheduler_pb";
-  import { RenderCardRequest, RenderCardResponse } from "@generated/klaus_pb";
-  import { postProto } from "@generated/post";
+  import type { RenderCardResponse } from "@generated/klaus_pb";
   import { onMount } from "svelte";
+  import { cardBodyClass, cardFrameSrc, night, postToCard, renderCard as render } from "$lib/card";
 
-  const night = matchMedia("(prefers-color-scheme: dark)").matches;
   const ratings = [CardAnswer_Rating.AGAIN, CardAnswer_Rating.HARD, CardAnswer_Rating.GOOD, CardAnswer_Rating.EASY];
   const ratingNames = ["Again", "Hard", "Good", "Easy"];
-  // aqt/theme.py body_class
-  const platform = /Win/.test(navigator.userAgent) ? "isWin" : /Mac/.test(navigator.userAgent) ? "isMac" : "isLin";
 
   let frame: HTMLIFrameElement;
   let current: QueuedCards_QueuedCard | undefined = $state();
@@ -28,13 +25,8 @@
   let frameReady: Promise<void>;
   let pendingTyped: ((typed: string | null) => void) | undefined;
 
-  function render(cardId: bigint, typedAnswer?: string) {
-    return postProto("klausRenderCard", new RenderCardRequest({ cardId, typedAnswer }), RenderCardResponse);
-  }
-
   function bodyClass(card: QueuedCards_QueuedCard): string {
-    const ord = (card.card?.templateIdx ?? 0) + 1;
-    return `card card${ord} ${platform} fancy${night ? " nightMode night_mode" : ""}`;
+    return cardBodyClass(card.card?.templateIdx ?? 0);
   }
 
   function exclusive(fn: () => Promise<void>): Promise<void> {
@@ -45,8 +37,7 @@
   }
 
   function post(msg: object) {
-    // The frame has an opaque origin, so "*" is the only target that reaches it.
-    frame.contentWindow?.postMessage({ klaus: true, ...msg }, "*");
+    postToCard(frame, msg);
   }
 
   // Call only inside exclusive().
@@ -157,7 +148,7 @@
   <iframe
     bind:this={frame}
     title="Card"
-    src={`/card.html${night ? "#night" : ""}`}
+    src={cardFrameSrc}
     sandbox="allow-scripts"
   ></iframe>
   <footer>
