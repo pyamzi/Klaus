@@ -1167,7 +1167,7 @@ same reason.
     muted `SettingDesc` left, control right, `RowSeparator` hairlines
     between. Sidebar display order comes from `_finish_nav(...)`,
     decoupled from widget build order; the sidebar header is the
-    star logo beside the Garamond wordmark, over a search field that filters
+    star logo beside the Excalifont wordmark, over a search field that filters
     setting rows across pages (`_apply_search`; rows carry
     `klaus_search` haystacks, structural hiding via `klaus_hidden` —
     how a background row hides whole for the mode that doesn't use it —

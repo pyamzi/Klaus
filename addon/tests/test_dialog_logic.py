@@ -113,7 +113,7 @@ check("sidebar carries the app identity",
       'setObjectName("SettingsSidebar")' in _src2
       and 'setObjectName("SidebarAppName")' in _src2
       and 'QLabel("KlausMate")' in _src2)
-check("sidebar identity: star logo beside the Garamond wordmark",
+check("sidebar identity: star logo beside the Excalifont wordmark",
       "_logo_pixmap" in _src2
       and 'QLabel("KlausMate")' in _src2
       and "_top_bar.logo_svg(colour)" in _src2)

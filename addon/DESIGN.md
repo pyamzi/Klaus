@@ -25,9 +25,9 @@ colors:
   claude-terracotta: "#D97757"
 typography:
   wordmark:
-    fontFamily: "EB Garamond, Garamond, Apple Garamond, Georgia, serif"
+    fontFamily: "Excalifont, EB Garamond, Garamond, Georgia, serif"
     fontSize: "18px"
-    fontWeight: 300
+    fontWeight: 400
   page-title:
     fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
     fontSize: "24px"
@@ -114,8 +114,8 @@ sparingly. Into this sterile field walks one deliberately human
 artifact: a hand-drawn, point-down star, traced from the owner's
 sketch, always an open stroke in the accent colour, never boxed into an
 icon square — the warm pulse in the clinic. Beside it, the "KlausMate"
-wordmark in light Garamond is the single serif voice in an otherwise
-system-sans world.
+wordmark in Excalifont, the same hand-drawn hand as the star, is the
+single display voice in an otherwise system-sans world.
 
 The system is implemented as one Python module (`klausmate/theme.py`)
 of semantic tokens and per-surface QSS builders; the entire look of
@@ -137,8 +137,8 @@ state flips.
 - Seamless window chrome: the top and bottom toolbars read as part of
   the OS window, matching its own colour — independent of whatever
   custom wallpaper is chosen for the deck screen.
-- One hand-drawn mark and one Garamond wordmark carrying the entire
-  brand; everything else defers to the system.
+- One hand-drawn mark and one hand-drawn (Excalifont) wordmark carrying
+  the entire brand; everything else defers to the system.
 
 ## Colors
 
@@ -203,18 +203,19 @@ page dissolves into it.
 
 ## Typography
 
-**Display Font:** EB Garamond (Garamond → Georgia → serif) — the
-wordmark only.
+**Display Font:** Excalifont (bundled as `klausmate/web/fonts/
+Excalifont-Regular.ttf`, registered by `theme.register_wordmark_font`;
+falls back to Garamond → Georgia → serif) — the wordmark only.
 **Body Font:** the Apple system stack (-apple-system, BlinkMacSystemFont,
 "Segoe UI", Roboto, Helvetica, Arial).
 
-**Character:** a single light serif signature over a fully system-native
-text world — like a clinician's engraved nameplate on an otherwise
-standardized door.
+**Character:** a single hand-drawn signature over a fully system-native
+text world — a handwritten name on an otherwise standardized door, in
+the same hand as the star.
 
 ### Hierarchy
-- **Wordmark** (300, 18px): "KlausMate" in light Garamond, sidebar and
-  identity moments only. The lightness is the point.
+- **Wordmark** (400, 18px): "KlausMate" in Excalifont, sidebar and
+  identity moments only. Excalifont has one weight; the hand is the point.
 - **Page Title** (600, 24px): one per settings page ("General",
   "Appearance"…).
 - **Heading** (700, 14px): section/card headings (SubHeaderLabel,
@@ -232,8 +233,9 @@ standardized door.
 builder's emitted CSS and fails the suite on any other value. An
 off-scale value is drift, not a style choice.
 
-**The One Serif Rule.** Garamond appears exactly once — the wordmark.
-No headings, no body text, no second serif moment.
+**The One Display Font Rule.** Excalifont appears exactly once — the
+wordmark. No headings, no body text, no second display moment. (Until
+2026-10-01 this was the One Serif Rule, with a Garamond wordmark.)
 
 ## Layout
 
@@ -421,7 +423,7 @@ imperfection deliberately preserved.
 - **Don't** use drop shadows; depth is tone, hairline, and frost.
 - **Don't** use opaque fills for chrome-bar hover states — veils only.
 - **Don't** box, fill, or "iconify" the star, and don't introduce a
-  second serif moment beyond the Garamond wordmark.
+  second display-font moment beyond the Excalifont wordmark.
 - **Don't** build sidebar navigation from per-item buttons, or derive
   control geometry from QSS size hints — hard view geometry only.
 - **Don't** fork backgrounds or text per accent theme, and don't let

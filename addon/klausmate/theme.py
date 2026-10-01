@@ -444,6 +444,33 @@ def night_mode() -> bool:
 # tests/test_top_bar.py — this audit does not touch their values.
 # ─────────────────────────────────────────────────────────────────────────────
 
+_WORDMARK_FAMILY: str | None = None
+
+
+def register_wordmark_font() -> str | None:
+    """Register the wordmark's Excalifont once and return its family, or
+    None without a QGuiApplication or when the font won't load.
+
+    From bytes, not the path: Qt refused the same file by path in testing
+    (an add-on folder can carry quarantine attributes)."""
+    global _WORDMARK_FAMILY
+    if _WORDMARK_FAMILY is not None:
+        return _WORDMARK_FAMILY
+    try:
+        from aqt.qt import QByteArray, QFontDatabase, QGuiApplication
+
+        if QGuiApplication.instance() is None:
+            return None
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "fonts", "Excalifont-Regular.ttf")
+        with open(path, "rb") as fh:
+            fid = QFontDatabase.addApplicationFontFromData(QByteArray(fh.read()))
+        fams = QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
+        _WORDMARK_FAMILY = fams[0] if fams else None
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] wordmark font failed: {exc}")
+    return _WORDMARK_FAMILY
+
+
 def dialog_qss(night: bool) -> str:
     """Dialog foundation (Manage models, future dialogs).
 
@@ -451,6 +478,7 @@ def dialog_qss(night: bool) -> str:
     QGroupBox a white card (12px radius, 1px ``grey_light`` border),
     quiet utility buttons with an explicit accented default action.
     """
+    register_wordmark_font()
     c = palette(night)
     return f"""
     QDialog {{
@@ -614,9 +642,8 @@ def dialog_qss(night: bool) -> str:
         border-right: 1px solid {c['grey_light']};
     }}
     QLabel#SidebarAppName {{
-        font-family: "EB Garamond", Garamond, "Apple Garamond", Georgia, serif;
+        font-family: "Excalifont", "EB Garamond", Garamond, Georgia, serif;
         font-size: 18px;
-        font-weight: 300;
     }}
     QLabel#SidebarVersion {{ color: {c['text_muted']}; font-size: 11px; }}
     QLineEdit#SettingsSearch {{

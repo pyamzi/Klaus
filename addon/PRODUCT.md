@@ -98,8 +98,8 @@ Volunteered and binding from the owner:
 - Mark: the hand-drawn point-down pentagram star (traced from Pouya's
   sketch, `top_bar._STAR_PATH` is the single source of truth), drawn as
   an open accent-coloured stroke — never inside an icon square.
-- Wordmark: "KlausMate" in Garamond, light weight (like Claude's serif
-  wordmark).
+- Wordmark: "KlausMate" in Excalifont, the hand-drawn Excalidraw font,
+  matching the hand-drawn star (was light Garamond until 2026-10-01).
 - Visual language: the SynapsePro-derived Apple-system-palette token
   discipline in `klausmate/theme.py` — semantic tokens, identical
   light/dark key sets, user-selectable accent themes (six presets +

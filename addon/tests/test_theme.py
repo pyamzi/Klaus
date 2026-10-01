@@ -75,8 +75,8 @@ check("selected nav pill is the blue accent with white text",
       "QListWidget#SettingsNav::item:selected" in d2
       and d2.index("QListWidget#SettingsNav::item:hover")
       < d2.index("QListWidget#SettingsNav::item:selected"))
-check("sidebar wordmark is set in Garamond, like Claude's",
-      "Garamond" in theme.dialog_qss(False)
+check("sidebar wordmark is set in Excalifont (Pouya, 2026-10-01)",
+      '"Excalifont"' in theme.dialog_qss(False)
       and "QLabel#SidebarAppName" in theme.dialog_qss(False))
 check("settings search field is styled in both palettes",
       all("QLineEdit#SettingsSearch" in theme.dialog_qss(n)
