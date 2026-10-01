@@ -16,6 +16,8 @@ action run against a duck-typed collection and an injected approver.
 
 from __future__ import annotations
 
+from . import settings
+
 import hmac
 import html
 import json
@@ -265,9 +267,7 @@ def _a_klaus_search_notes_semantic(col, p, ctx):
         raise ActionError("query is required")
     limit = max(1, min(50, int(p.get("limit") or 20)))
 
-    from aqt import mw
-
-    cfg = mw.addonManager.getConfig(__package__) or {}
+    cfg = settings.read()
     provider = embeddings.provider_from_config(lambda: cfg)
     try:
         raw = provider.embed([query], kind="query")
@@ -1206,7 +1206,7 @@ def _open_browse(query: str) -> None:
 def start_for_profile() -> Endpoint | None:
     global _LIVE
     from aqt import mw
-    from . import anki_tools, USER_FILES
+    from . import anki_tools, settings
     stop_for_profile()
     try:
         version = str((mw.addonManager.addon_meta(__package__.split(".")[0]) or {}).get("human_version") or "")
@@ -1218,7 +1218,7 @@ def start_for_profile() -> Endpoint | None:
         return c
     end = Endpoint(col_getter=lambda: mw.col, run_on_main=_run_on_main_sync, approver=qt_approver, ctx_factory=ctx_factory, version=version,
                    run_op=_run_collection_op,
-                   discovery_path=os.path.join(USER_FILES, "mcp_connection.json"))
+                   discovery_path=os.path.join(settings.user_files(), "mcp_connection.json"))
     end.start()
     _LIVE = end
     print(f"[klausmate] endpoint on 127.0.0.1:{end.port}")

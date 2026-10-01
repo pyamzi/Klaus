@@ -27,7 +27,7 @@ again in K-152, into ``index_queue``, when that chain had to serve a PDF
 added from the deck screen with no Library window in sight.
 
 The module is NOT dead weight even beyond those two: retention.py imports
-it at module top for USER_FILES/INDEX_DIR/_cfg/_fail and, above all, for
+it at module top for index_dir()/_fail and, above all, for
 ``_busy`` — the ONE re-entrancy token every embedding phase in the addon
 holds. manage_models, tag_sync and pdf_map read from it too.
 
@@ -49,10 +49,14 @@ from aqt.qt import QAction, QInputDialog, QMessageBox, qconnect
 from aqt.utils import showWarning, tooltip
 
 from . import card_index, embeddings
+from . import settings
 
 ADDON_DIR = os.path.dirname(__file__)
-USER_FILES = os.path.join(ADDON_DIR, "user_files")
-INDEX_DIR = os.path.join(USER_FILES, "card_index")
+
+
+def index_dir() -> str:
+    """The card index folder under the user files (settings.user_files())."""
+    return os.path.join(settings.user_files(), "card_index")
 
 CURATED_TAG = "!Library::Curated"
 DECK_PREFIX = "Klaus::"
@@ -87,16 +91,12 @@ def _pkg():
     return importlib.import_module(__package__)
 
 
-def _cfg() -> dict:
-    return _pkg().get_config()
-
-
 # ------------------------------------------------------------ pure helpers
 
 
 def index_stats() -> dict:
     """Cheap status for the panel line — manifest only, no vector load."""
-    return card_index.stats_from_disk(INDEX_DIR)
+    return card_index.stats_from_disk(index_dir())
 
 
 # ---------------------------------------------------------- index pipeline
@@ -104,9 +104,9 @@ def index_stats() -> dict:
 
 def _snapshot_with_col(col, force_rebuild: bool):
     """Phase A (holds col, ~seconds): diff the collection against the index."""
-    cfg = _cfg()
+    cfg = settings.read()
     sig = embeddings.index_signature(cfg)
-    index = None if force_rebuild else card_index.load(INDEX_DIR)
+    index = None if force_rebuild else card_index.load(index_dir())
     if index is not None and not card_index.check_signature(index, sig):
         index = None  # provider/model changed → full rebuild
     rows = col.db.all("select id, mod, flds from notes")
@@ -143,10 +143,10 @@ def _embed_plan(index, plan, sig, on_progress, cancel):
                 lambda d=done: on_progress("Embedding cards…", d, total)
             )
         if since_flush >= PARTIAL_FLUSH_EVERY:
-            card_index.save(card_index.apply_sync(index, plan, embedded, sig), INDEX_DIR)
+            card_index.save(card_index.apply_sync(index, plan, embedded, sig), index_dir())
             since_flush = 0
     new_index = card_index.apply_sync(index, plan, embedded, sig)
-    card_index.save(new_index, INDEX_DIR)
+    card_index.save(new_index, index_dir())
     return new_index, len(embedded) == total
 
 

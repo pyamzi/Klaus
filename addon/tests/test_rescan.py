@@ -20,7 +20,8 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-sys.modules["klausmate"].get_config = lambda: {}
+
+import klausmate.settings as _settings  # noqa: E402
 ph = importlib.import_module("klausmate.pdf_handler")
 plan = ph.plan_rescan
 fp = ph.page_fingerprint
@@ -352,7 +353,7 @@ class FakeQueryOp:
 pdf_drive.QueryOp = FakeQueryOp
 pdf_drive.mw = type("MW", (), {"col": None})()
 ph._live_library_root = lambda: root
-sys.modules["klausmate"].USER_FILES = uf
+_settings.user_files_dir = uf
 applied = []
 pdf_drive.rescan_library_root = lambda prepared=None: (applied.append(prepared), {"moved": []})[1]
 done = []
@@ -381,7 +382,7 @@ section("deleting a folder never takes the user's own files with it")
 import importlib as _il  # noqa: E402
 pdf_drive = _il.reload(_il.import_module("klausmate.pdf_drive"))
 ph._live_library_root = lambda: root
-sys.modules["klausmate"].USER_FILES = uf
+_settings.user_files_dir = uf
 trashed = []
 pdf_drive._move_to_trash = lambda path: trashed.append(os.path.relpath(path, root))
 os.makedirs(os.path.join(root, "Notes only"))

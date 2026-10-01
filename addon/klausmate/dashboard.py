@@ -41,6 +41,7 @@ import re
 from typing import Any
 
 from . import background, theme
+from . import settings
 
 # The registry: (widget id, visibility config key, human label).
 # A key of None means MANDATORY — the widget cannot be removed and
@@ -517,12 +518,9 @@ def _config() -> dict:
     """Stored config through the SAME preview seam as every other
     appearance reader, so an unsaved Preferences preview (heatmap
     switch included) renders on the dashboard before Save."""
-    try:
-        from aqt import mw
+    from . import settings
 
-        stored = mw.addonManager.getConfig(__package__) or {}
-    except Exception:
-        return {}
+    stored = settings.read()
     return background.effective_cfg(stored)
 
 
@@ -539,11 +537,9 @@ def write_cfg(updates: dict) -> None:
     the dashboard edit the user just watched happen.
     """
     try:
-        from aqt import mw
+        from . import settings
 
-        cfg = mw.addonManager.getConfig(__package__) or {}
-        cfg.update(updates)
-        mw.addonManager.writeConfig(__package__, cfg)
+        settings.patch(updates)
         if background.preview_active():
             patched = dict(background.effective_cfg({}))
             patched.update(updates)

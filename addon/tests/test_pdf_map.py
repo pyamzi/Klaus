@@ -50,6 +50,8 @@ from anki_stubs import ADDON, check, code_only, install, report, section  # noqa
 
 install()
 
+import klausmate.settings as _settings  # noqa: E402
+
 pdf_map = importlib.import_module("klausmate.pdf_map")
 Viewport = pdf_map.Viewport
 
@@ -1433,8 +1435,8 @@ check("select_pdf with NO map open is a silent no-op — the viewer must "
 
 curation = importlib.import_module("klausmate.curation")
 tmp = tempfile.mkdtemp(prefix="klaus_map_")
-_orig_uf = curation.USER_FILES
-curation.USER_FILES = tmp  # NEVER the real user_files
+_orig_uf = _settings.user_files_dir
+_settings.user_files_dir = tmp  # NEVER the real user_files
 try:
     win = pdf_map.open_map_window(None)
     check("open_map_window builds under stubs (empty-graph path)",
@@ -1466,7 +1468,7 @@ try:
           "printing an error the reader can do nothing about",
           _quiet == (False, ""), repr(_quiet))
 finally:
-    curation.USER_FILES = _orig_uf
+    _settings.user_files_dir = _orig_uf
     pdf_map._instance = None
     shutil.rmtree(tmp, ignore_errors=True)
 

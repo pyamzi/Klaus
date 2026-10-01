@@ -24,12 +24,7 @@ from aqt.qt import QFileSystemWatcher, QTimer
 from aqt.utils import showWarning
 
 from . import drive_store, pdf_handler, tag_sync
-
-
-def _user_files() -> str:
-    from . import USER_FILES
-
-    return USER_FILES
+from . import settings
 
 
 def apply_folder_change(
@@ -104,7 +99,7 @@ def _move_to_trash(path: str) -> bool:
 def delete_pdf(safe: str) -> bool:
     """Delete one PDF from the Library, whichever surface asked: the
     Library's own Delete…, or a confirmed sidebar tag delete (K-306)."""
-    uf = _user_files()
+    uf = settings.user_files()
     display = drive_store.display_name(uf, safe)
     _close_in_panels(safe)
     # Must run BEFORE delete_context: that call chains into
@@ -144,7 +139,7 @@ def delete_folder(folder: str) -> None:
     """Drop a folder and its subfolders after their PDFs were deleted,
     and send the emptied directory to the Trash so a rescan cannot
     bring the folder back."""
-    uf = _user_files()
+    uf = settings.user_files()
     data = drive_store.load(uf)
     data["folders"] = [
         f for f in data.get("folders", []) if not (f == folder or f.startswith(folder + "/"))
@@ -305,7 +300,7 @@ def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -
         if on_done:
             on_done(summary)
         return
-    uf = _user_files()
+    uf = settings.user_files()
     _rescan["running"] = True
 
     def finish(prepared: dict | None, error: str = "") -> None:
@@ -346,7 +341,7 @@ def _after_ingest(safes: list[str]) -> None:
     surface gives it (``__init__.import_pdf_file``): page records for the
     transcript strip and current_page, a tag so it shows in Browse's
     sidebar, and auto-indexing when that is on."""
-    uf = _user_files()
+    uf = settings.user_files()
     for safe in safes:
         try:
             from . import page_store
@@ -384,7 +379,7 @@ def rescan_library_root(prepared: dict | None = None) -> dict | None:
         if not root or not os.path.isdir(root):
             _rearm_watcher(None)  # root unplugged/unset -> stop watching
             return None
-        uf = _user_files()
+        uf = settings.user_files()
         folders = drive_store.load(uf).get("pdfs", {})
         try:
             # Single-copy sweep: anything still in the legacy pdfs/

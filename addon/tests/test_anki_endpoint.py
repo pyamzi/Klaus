@@ -25,10 +25,7 @@ card_index = importlib.import_module("klausmate.card_index")
 embeddings = importlib.import_module("klausmate.embeddings")
 # install() gives klausmate a synthetic __init__ (real klausmate/__init__.py
 # is never executed, since importing submodules never needs it) — it has no
-# get_config of its own, same gap test_anki_tools.py fills the same way.
-# _a_klaus_search_notes_semantic calls pkg.get_config() the same way
 # anki_tools._semantic_pdf_search does.
-importlib.import_module("klausmate").get_config = lambda: {}
 
 # The task brief's own plan was to reuse tests/test_anki_tools.py's Col
 # stub (`sys.path.insert(0, "tests"); from test_anki_tools import Col`), but

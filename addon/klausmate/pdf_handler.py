@@ -10,6 +10,8 @@ user's current field text, and the top-K most relevant chunks are returned.
 
 from __future__ import annotations
 
+from . import settings
+
 import base64
 import json
 import math
@@ -154,9 +156,9 @@ def looks_garbled(text: str) -> bool:
 
 def _live_endpoint() -> str:
     try:
-        from aqt import mw
+        from . import settings
 
-        cfg = mw.addonManager.getConfig(__package__) or {}
+        cfg = settings.read()
         return str(cfg.get("endpoint") or "http://127.0.0.1:11434")
     except Exception:
         return "http://127.0.0.1:11434"
@@ -815,11 +817,9 @@ def _live_library_root() -> str | None:
     directly and never hit this path.
     """
     try:
-        from aqt import mw
+        from . import settings
 
-        if mw is None or mw.addonManager is None:
-            return None
-        cfg = mw.addonManager.getConfig(__package__) or {}
+        cfg = settings.read()
     except Exception:
         return None
     return get_library_root(cfg)

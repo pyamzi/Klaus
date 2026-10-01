@@ -153,6 +153,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import settings
+
 try:  # aqt-free, pure-stdlib engine; absent only if K-168 is unlanded
     from . import duplicates as _dupes
 except Exception:  # pragma: no cover - the honest-refusal path
@@ -855,7 +857,7 @@ class BrowseToolkit(QWidget):  # type: ignore[misc]
 def _index_dir() -> str:
     from . import curation
 
-    return curation.INDEX_DIR
+    return curation.index_dir()
 
 
 def _browser_col(browser: Any) -> Any:
@@ -1146,13 +1148,13 @@ class _DuplicatesPanel(QWidget):  # type: ignore[misc]
         widening the signature broke eight call sites at once.
         """
         try:
-            from . import curation, embeddings
+            from . import embeddings
 
             return embeddings.signature_matches(
                 str(stats.get("provider") or ""),
                 str(stats.get("model") or ""),
                 int(stats.get("dims") or 0),
-                embeddings.index_signature(curation._cfg()),
+                embeddings.index_signature(settings.read()),
             )
         except Exception as exc:
             print(f"[klausmate] browse toolkit signature check failed: {exc}")

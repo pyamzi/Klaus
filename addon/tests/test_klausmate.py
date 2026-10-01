@@ -24,6 +24,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(ADDON), ".claude", "skills", "kl
 from anki_stubs import install_package_stub  # noqa: E402
 
 install_package_stub()
+
+import klausmate.settings as _settings  # noqa: E402
 pkg = sys.modules["klausmate"]
 
 import importlib
@@ -564,8 +566,8 @@ if HAVE_RETENTION:
     cidx.hashes[0] = "different"
     check("digest tracks hashes", retention.card_index_digest(cidx) != d1)
 
-    # matches.json roundtrip + invalidation (patch USER_FILES to tmp)
-    retention.USER_FILES = tmp
+    # matches.json roundtrip + invalidation (user files -> tmp)
+    _settings.user_files_dir = tmp
     m = [(1, 0.8), (2, 0.4)]
     m_pages = {1: 1, 2: 3}
     sig2 = ("openai", "text-embedding-3-large")
@@ -666,13 +668,13 @@ if HAVE_RETENTION:
 
     _hr_provider = _CountingProvider()
     _orig_queryop = retention.QueryOp
-    _orig_cfg_fn = retention._cfg
+    _orig_store = _settings.store
     _orig_provider_from_config = embeddings.provider_from_config
-    _orig_user_files = retention.USER_FILES
+    _orig_user_files = _settings.user_files_dir
     retention.QueryOp = _SyncOp
-    retention._cfg = lambda: {"embedding_model": "text-embedding-3-large"}
+    _settings.store = _settings.DictStore({"embedding_model": "text-embedding-3-large"})
     embeddings.provider_from_config = lambda get_config: _hr_provider
-    retention.USER_FILES = _hr_tmp
+    _settings.user_files_dir = _hr_tmp
     try:
         _hr_built = {}
         _hr_errors = []
@@ -754,9 +756,9 @@ if HAVE_RETENTION:
               == ([(1, 0.8)], {1: 1}))
     finally:
         retention.QueryOp = _orig_queryop
-        retention._cfg = _orig_cfg_fn
+        _settings.store = _orig_store
         embeddings.provider_from_config = _orig_provider_from_config
-        retention.USER_FILES = _orig_user_files
+        _settings.user_files_dir = _orig_user_files
         shutil.rmtree(_hr_tmp, ignore_errors=True)
 
     print("== ensure_pdf_index: cancel leaves a resumable, incomplete index "
@@ -789,13 +791,13 @@ if HAVE_RETENTION:
     _c1_cancel = threading.Event()
     _c1_provider = _CancelingProvider(_c1_cancel)
     _orig_queryop = retention.QueryOp
-    _orig_cfg_fn = retention._cfg
+    _orig_store = _settings.store
     _orig_provider_from_config = embeddings.provider_from_config
-    _orig_user_files = retention.USER_FILES
+    _orig_user_files = _settings.user_files_dir
     retention.QueryOp = _SyncOp
-    retention._cfg = lambda: {"embedding_model": "text-embedding-3-large"}
+    _settings.store = _settings.DictStore({"embedding_model": "text-embedding-3-large"})
     embeddings.provider_from_config = lambda get_config: _c1_provider
-    retention.USER_FILES = _c1_tmp
+    _settings.user_files_dir = _c1_tmp
     try:
         _c1_built = {}
         _c1_errors = []
@@ -851,9 +853,9 @@ if HAVE_RETENTION:
               [len(c) for c in _c1_provider.calls])
     finally:
         retention.QueryOp = _orig_queryop
-        retention._cfg = _orig_cfg_fn
+        _settings.store = _orig_store
         embeddings.provider_from_config = _orig_provider_from_config
-        retention.USER_FILES = _orig_user_files
+        _settings.user_files_dir = _orig_user_files
         shutil.rmtree(_c1_tmp, ignore_errors=True)
 
     print("== ensure_pdf_index: an empty page gets a zero vector, never text "
@@ -882,13 +884,13 @@ if HAVE_RETENTION:
 
     _c2_provider = _RecordingProvider()
     _orig_queryop = retention.QueryOp
-    _orig_cfg_fn = retention._cfg
+    _orig_store = _settings.store
     _orig_provider_from_config = embeddings.provider_from_config
-    _orig_user_files = retention.USER_FILES
+    _orig_user_files = _settings.user_files_dir
     retention.QueryOp = _SyncOp
-    retention._cfg = lambda: {"embedding_model": "text-embedding-3-large"}
+    _settings.store = _settings.DictStore({"embedding_model": "text-embedding-3-large"})
     embeddings.provider_from_config = lambda get_config: _c2_provider
-    retention.USER_FILES = _c2_tmp
+    _settings.user_files_dir = _c2_tmp
     try:
         _c2_built = {}
         _c2_errors = []
@@ -922,9 +924,9 @@ if HAVE_RETENTION:
               (_c2_page_for_1, _c2_page_for_3))
     finally:
         retention.QueryOp = _orig_queryop
-        retention._cfg = _orig_cfg_fn
+        _settings.store = _orig_store
         embeddings.provider_from_config = _orig_provider_from_config
-        retention.USER_FILES = _orig_user_files
+        _settings.user_files_dir = _orig_user_files
         shutil.rmtree(_c2_tmp, ignore_errors=True)
 
     # threshold prefs
@@ -1061,8 +1063,8 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
     # constraints), so USER_FILES is patched to a scratch dir for this
     # block only, exactly like the retention section above did for tmp.
     _dbt_tmp = tempfile.mkdtemp()
-    _orig_user_files = retention.USER_FILES
-    retention.USER_FILES = _dbt_tmp
+    _orig_user_files = _settings.user_files_dir
+    _settings.user_files_dir = _dbt_tmp
     try:
         class _FakeTags:
             """col.tags double: bulk_add/bulk_remove mutate the SAME
@@ -1101,7 +1103,8 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
         _orig_folder_display = tag_sync._folder_and_display
         _orig_run_sync_op = tag_sync._run_sync_op
         _orig_cached_matches = tag_sync._cached_matches_many
-        pkg.get_config = lambda: {"pdf_match_threshold": 0.5}
+        _orig_store_ts = _settings.store
+        _settings.store = _settings.DictStore({"pdf_match_threshold": 0.5})
         tag_sync._folder_and_display = lambda safe: (None, "Renal")
         _captured = []
         tag_sync._run_sync_op = lambda parent, label, work, **kwargs: _captured.append(work)
@@ -1121,9 +1124,9 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
             tag_sync._folder_and_display = _orig_folder_display
             tag_sync._run_sync_op = _orig_run_sync_op
             tag_sync._cached_matches_many = _orig_cached_matches
-            del pkg.get_config
+            _settings.store = _orig_store_ts
     finally:
-        retention.USER_FILES = _orig_user_files
+        _settings.user_files_dir = _orig_user_files
         shutil.rmtree(_dbt_tmp, ignore_errors=True)
 
 if HAVE_RETENTION:
@@ -1142,22 +1145,8 @@ _ret_mod = importlib.import_module("klausmate.retention")
 
 
 def _mig(cfg):
-    """Run the migration with the config write stubbed out."""
-    import types as _t
-    real_mw = _ret_mod.mw
-    written = {}
-    _ret_mod.mw = _t.SimpleNamespace(
-        taskman=_t.SimpleNamespace(run_on_main=lambda fn: fn())
-    )
-    real_pkg = _ret_mod.curation._pkg
-    _ret_mod.curation._pkg = lambda: _t.SimpleNamespace(
-        write_config=lambda c: written.update(c)
-    )
-    try:
-        return _ret_mod._migrate_default_threshold(cfg)
-    finally:
-        _ret_mod.mw = real_mw
-        _ret_mod.curation._pkg = real_pkg
+    """The migration is a pure dict -> dict (settings.register_migration)."""
+    return _ret_mod._migrate_default_threshold(cfg)
 
 
 _D = _ret_mod.DEFAULT_THRESHOLD

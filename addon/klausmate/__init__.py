@@ -41,120 +41,22 @@ from .manage_models import manage_models_dialog
 from .slot_guard import guarded as _guarded
 from .browse_toggles import on_browser_will_show
 from .setup_flow import first_run_check, setup_readiness_check
+from . import settings
 
 ADDON_DIR = os.path.dirname(__file__)
-USER_FILES = os.path.join(ADDON_DIR, "user_files")
 
-
-# ----------------------------- config helpers -----------------------------
-
-
-def get_config() -> dict[str, Any]:
-    cfg = mw.addonManager.getConfig(__name__) or {}
-    return cfg
-
-
-def write_config(cfg: dict[str, Any]) -> None:
-    mw.addonManager.writeConfig(__name__, cfg)
-
-
-def patch_config(updates: dict[str, Any]) -> None:
-    """Merge *updates* into the STORED config, on the main thread.
-
-    ``write_config`` REPLACES the whole blob (that is why ``_migrate_config``
-    can scrub keys by popping them), so a partial dict handed to it wipes
-    every other setting. This is the one config writer a background thread
-    may use, and the writer every ``plus.*`` sink must be.
-    """
-    profile = getattr(mw, "col", None)
-    def _apply() -> None:
-        if getattr(mw, "col", None) is not profile:
-            return
-        try:
-            cfg = get_config()
-            cfg.update(updates)
-            write_config(cfg)
-        except Exception as e:  # noqa: BLE001
-            print(f"[klausmate] patch_config failed: {e.__class__.__name__}")
-    try:
-        mw.taskman.run_on_main(_apply)
-    except Exception:  # no taskman (tests, early boot): apply inline
-        _apply()
+# The settings seam (settings.py): Anki's addon manager is the store, a
+# background patch hops through the task manager, and a patch that hops is
+# dropped if the profile changed before it landed.
+settings.store = settings.AnkiStore(mw.addonManager, __name__)
+settings.run_on_main = mw.taskman.run_on_main
+settings.current_profile = lambda: getattr(mw, "col", None)
 
 
 # Retired config keys, scrubbed from old profiles on next launch. Covers the
 # old chat_* -> klaus_* rename pairs (both sides are now dead -- no renaming,
 # just dropped) plus every key the removed autocomplete/Ask/Browse-search
 # features owned.
-_LEGACY_KEYS_DROPPED = (
-    "chat_system_prompt", "chat_use_pdf_context", "chat_max_tokens",
-    "chat_engine", "chat_claude_api_key", "chat_claude_model", "chat_turn_timeout_s",
-    "model", "autocomplete_model", "ask_model", "generate_timeout_s",
-    "temperature", "top_p", "top_k", "repeat_penalty", "completion_mode",
-    "ask_hotkey", "cycle_forward_hotkey", "cycle_backward_hotkey",
-    "debounce_ms", "min_chars_before_trigger", "paste_cooldown_ms",
-    "dismissal_cooldown_ms", "accept_cooldown_ms", "retrieval_method",
-    "retrieval_top_k", "system_prompt", "ask_system_prompt",
-    "autocomplete_enabled", "ask_enabled", "chat_hotkey", "klaus_engine",
-    "claude_api_key", "claude_model", "claude_timeout_s",
-    "autofill_system_prompt",
-    # Retired by K-044: curation no longer has its own top-k/cutoff — the
-    # per-PDF sensitivity is the single control for curation, retention
-    # and the !Library tags alike. Dropped rather than migrated; there is
-    # nothing left that reads either key.
-    "curate_top_k", "curate_min_score",
-    # Retired 2026-08-25: single-window mode (K-059..K-062, K-090..K-094)
-    # removed as too buggy to stabilize — dark webview panes survived five
-    # rework rounds. Anki reverts to stock multi-window behavior.
-    "single_window_mode",
-    # Retired 2026-08-25 same-day: the Klaus Workspace (K-102) shipped and
-    # was replaced by the top-bar restyle before any release.
-    "workspace_enabled",
-    # Retired 2026-09-01: Task 8 dropped these from config.json/config.md
-    # when the premium/hosted assistant path was cut back to Claude Code
-    # (D1) — there is no separate assistant API key/backend/token to
-    # store, the user's own `claude` login is the credential.
-    "assistant_api_key", "assistant_backend", "assistant_token",
-    # Retired provider credentials and OCR settings.
-    "embedding_api_key_voyage", "embedding_api_key_openai",
-    "api_key_openai", "api_key_anthropic", "_embed_key_setup_declined",
-    "ocr_enabled", "ocr_model", "claude_binary",
-    "pdf_index_max_chunks", "pdf_match_agg", "assistant_model",
-    "_embed_default_migrated",
-    # Retired 2026-09-18: Klaus Plus subscription service removed.
-    "klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email",
-    # 2026-09-18: embedded assistant dock removed (see
-    # docs/superpowers/specs/2026-09-18-local-model-reversion-design.md).
-    "assistant_reopen", "assistant_dock_width", "assistant_dock_open",
-    "reasoning_model", "transcription_model",
-    # 2026-09-30: lecture recording moved to the Klaus app (K-314).
-    "transcription_model_path", "transcription_binary", "transcription_language",
-    # 2026-10-01: every reader runs on pdf.js (PDF reader 3/5).
-    "pdf_renderer",
-)
-
-
-def _migrate_config() -> None:
-    """One-time migration of retired config keys (idempotent).
-
-    Scrubs keys owned by removed features (chat_*, autocomplete, Ask,
-    Browse NL search, Klaus Plus) from old profiles. Once meta.json holds
-    none of them this is a no-op (the defaults no longer define them).
-    """
-    cfg = get_config()
-    changed = False
-    if not cfg.get("_local_embeddings_migrated"):
-        cfg.update(embedding_provider="ollama", embedding_model="nomic-embed-text",
-                   embedding_dimensions=0, _local_embeddings_migrated=True)
-        changed = True
-    for old in _LEGACY_KEYS_DROPPED:
-        if old in cfg:
-            cfg.pop(old)
-            changed = True
-    if changed:
-        write_config(cfg)
-
-
 
 
 # ----------------------------- card context ------------------------------
@@ -320,7 +222,7 @@ def on_webview_will_set_content(web_content: WebContent, context: Any) -> None:
         _cop_v = 0
     web_content.js.append(f"/_addons/{pkg}/web/copilot.js?v={_cop_v}")
     # Inject runtime config so JS can read feature toggles.
-    cfg = get_config()
+    cfg = settings.read()
     runtime = {
         "image_crop_enabled": bool(cfg.get("image_crop_enabled", True)),
     }
@@ -361,7 +263,7 @@ def on_js_message(
             fname = str(data.get("fname", "")).strip()
         except Exception:
             return (True, None)
-        if fname and bool(get_config().get("image_crop_enabled", True)):
+        if fname and bool(settings.read().get("image_crop_enabled", True)):
             editor = context
             # Defer so the modal exec() doesn't run inside the webchannel
             # message handler (mirrors the singleShot pattern at editor init).
@@ -551,7 +453,7 @@ def _launch_crop_dialog(editor: Editor, fname: str) -> None:
 def on_editor_context_menu(webview: EditorWebView, menu: QMenu) -> None:
     """Add "Crop Image" when the editor context menu opened on an <img>."""
     try:
-        if not bool(get_config().get("image_crop_enabled", True)):
+        if not bool(settings.read().get("image_crop_enabled", True)):
             return
         editor = getattr(webview, "editor", None)
         if editor is None or editor.note is None:
@@ -624,10 +526,10 @@ def import_pdf_file(path: str) -> str | None:
     try:
         root = None
         try:
-            root = pdf_handler.get_library_root(get_config())
+            root = pdf_handler.get_library_root(settings.read())
         except Exception:
             root = None
-        info = pdf_handler.save_pdf(USER_FILES, base, path, root=root)
+        info = pdf_handler.save_pdf(settings.user_files(), base, path, root=root)
     except Exception as e:
         showWarning(f"Could not read PDF: {e}")
         return None
@@ -639,8 +541,8 @@ def import_pdf_file(path: str) -> str | None:
     try:
         from . import page_store
 
-        pages = pdf_handler.load_pages(USER_FILES, info["name"]) or []
-        page_store.ensure_records(USER_FILES, info["name"], path, pages)
+        pages = pdf_handler.load_pages(settings.user_files(), info["name"]) or []
+        page_store.ensure_records(settings.user_files(), info["name"], path, pages)
     except Exception as e:
         print(f"[klausmate] page record seeding on import failed: {e}")
     if info["page_count"] == 0:
@@ -654,7 +556,7 @@ def import_pdf_file(path: str) -> str | None:
         from . import drive_store
 
         drive_store.record_import(
-            USER_FILES, info["name"], os.path.basename(path)
+            settings.user_files(), info["name"], os.path.basename(path)
         )
     except Exception as e:
         print(f"[klausmate] drive display-name record failed: {e}")
@@ -686,7 +588,7 @@ def _ensure_sidebar_pdf(editor: Editor) -> bool:
     PdfDock.showEvent both need this and neither owns a panel widget to
     hang it off anymore.
     """
-    active = pdf_handler.get_active_pdf(USER_FILES)
+    active = pdf_handler.get_active_pdf(settings.user_files())
     if not active:
         return False
     sidebar = getattr(editor, "_klausmate_sidebar", None)
@@ -853,7 +755,7 @@ class PdfDock(QDockWidget):
         # session; until then panel_show() applies it.
         self._placed = False
 
-        state = pdf_handler.load_panel_state(USER_FILES)
+        state = pdf_handler.load_panel_state(settings.user_files())
         self._placement: str = pdf_handler.migrate_placement(
             state.get("placement")
         )
@@ -1063,7 +965,7 @@ class PdfDock(QDockWidget):
             geom = [g.x(), g.y(), g.width(), g.height()]
         try:
             pdf_handler.save_panel_state(
-                USER_FILES, placement=self._placement, geom=geom
+                settings.user_files(), placement=self._placement, geom=geom
             )
         except Exception:
             pass
@@ -1176,7 +1078,7 @@ def on_editor_did_init(editor: Editor) -> None:
         layout = widget.layout()
         if layout is None:
             return
-        pdf_handler.ensure_active_pdf(USER_FILES)
+        pdf_handler.ensure_active_pdf(settings.user_files())
 
         # Default state for the page-aware retrieval helper.
         if not hasattr(editor, "_klausmate_active_pdf"):
@@ -1217,7 +1119,7 @@ def on_editor_did_init(editor: Editor) -> None:
                     editor._klausmate_sidebar = sidebar  # type: ignore[attr-defined]
                     existing._editor = editor
                     sidebar._editor = editor
-                    active = pdf_handler.get_active_pdf(USER_FILES)
+                    active = pdf_handler.get_active_pdf(settings.user_files())
                     # Lazy (PDF reader 3/5): a hidden dock loads on its
                     # first show (PdfDock.showEvent), never at install.
                     if active and existing.isVisible():
@@ -1269,6 +1171,10 @@ gui_hooks.webview_did_receive_js_message.append(on_js_message)
 gui_hooks.editor_will_show_context_menu.append(on_editor_context_menu)
 gui_hooks.main_window_did_init.append(install_menu)
 from . import curation as _curation
+# retention registers its two threshold migrations with settings at import;
+# nothing else imports it at module level, so without this line
+# settings.migrate (profile_did_open, below) would run only the legacy scrub.
+from . import retention as _retention  # noqa: F401
 
 _curation.setup_hooks()
 
@@ -1322,7 +1228,7 @@ def _apply_color_theme() -> None:
     try:
         from . import theme as _theme
 
-        cfg = get_config()
+        cfg = settings.read()
         # Colour first: set_active_theme("custom") is only meaningful
         # once the colour behind it is loaded.
         _theme.set_custom_colour(str(cfg.get("color_theme_custom") or ""))
@@ -1332,8 +1238,8 @@ def _apply_color_theme() -> None:
 
 
 gui_hooks.profile_did_open.append(_apply_color_theme)
-gui_hooks.profile_did_open.append(_migrate_config)
-# One-time klaus:: -> !Library:: tag rename (K-038). After _migrate_config
+gui_hooks.profile_did_open.append(settings.migrate)
+# One-time klaus:: -> !Library:: tag rename (K-038). After settings.migrate
 # so the config store is already scrubbed when the migration reads its
 # _library_tag_migrated guard flag.
 from . import tag_migrate as _tag_migrate

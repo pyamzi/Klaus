@@ -17,6 +17,8 @@ after each switch.
 """
 from __future__ import annotations
 
+from . import settings
+
 import time
 
 from aqt.qt import QApplication, QEvent, QObject, QStyle, Qt
@@ -99,7 +101,7 @@ def enter(browser, safe: str) -> bool:
             sidebar.load_pdf(safe)
         from . import library_actions, pdf_handler
 
-        pdf_handler.touch_last_used(library_actions._uf(), safe)
+        pdf_handler.touch_last_used(settings.user_files(), safe)
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] viewer mode could not load {safe!r}: {exc}")
     return True

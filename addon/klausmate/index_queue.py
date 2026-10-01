@@ -64,6 +64,7 @@ import threading
 from typing import Any, Callable, NamedTuple
 
 from . import embeddings
+from . import settings
 
 # A job is a plain ``(kind, name)`` tuple; name is "" for JOB_CARDS.
 JOB_CARDS = "cards"  # refresh the card index alone (a sweep with no PDFs)
@@ -250,17 +251,6 @@ BUSY_WAIT_POLLS = 40  # ~60s of waiting for Index Now before giving up
 BUSY_WAIT_TEXT = "Waiting for the current indexing run to finish…"
 
 
-def _user_files() -> str:
-    from . import USER_FILES  # deferred: the package root imports aqt
-
-    return USER_FILES
-
-
-def _cfg() -> dict:
-    try:
-        return mw.addonManager.getConfig(__package__) or {}
-    except Exception:
-        return {}
 
 
 # ── listeners + published state ──────────────────────────────────────────
@@ -369,7 +359,7 @@ def on_pdf_imported(name: str) -> bool:
     returns through, so this covers the Library tree drop, the Library's
     Browse…, the deck-screen square and the deck-screen file drop
     without any of them knowing about indexing."""
-    if not name or not auto_index_enabled(_cfg()):
+    if not name or not auto_index_enabled(settings.read()):
         return False
     return request_pdf(name)
 
@@ -445,7 +435,7 @@ def _pdf_present(name: str) -> bool:
     try:
         from . import pdf_index
 
-        return pdf_index.source_signature(_user_files(), name) is not None
+        return pdf_index.source_signature(settings.user_files(), name) is not None
     except Exception as exc:
         print(f"[klausmate] index queue presence check failed: {exc}")
         return True  # never lose a job to a bookkeeping hiccup
@@ -498,7 +488,7 @@ def display_name(name: str) -> str:
     try:
         from . import drive_store
 
-        return drive_store.display_name(_user_files(), name) or name
+        return drive_store.display_name(settings.user_files(), name) or name
     except Exception:
         return name
 
@@ -627,7 +617,7 @@ def _run(job: tuple[str, str]) -> None:
             pending=_queue.pending(),
         )
     )
-    cfg = _cfg()
+    cfg = settings.read()
     # The confirm guards only the SILENT auto-index-on-add path (a single
     # PDF's own phase one) — never a JOB_CARDS entry, which only ever
     # reaches this queue via offer_model_sweep's OWN priced confirm
@@ -702,7 +692,7 @@ def _manifest_paths() -> list[tuple[str, str]]:
     with stored text. One walk, two readers below."""
     from . import pdf_handler, pdf_index
 
-    root = _user_files()
+    root = settings.user_files()
     out: list[tuple[str, str]] = []
     for fname in pdf_handler.list_contexts(root):
         name = fname[:-4] if fname.endswith(".txt") else fname
@@ -735,6 +725,39 @@ def indexed_pdf_names() -> list[str]:
     except Exception as exc:
         print(f"[klausmate] index sweep scan failed: {exc}")
     return names
+
+
+def unindexed_pdf_names() -> list[str]:
+    """Every PDF with stored text whose page index is absent, incomplete
+    or unreadable at the current version — what the resume pass queues.
+    Reads through ``stats_from_disk`` on purpose: an old-version manifest
+    reads as absent everywhere else too, so re-indexing it here is the
+    same answer the Library's warning icon already gives."""
+    names: list[str] = []
+    try:
+        from . import pdf_index
+
+        for name, manifest in _manifest_paths():
+            if not pdf_index.stats_from_disk(os.path.dirname(manifest))["complete"]:
+                names.append(name)
+    except Exception as exc:
+        print(f"[klausmate] unindexed scan failed: {exc}")
+    return names
+
+
+def resume_unindexed() -> int:
+    """Queue every unindexed PDF, quietly. The queue is in memory: a
+    failure, the status bar's ✕ or closing the profile drops whatever
+    was behind the running job, and nothing used to ask about those
+    PDFs again (Pouya, 2026-09-30: 14 of 94 indexed). Runs once per
+    profile open from the readiness check, after Ollama answered, and
+    only when auto-indexing is on. Returns how many were newly queued."""
+    if not auto_index_enabled(settings.read()):
+        return 0
+    names = unindexed_pdf_names()
+    if not names:
+        return 0
+    return request([(JOB_PDF, n) for n in names], announce=False)
 
 
 def stale_index_names() -> list[str]:
@@ -835,7 +858,7 @@ def offer_model_sweep(parent: Any, previous: tuple) -> bool:
     """Offer a local rebuild for a changed model or stale index manifests."""
     if mw is None or getattr(mw, "col", None) is None:
         return False
-    current = embeddings.index_signature(_cfg())
+    current = embeddings.index_signature(settings.read())
     if not (
         signature_changed(previous, current) or stale_index_names()
     ):

@@ -80,6 +80,7 @@ from . import (
     pdf_index,
     projection,
 )
+from . import settings
 
 CARD_INDEX_SUBDIR = "card_index"
 
@@ -369,13 +370,12 @@ def build_graph_data(user_files: str, cfg: dict) -> dict:
     from . import retention
 
     # retention.load_matches reads user_files/pdf_index/<safe>/matches.json
-    # via a MODULE-GLOBAL path (retention.USER_FILES), not a parameter —
-    # it has no per-call user_files argument to pass. Pointing that global
-    # at THIS call's user_files is the same redirection
-    # tests/test_klausmate.py already relies on to point retention at a
-    # scratch dir; in production user_files is always curation.USER_FILES
-    # already, so this is a no-op there.
-    retention.USER_FILES = user_files
+    # via settings.user_files(), not a parameter — it has no per-call
+    # user_files argument to pass. Pointing settings at THIS call's
+    # user_files is the same redirection tests already rely on; in
+    # production user_files is always settings.user_files() already, so
+    # this is a no-op there.
+    settings.user_files_dir = user_files
 
     # Three-element signature: load_matches already enforces the width
     # through its own `dims` argument, so the third element is a no-op

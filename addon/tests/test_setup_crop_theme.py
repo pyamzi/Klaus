@@ -19,6 +19,8 @@ from anki_stubs import check, install, report, section
 
 install()
 
+import klausmate.settings as _settings  # noqa: E402
+
 # Importing under the headless stubs also proves neither module raises at
 # import time (syntax errors, bad relative imports, etc.) after the edit.
 setup_flow = importlib.import_module("klausmate.setup_flow")
@@ -237,7 +239,7 @@ def _nudge_for(cfg):
     """(title, text, informative) the readiness nudge would show, or None
     when it shows nothing at all."""
     shown = []
-    saved = (setup_flow._themed_message_box, setup_flow._pkg,
+    saved = (setup_flow._themed_message_box, _settings.store,
              setup_flow._offer_v2_index_sweep)
 
     def _fake_box(_parent, title, _icon):
@@ -246,16 +248,14 @@ def _nudge_for(cfg):
         return msg
 
     setup_flow._themed_message_box = _fake_box
-    setup_flow._pkg = lambda: type(
-        "P", (), {"get_config": staticmethod(lambda: dict(cfg)),
-                  "write_config": staticmethod(lambda _c: None)})
+    _settings.store = _settings.DictStore(cfg)
     # The v2 sweep is K-236's own gate and is exercised by its own pins;
     # neutralised here so this reads the nudge alone.
     setup_flow._offer_v2_index_sweep = lambda _cfg: False
     try:
         setup_flow._readiness_check_body()
     finally:
-        (setup_flow._themed_message_box, setup_flow._pkg,
+        (setup_flow._themed_message_box, _settings.store,
          setup_flow._offer_v2_index_sweep) = saved
     if not shown:
         return None

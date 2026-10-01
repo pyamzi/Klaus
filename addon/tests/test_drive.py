@@ -24,6 +24,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(ADDON), ".claude", "skills", "kl
 from anki_stubs import install_package_stub  # noqa: E402
 
 install_package_stub()
+
+import klausmate.settings as _settings  # noqa: E402
 pkg = sys.modules["klausmate"]
 
 import importlib
@@ -614,7 +616,7 @@ print("== rescan_library_root glue runs end-to-end (K-075 regression trap) ==")
 _g_uf = tempfile.mkdtemp(prefix="drive_glue_uf_")
 _g_root = tempfile.mkdtemp(prefix="drive_glue_root_")
 os.makedirs(os.path.join(_g_uf, "contexts"))
-pkg.USER_FILES = _g_uf
+_settings.user_files_dir = _g_uf
 _ph = importlib.import_module("klausmate.pdf_handler")
 _orig_llr = _ph._live_library_root
 _ph._live_library_root = lambda: _g_root

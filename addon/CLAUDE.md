@@ -195,17 +195,28 @@ same reason.
 - `__init__.py`: bootstrap + gui_hooks; JS bridge
   (`pycmd("klausmate:<action>:<b64 json>")` routed in `on_js_message`, which
   splits `":", 2` — only `focus`/`crop`/`log`/`dbg` actions remain, the
-  `complete`/`ask` actions are gone with autocomplete/Ask); the config
-  accessors — **`write_config(cfg)` REPLACES the whole stored blob**
-  (that is exactly why `_migrate_config` can scrub a key by popping it),
-  so a partial dict handed to it wipes every other setting, API keys and
-  library root included. **`patch_config(updates)`** (getConfig → update
-  → writeConfig, hopped onto the main thread via `mw.taskman.run_on_main`
-  and applied inline when there is no taskman) is the merge writer, and
-  the ONE config writer a background thread may use — which is why every
-  `plus.*` sink takes it and never the plain writer (two reviewers found
-  that wipe as a Critical; `plus.remember`'s parameter is still *named*
-  `write_config`, so read the type, not the name); `PdfDock` (a
+  `complete`/`ask` actions are gone with autocomplete/Ask); the
+  bootstrap of the **settings store** (`settings.py`, aqt-free; spec
+  [settings-seam](docs/superpowers/specs/2026-09-30-settings-seam-design.md),
+  2026-09-30): `__init__` installs
+  `settings.store = AnkiStore(mw.addonManager, __name__)`, `settings.run_on_main` and
+  `settings.current_profile`, and every module reads config through
+  `settings.read()` and writes through **`settings.patch(updates,
+  remove=())`** — the ONE writer, a merge into a fresh read, inline on
+  the main thread and hopped through `run_on_main` from any other,
+  dropped if the profile changed before the hop ran. **There is no
+  whole-blob writer any more**: the old `write_config(cfg)` replaced the
+  stored blob, so a partial dict handed to it wiped API keys and the
+  library root (two reviewers found that as a Critical), and
+  `patch_config` existed to work around it; both are gone with the six
+  `_pkg()` helpers, `index_queue._cfg`, `retention._cfg` and the
+  `USER_FILES` copies (`settings.user_files()` is the one path).
+  Migrations are pure `dict -> dict` functions registered with
+  `settings.register_migration` (retention's two threshold bumps; the
+  legacy-key scrub is built in) and run ONCE per profile open by
+  `settings.migrate()`, never on read. Tests assign `settings.store =
+  DictStore({...})` (or the harness's `LiveStore` over a dict they keep
+  mutating) and `settings.user_files_dir = <scratch>`; `PdfDock` (a
   `QDockWidget` of the host window — Browse and Add Cards — since
   2026-09-05): the PDF viewer panel. Its title bar is `_PanelBar` (`[◫]
   [＋] [tabs] … [page n/m] [⧉] [✕]`), which IGNORES presses it does not
@@ -704,9 +715,10 @@ same reason.
     delete and search still work. Also a delegate that DRAWS a
     Library tag by its real name (tags cannot hold spaces; EditRole and
     search still use the tag), a right-aligned muted retention % on EVERY
-    tag (mean FSRS recall of studied cards, parents include children, new
-    and suspended excluded, computed in a QueryOp only while a Browse is
-    open), warning icons with `helpEvent` tooltips (not embedded / stale /
+    tag (mean FSRS recall of ALL its cards, suspended included and
+    never-studied ones at 0% — recall times coverage, Pouya's call
+    2026-09-30; parents include children; computed in a QueryOp only
+    while a Browse is open), warning icons with `helpEvent` tooltips (not embedded / stale /
     indexing, from `retention.index_status` + `index_queue.pending_names`),
     the right-click menus (`browser_sidebar_will_show_context_menu`), a
     click that loads the PDF into Browse's PDF panel only when that panel
@@ -988,8 +1000,8 @@ same reason.
     the one chain every index request runs. A new PDF-matching surface
     that skips it silently matches against a stale index (missing
     cards, no error). **Never delete this module**:
-    `retention.py` imports it at module top for `USER_FILES`/`INDEX_DIR`/
-    `_cfg`/`_fail` and for `_busy`, the ONE re-entrancy token every
+    `retention.py` imports it at module top for `index_dir()` (the card
+    index folder under `settings.user_files()`), `_fail` and `_busy`, the ONE re-entrancy token every
     embedding phase holds; manage_models, tag_sync and pdf_map read it
     too. Gone with K-146: `run_curation`, `_preview_in_browse`,
     `last_run`, `suggest_deck_name`, `_escape_search` (and long before
@@ -1027,8 +1039,8 @@ same reason.
     `ensure_matches` hands back. **Closing the Library no longer
     cancels indexing** (the job may have been started from the deck
     screen). `offer_model_sweep(parent, prev_sig)`, called
-    from `manage_models.save_embed` with the signature captured BEFORE
-    the widgets overwrite config, re-indexes the card index plus every
+    from the Preferences `index_sweep` effect (`prefs_state.commit`
+    hands it the BASELINE signature, captured before the write), re-indexes the card index plus every
     PDF with an index on disk — announced first, counted in notes and
     PDFs. The offer confirms local work with default No and preserves the
     stale-index upgrade trigger.
@@ -1121,21 +1133,30 @@ same reason.
     `bg_wash_row`) so labels dim with their controls.
     General and Appearance remain alongside Local models: Ollama runtime
     management, free-text embedding model and External clients configuration. The embedded Assistant page is removed.
-    `save_embed` captures `index_signature` before saving and offers a
+    The `index_sweep` effect carries the baseline `index_signature` and offers a
     confirmed local index sweep when appropriate.
-    **Preferences are deferred-save**: widgets only
-    call `mark_dirty()`; `save_all()` behind the **Save** button is the
-    writer of user-edited preference keys (runtime relocation separately patches only endpoint), closing dirty prompts to discard,
-    and `sync_embed_widgets`/`sync_threshold_widget` bail while dirty so
-    a background `refresh()` can't clobber unsaved edits. Adding a
-    preference = widget + `mark_dirty` signal + a line in the matching
-    `save_*`; a forgotten signal now costs a missing dirty mark, not a
-    silently unsaved setting (which is exactly how `pdf_renderer`
-    shipped broken). `sync_embed_widgets()` takes no arguments any
-    more — with one provider there is no provider switch to reload the
-    key and model fields for, and `ui_state["shown_provider"]` went with
-    it; what `save_embed` compares is `embeddings.index_signature`
-    before and after.
+    **Preferences are a state machine (2026-10-01, spec
+    [prefs-state](docs/superpowers/specs/2026-09-30-prefs-state-design.md))**:
+    `prefs_state.PrefsState` (aqt-free) holds EVERY value the dialog
+    edits — General, Local models, and Appearance (the two background
+    specs as values, the accent pair, the design gate, `anki_theme` as a
+    pseudo-key seeded from `mw.pm.theme()`). Widgets are `_Binding`
+    adapters (a signal is `state.set`, `paint()` writes the state back
+    under the class-wide `syncing` scope, so painting never counts as an
+    edit); the Appearance handlers copy-edit-set a spec through
+    `_edit_spec`. **Dirty is a fact** (`state.dirty` = pending values
+    exist), so a keyboard-only slider edit lights Save. `save_all()` is
+    `state.commit()`: ONE `settings.patch` of the changed keys, then the
+    effects in fixed order — `index_sweep` (baseline signature → the
+    rebuild offer), `threshold_changed` (the tuned-PDFs prompt),
+    `anki_theme` (`mw.set_theme`), `renderer_restart` (the notice),
+    `appearance` (live apply, then drop the preview). Discard is
+    `state.discard()` + `paint_all()`. Endpoint relocation is
+    `state.reseed` (a stored value moved; not an edit); a model pick is
+    `state.set`. The live preview reads `flatten_appearance(state.view())`
+    plus the stored-config keys it always carried. Adding a preference =
+    one key in `prefs_state.KEYS` + one `_Binding`; a forgotten binding
+    costs a missing edit, never a silently unsaved setting.
   - `setup_flow.py`: first-run library setup and profile-open local readiness.
     Preserve one clear nudge and the once-per-profile stale-index sweep offer.
     A declined sweep is an answer, not a snooze.
@@ -1246,7 +1267,7 @@ same reason.
   `451a753`) that the later dock replaced (itself removed in D3).
   `card_forge.py` (`120293f`) and `anki_tools.py` (`e1c023c`) survive
   from the same plan; the retained endpoint still uses `anki_tools`.
-  `_LEGACY_KEYS_DROPPED` in `__init__.py` scrubs
+  `settings.LEGACY_KEYS_DROPPED` (moved from `__init__.py` on 2026-09-30) scrubs
   `assistant_api_key`/`assistant_backend`/`assistant_token` (retired
   2026-09-01): there was never a separate assistant credential to keep;
   D3 removed the subsequent Claude Code host as well.

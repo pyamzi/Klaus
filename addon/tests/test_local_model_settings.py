@@ -14,9 +14,10 @@ import types
 from enum import IntEnum
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.claude/skills/klaus-test/scripts'))
-from anki_stubs import install, exec_klausmate_under_qt, check, report
+from anki_stubs import install, exec_klausmate_under_qt, check, report, LiveStore
 install()
-from PyQt6 import QtWidgets
+import klausmate.settings as _settings  # noqa: E402
+from PyQt6 import QtCore, QtWidgets
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 scratch = tempfile.TemporaryDirectory()
 K = exec_klausmate_under_qt(scratch.name)
@@ -26,11 +27,14 @@ store.update(embedding_model='saved-model')
 # ran: these tests pin what SETTINGS write, not that migration's write.
 store.update(_threshold_scale='centered', _threshold_default_applied=0.45)
 writes, pending, operations, calls = [], [], [], []
-K.get_config = lambda: dict(store)
 def write(cfg):
     store.update(cfg)
     writes.append(dict(cfg))
-K.write_config = write
+_writer = write
+class _Store(LiveStore):
+    def write(self, cfg):
+        _writer(cfg)
+_settings.store = _Store(store)
 mw = QtWidgets.QMainWindow()
 mw.taskman = types.SimpleNamespace(run_on_main=pending.append)
 mw.reset = lambda: None
@@ -266,6 +270,83 @@ save_preferences()
 dlg.accept()
 mm.manage_models_dialog(); dlg = mm._OPEN_DLG
 check('reopen loads saved local settings', field('embedding_model').text() == store['embedding_model'])
+# The state machine (docs/superpowers/specs/2026-09-30-prefs-state-design.md):
+# dirty is a fact, Save writes only what changed.
+check('a fresh dialog has nothing to save', not button('Save').isEnabled())
+_n = len(writes); button('Save').click(); drain()
+check('save with no edit writes nothing', len(writes) == _n, str(writes[_n:]))
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_slider = dlg.findChild(QtWidgets.QSlider, 'pdf_match_threshold')
+_slider.setValue(_slider.value() + 7)   # valueChanged only, no sliderReleased: a keyboard edit
+check('a keyboard-only threshold edit lights Save', button('Save').isEnabled())
+button('Save').click(); drain()
+check('...and is written, with its user-set mark',
+      writes[-1].get('pdf_match_threshold') == round(_slider.value() / 100, 2) and writes[-1].get('_threshold_user_set') is True,
+      str(writes[-1:]))
+dlg.accept(); drain()
+# Appearance in the state too: a previewed edit reverts on discard and writes nothing.
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_bgmod = importlib.import_module('klausmate.background')
+_st = dlg.prefs_state
+_mode = dlg.findChild(QtWidgets.QComboBox, 'background_mode')
+_mode.setCurrentIndex(_mode.findData('image' if _st.get('background')['mode'] == 'color' else 'color'))
+dlg.findChild(QtCore.QTimer, 'preview_timer').timeout.emit(); app.processEvents()
+check('an appearance edit is a pending value, previews live and lights Save',
+      _st.dirty and _bgmod.preview_active() and button('Save').isEnabled(),
+      f"dirty={_st.dirty} preview={_bgmod.preview_active()} save={button('Save').isEnabled()}")
+_n = len(writes)
+dlg.reject(); answer(True); drain()
+check('discard reverts the preview, clears pending and writes nothing',
+      not _bgmod.preview_active() and not _st.dirty and len(writes) == _n)
+# An appearance nudge-and-back arms the preview with baseline-equal values and
+# leaves nothing pending; a Save for an unrelated edit must still drop that override.
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_st = dlg.prefs_state; _mode = dlg.findChild(QtWidgets.QComboBox, 'background_mode')
+_orig_mode = _st.get('background')['mode']
+_mode.setCurrentIndex(_mode.findData('image' if _orig_mode == 'color' else 'color'))
+_mode.setCurrentIndex(_mode.findData(_orig_mode))
+dlg.findChild(QtCore.QTimer, 'preview_timer').timeout.emit(); app.processEvents()
+check('nudge-and-back: preview armed, nothing pending', _bgmod.preview_active() and 'background' not in _st.pending())
+field('embedding_model').setText('other-model'); field('embedding_model').textEdited.emit('other-model')
+button('Save').click(); drain()
+check('a Save with no appearance change still drops the armed preview override', not _bgmod.preview_active())
+dlg.accept(); drain()
+# Review fix 1: with no stored image, picking Image must stay Image and show Choose Image…
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_st = dlg.prefs_state; _mode = dlg.findChild(QtWidgets.QComboBox, 'background_mode')
+_mode.setCurrentIndex(_mode.findData('image')); app.processEvents()
+_img_btn = next((b for b in dlg.findChildren(QtWidgets.QPushButton) if 'Choose Image' in b.text()), None)
+check('Image mode is reachable from a profile with no image: the mode sticks and Choose Image… shows',
+      _st.get('background')['mode'] == 'image' and _img_btn is not None and not _img_btn.isHidden(),
+      f"mode={_st.get('background')['mode']} btn={_img_btn}")
+dlg.reject(); answer(True); drain()
+# Review fix 2a: painting never marks dirty — a stored threshold outside the slider's range
+# is clamped by the widget; without the binding's syncing guard that clamp reads as an edit.
+store['pdf_match_threshold'] = 1.5  # beyond the slider's range: the widget clamps, the state must not care
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+check('painting a clamped slider from state is not an edit', not dlg.prefs_state.dirty and not button('Save').isEnabled(),
+      str(dlg.prefs_state.pending()))
+dlg.accept(); drain()
+store['pdf_match_threshold'] = 0.45
+# Review fix 2b: with the design on and colour mode stored, opening the dialog and letting the
+# preview tick fire must arm nothing — a handler guard that fires on seed would.
+store.update(klausbook_design=True, background_mode='color')
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+app.processEvents()
+check('opening the dialog schedules no preview and marks nothing',
+      not dlg.findChild(QtCore.QTimer, 'preview_timer').isActive() and not _bgmod.preview_active() and not dlg.prefs_state.dirty,
+      f'timer={dlg.findChild(QtCore.QTimer, "preview_timer").isActive()} preview={_bgmod.preview_active()} pending={dlg.prefs_state.pending()}')
+# …and repainting a CHANGED value from state (what discard does) fires no handler: the
+# Appearance handlers' syncing guard is what keeps a paint from scheduling a preview.
+_mode = dlg.findChild(QtWidgets.QComboBox, 'background_mode'); _timer = dlg.findChild(QtCore.QTimer, 'preview_timer')
+_mode.setCurrentIndex(_mode.findData('image')); app.processEvents(); _timer.stop()
+dlg.prefs_state.discard(); dlg.paint_all(); app.processEvents()
+check('repainting a changed mode from state is not an edit and schedules no preview',
+      _mode.currentData() == 'color' and not dlg.prefs_state.dirty and not _timer.isActive(),
+      f'mode={_mode.currentData()} timer={_timer.isActive()} pending={dlg.prefs_state.pending()}')
+dlg.accept(); drain()
+store.update(klausbook_design=False, background_mode='theme')
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
 nav = dlg.findChild(QtWidgets.QListWidget, 'SettingsNav')
 nav.setCurrentRow(next(i for i in range(nav.count()) if nav.item(i).text() == 'Local models'))
 button('Refresh').click(); work(); drain()
@@ -394,13 +475,13 @@ rt.server_manager = types.SimpleNamespace(
     stop=lambda: (state.update(owned=False), running.update(endpoint=None)))
 embed_calls = []
 Client.embed = lambda self, model, texts: (embed_calls.append((self.endpoint, model)) or [[3, 4]])
-provider = importlib.import_module('klausmate.embeddings').provider_from_config(K.get_config)
+provider = importlib.import_module('klausmate.embeddings').provider_from_config(_settings.read)
 main_ident = threading.get_ident()
 write_threads = []
 def traced_write(cfg):
     write_threads.append(threading.get_ident())
     write(cfg)
-K.write_config = traced_write
+_writer = traced_write
 for action in ('Install/start', 'Update runtime'):
     for variant in ('close', 'new endpoint', 'unsaved endpoint', 'stale profile', 'open'):
         case = action + ' relocation ' + variant
@@ -432,7 +513,7 @@ for action in ('Install/start', 'Update runtime'):
         check(case + ' preserves unrelated and unsaved settings',
               store['color_theme'] == 'ocean' and store['embedding_model'] == 'saved-model')
         if variant in ('close', 'open'):
-            result = rt.ensure_server(K.get_config())
+            result = rt.ensure_server(_settings.read())
             check(case + ' subsequent startup reaches running server', result.ok and result.endpoint == running['endpoint'])
             provider.embed(['test'])
             check(case + ' provider uses saved relocation', embed_calls[-1] == (running['endpoint'], 'saved-model'))
@@ -457,4 +538,17 @@ check('welcome shows local model guidance and Preferences plus Later',
       and welcome.defaultButton().text() == 'KlausMate Preferences')
 welcome.accept()
 mw.close()
+# Review fix 3: a relocation that lands while the field holds an edit still moves the BASELINE.
+store.update(endpoint='http://127.0.0.1:11434', embedding_model='saved-model')
+state.update(owned=False, version='old'); running['endpoint'] = None
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_st = dlg.prefs_state
+button('Install/start').click(); work()
+field('endpoint').setText('http://127.0.0.1:11499'); field('endpoint').textEdited.emit('http://127.0.0.1:11499')
+drain()
+check('the relocation was saved underneath the edit', store['endpoint'] == 'http://127.0.0.1:11435')
+check('…the edit is still pending and the baseline moved to the saved endpoint',
+      _st.pending().get('endpoint') == 'http://127.0.0.1:11499' and _st.view() and (_st.discard() or _st.get('endpoint') == 'http://127.0.0.1:11435'),
+      str(_st.view().get('endpoint')))
+dlg.accept(); drain()
 raise SystemExit(report())

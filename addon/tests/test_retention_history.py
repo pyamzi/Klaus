@@ -26,8 +26,11 @@ from anki_stubs import check, code_only, install, report, section
 
 install()
 
+import klausmate.settings as _settings  # noqa: E402
+
 rh = importlib.import_module("klausmate.retention_history")
 retention = importlib.import_module("klausmate.retention")
+curation = importlib.import_module("klausmate.curation")
 pdf_handler = importlib.import_module("klausmate.pdf_handler")
 card_index = importlib.import_module("klausmate.card_index")
 pdf_index = importlib.import_module("klausmate.pdf_index")
@@ -36,8 +39,7 @@ embeddings = importlib.import_module("klausmate.embeddings")
 tmp = tempfile.mkdtemp(prefix="klaus_rh_")
 # NEVER the real user_files: every retention storage path below reads the
 # module globals, so point them at the scratch tree for the whole file.
-retention.USER_FILES = tmp
-retention.INDEX_DIR = os.path.join(tmp, "card_index")
+_settings.user_files_dir = tmp
 
 _RH_SRC = open("klausmate/retention_history.py").read()
 _RH_CODE = code_only(_RH_SRC)
@@ -198,7 +200,7 @@ cidx = card_index.CardIndex(
     nids=[1, 2, 3], mods=[10, 10, 10], hashes=["h1", "h2", "h3"],
     vectors=array("f", [1.0, 0.0, 0.0, 1.0, 1.0, 0.0]),
 )
-card_index.save(cidx, retention.INDEX_DIR)
+card_index.save(cidx, curation.index_dir())
 digest = retention.card_index_digest(cidx)
 
 src_sig = pdf_index.source_signature(tmp, "Lecture_1")

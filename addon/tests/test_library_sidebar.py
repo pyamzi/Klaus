@@ -21,7 +21,8 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-sys.modules["klausmate"].get_config = lambda: {}
+
+import klausmate.settings as _settings  # noqa: E402
 from PyQt6 import QtCore, QtGui, QtWidgets  # noqa: E402
 
 shim = types.ModuleType("aqt.qt")
@@ -41,7 +42,7 @@ app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
 UF = tempfile.mkdtemp(prefix="klaus-k307-")  # never the real user_files
 curation = importlib.import_module("klausmate.curation")
 retention = importlib.import_module("klausmate.retention")
-curation.USER_FILES = retention.USER_FILES = UF
+_settings.user_files_dir = UF
 ls = importlib.import_module("klausmate.library_sidebar")
 
 drive = {"folders": ["2-BiB/Exam 1/Week 1"],
@@ -120,18 +121,20 @@ check("any other tag draws as Anki drew it", drawn(1) == "Anemia", drawn(1))
 check("editing still opens on the tag name",
       model.data(model.index(0, 0), QtCore.Qt.ItemDataRole.EditRole) == "04-L-Intro_to_CBC")
 
-section("retention: the mean recall of a tag's studied cards")
+section("retention: the mean recall of ALL of a tag's cards, never-studied ones at 0%")
 means = ls.tag_means(
     {1: " Heme::Anemia ", 2: " Heme::Anemia Heme::Iron ", 3: " Onc ", 4: " Heme::Iron "},
     {1: [(0.9, False), (0.0, True)], 2: [(0.7, False)], 3: [(0.0, True)], 4: [(0.5, False)]},
 )
-check("a tag averages its studied cards; new cards are left out",
-      abs(means["heme::anemia"] - 0.8) < 1e-9, str(means))
+check("a tag averages every card; a never-studied card counts as 0% (Pouya, 2026-09-30: "
+      "recall times coverage, so a lecture with most of its cards untouched reads low, not high)",
+      abs(means["heme::anemia"] - (0.9 + 0.0 + 0.7) / 3) < 1e-9, str(means))
 check("a parent counts its children's cards, each card once",
-      abs(means["heme"] - (0.9 + 0.7 + 0.5) / 3) < 1e-9, str(means))
-check("a tag with only new cards has no mean", "onc" not in means)
-check("row text", ls.percent_text(means, "Heme::Anemia") == "80%"
-      and ls.percent_text(means, "Onc") == "\u2014" and ls.percent_text(None, "Onc") is None)
+      abs(means["heme"] - (0.9 + 0.0 + 0.7 + 0.5) / 4) < 1e-9, str(means))
+check("a tag with only never-studied cards reads 0%, not a dash", means.get("onc") == 0.0, str(means))
+check("row text", ls.percent_text(means, "Heme::Anemia") == "53%"
+      and ls.percent_text(means, "Onc") == "0%" and ls.percent_text(means, "Nope") == "\u2014"
+      and ls.percent_text(None, "Onc") is None)
 
 retention = importlib.import_module("klausmate.retention")
 
@@ -387,7 +390,6 @@ _ph._live_library_root = lambda: root
 scans = []
 pdf_drive = importlib.import_module("klausmate.pdf_drive")
 pdf_drive.start_library_rescan = lambda *a, **k: scans.append(1)
-pdf_drive._user_files = lambda: UF
 n = act.import_files([os.path.join(src, "Lecture.pdf"), os.path.join(src, "missing.pdf")], "Heme")
 check("the PDF is copied into its folder", n == 1 and os.path.isfile(os.path.join(root, "Heme", "Lecture.pdf")))
 act.import_files([os.path.join(src, "Lecture.pdf")])

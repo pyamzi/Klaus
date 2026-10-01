@@ -20,6 +20,8 @@ from anki_stubs import install, check, section, report  # noqa: E402
 
 install()
 
+import klausmate.settings as _settings  # noqa: E402
+
 card_index = importlib.import_module("klausmate.card_index")
 pdf_index = importlib.import_module("klausmate.pdf_index")
 pdf_handler = importlib.import_module("klausmate.pdf_handler")
@@ -427,8 +429,8 @@ section("dock open/width persistence (pdf_tabs.json's lecture_view key)")
 # never the real one.
 _st_ufd = fresh_ufd()
 _st_file = os.path.join(_st_ufd, pdf_handler._OPEN_TABS_FILE)
-_orig_user_files = lecture_view._user_files
-lecture_view._user_files = lambda: _st_ufd
+_orig_user_files = _settings.user_files_dir
+_settings.user_files_dir = _st_ufd
 try:
     check("no saved state yet reads as an empty dict, never None — the "
           "callers do state.update() on whatever comes back",
@@ -492,7 +494,7 @@ try:
           _fd.hidden is True and _fd.saved_widths == 1
           and lecture_view._saved_state().get("open") is False)
 finally:
-    lecture_view._user_files = _orig_user_files
+    _settings.user_files_dir = _orig_user_files
     lecture_view._dock = _BOOT_DOCK
 
 
@@ -637,7 +639,7 @@ check("setup exists", callable(lecture_view.setup))
 
 section("the card-index directory is spelled three times — they must agree")
 # CARD_INDEX_SUBDIR is one of three INDEPENDENT copies of the same on-disk
-# path (curation.INDEX_DIR, lecture_view.CARD_INDEX_SUBDIR,
+# path (curation.index_dir(), lecture_view.CARD_INDEX_SUBDIR,
 # pdf_graph.CARD_INDEX_SUBDIR). Every fixture in this file builds its
 # directory FROM the constant, so the constant defines both the code and
 # the test and the two can never disagree — a self-referential pin, the
@@ -668,14 +670,26 @@ def _module_str_const(path, name):
     return None
 
 
-_cur_dir = _module_str_const("klausmate/curation.py", "INDEX_DIR")
+def _func_str_const(path, name):
+    """The last string literal inside module-level `def name(...)` of `path`."""
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            strings = [n.value for n in ast.walk(node)
+                       if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+            return strings[-1] if strings else None
+    return None
+
+
+_cur_dir = _func_str_const("klausmate/curation.py", "index_dir")
 _graph_dir = _module_str_const("klausmate/pdf_graph.py", "CARD_INDEX_SUBDIR")
 check("all three copies are still there to be compared — a copy that "
       "vanishes must fail loudly, not quietly compare nothing",
       isinstance(_cur_dir, str) and _cur_dir
       and isinstance(_graph_dir, str) and _graph_dir
       and isinstance(lecture_view.CARD_INDEX_SUBDIR, str))
-check("curation.INDEX_DIR, lecture_view.CARD_INDEX_SUBDIR and "
+check("curation.index_dir(), lecture_view.CARD_INDEX_SUBDIR and "
       "pdf_graph.CARD_INDEX_SUBDIR name the SAME directory — the writer, "
       "the reviewer's reader and the map's reader must not drift apart",
       lecture_view.CARD_INDEX_SUBDIR == _cur_dir == _graph_dir)

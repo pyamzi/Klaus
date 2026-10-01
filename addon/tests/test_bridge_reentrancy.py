@@ -402,12 +402,14 @@ check("setup_flow: the key-is-present path carries the ONE-TIME v2 "
       "Lecture panel). Asked once per profile off the stale-manifest "
       "scan, and the flag is written whether the answer was yes or NO: "
       "a refused whole-collection re-embed is an answer, not a snooze",
-      "_offer_v2_index_sweep(_pkg().get_config())"
+      "_offer_v2_index_sweep(settings.read())"
       in _func_src("setup_flow", "_readiness_after_library_root")
+      and "_resume_unindexed()" in _func_src("setup_flow", "_readiness_after_library_root")
+      and "index_queue.resume_unindexed()" in _func_src("setup_flow", "_resume_unindexed")
       and '_v2_index_sweep_offered' in _V2_SWEEP_SRC
       and "index_queue.stale_index_names()" in _V2_SWEEP_SRC
       and "index_queue.offer_model_sweep(" in _V2_SWEEP_SRC
-      and "write_config(cfg2)" in _V2_SWEEP_SRC)
+      and 'settings.patch({"_v2_index_sweep_offered": True})' in _V2_SWEEP_SRC)
 
 # Klaus Plus / setup_flow readiness pins used to live here as source-only
 # checks (an AST-extracted-source substring for _embedding_ready and a

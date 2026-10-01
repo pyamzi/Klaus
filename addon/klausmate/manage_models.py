@@ -29,6 +29,7 @@ from aqt.qt import (
 from aqt.utils import showInfo, showWarning, tooltip
 
 from .md3_switch import Md3Switch
+from . import settings
 
 
 def _pkg():
@@ -321,6 +322,36 @@ def _close_for_profile(dlg: Any, preview_timer: Any, op_state: dict) -> None:
             step()
         except Exception as exc:  # noqa: BLE001 - never block a profile close
             print(f"[klausmate] preferences close for profile failed: {exc}")
+
+
+class _Binding:
+    """One value widget bound to a PrefsState key (spec: prefs-state).
+
+    ``signal`` → ``state.set(key, read())`` then ``after()``; ``paint()``
+    writes ``state.get(key)`` back into the widget under the class-wide
+    ``syncing`` scope, during which incoming signals are ignored — so
+    painting from state never counts as an edit (invariant 5).
+    """
+
+    syncing = False
+
+    def __init__(self, state, key, read, paint, signal, after) -> None:
+        self.state, self.key = state, key
+        self._read, self._paint, self._after = read, paint, after
+        signal.connect(self._on_signal)
+
+    def _on_signal(self, *_args) -> None:
+        if _Binding.syncing:
+            return
+        self.state.set(self.key, self._read())
+        self._after()
+
+    def paint(self) -> None:
+        _Binding.syncing = True
+        try:
+            self._paint(self.state.get(self.key))
+        finally:
+            _Binding.syncing = False
 
 
 def manage_models_dialog(*_args: Any) -> None:
@@ -802,7 +833,7 @@ def manage_models_dialog(*_args: Any) -> None:
 
     external_interpreter = None
     external_script = str(Path(__file__).resolve().parent / "scripts" / "mcp_stdio_bridge.py")
-    external_discovery = str(Path(_pkg().USER_FILES) / "mcp_connection.json")
+    external_discovery = str(Path(settings.user_files()) / "mcp_connection.json")
     external_controls = QVBoxLayout()
     external_json = QPlainTextEdit()
     external_json.setObjectName("external_client_config")
@@ -868,6 +899,7 @@ def manage_models_dialog(*_args: Any) -> None:
     # the Library's per-PDF slider (pdf_drive._on_threshold) — same
     # control, different scope, so it should look and feel the same.
     threshold_slider = QSlider(Qt.Orientation.Horizontal)
+    threshold_slider.setObjectName("pdf_match_threshold")
     threshold_slider.setMinimum(20)
     threshold_slider.setMaximum(80)
     threshold_slider.setFixedWidth(160)
@@ -996,6 +1028,8 @@ def manage_models_dialog(*_args: Any) -> None:
     )
 
     bg_mode_combo = QComboBox()
+
+    bg_mode_combo.setObjectName("background_mode")
     bg_mode_combo.addItem("Anki's Own (Default)", "theme")
     bg_mode_combo.addItem("Color Gradient", "color")
     bg_mode_combo.addItem("Image", "image")
@@ -1166,7 +1200,7 @@ def manage_models_dialog(*_args: Any) -> None:
     # Widgets mode (⊖ / ＋) is the ONE writer of heatmap_enabled now.
     # _bg_preview_cfg still carries the key, read from stored config.
 
-    _general_cfg = _pkg().get_config()
+    _general_cfg = settings.read()
     try:
         _cur_theme = int(getattr(mw.pm.theme(), "value", 0))
     except Exception:
@@ -1174,10 +1208,18 @@ def manage_models_dialog(*_args: Any) -> None:
     anki_theme_combo.setCurrentIndex(
         max(0, anki_theme_combo.findData(_cur_theme))
     )
-    image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
-    from .pdfjs_viewer import renderer_from_config as _renderer_from_config
+    # The value state machine (prefs_state.py, spec prefs-state): EVERY
+    # value this dialog edits lives there — General, Local models and
+    # Appearance (the two background specs as values, the accent pair,
+    # the design gate, and anki_theme as a pseudo-key seeded from
+    # mw.pm.theme()). Widgets are _Binding adapters or paint from it;
+    # Save commits it; dirty is its fact.
+    from . import prefs_state as _prefs_state
 
-    pdfjs_cb.setChecked(_renderer_from_config(_general_cfg) == "pdfjs")
+    state = _prefs_state.PrefsState.from_config(_general_cfg)
+    state.reseed("anki_theme", _cur_theme)
+    dlg.prefs_state = state  # the offscreen tests drive the state directly
+    dlg.paint_all = lambda: paint_all()  # …and repaint from it (invariant 5 pin)
 
     from . import dashboard as _dashboard
     from . import heatmap as _heatmap
@@ -1186,18 +1228,6 @@ def manage_models_dialog(*_args: Any) -> None:
 
     klausbook_cb.setChecked(_background.design_enabled(_general_cfg))
 
-    # Own syncing flag, NOT ui_state["syncing"]: this block builds and
-    # runs sync_background_widgets() BEFORE ui_state is assigned further
-    # down the function, and a closure's free variable is only looked up
-    # at call time — referencing ui_state here crashed the dialog with
-    # NameError the moment Preferences opened (live traceback).
-    _bg_state = {
-        "spec": _background.resolve(_general_cfg),
-        "reviewer_spec": _background.resolve(
-            _general_cfg, prefix="reviewer_background"
-        ),
-        "syncing": False,
-    }
     # Coalesces live appearance previews: top_bar.refresh() redraws the
     # toolbar and resets the main window, and the blur slider fires
     # continuously while dragged, so previewing per signal would repaint
@@ -1206,6 +1236,7 @@ def manage_models_dialog(*_args: Any) -> None:
     _preview_timer = QTimer(dlg)
     _preview_timer.setSingleShot(True)
     _preview_timer.setInterval(140)
+    _preview_timer.setObjectName("preview_timer")
 
     def _sync_caption(
         thumb: Any,
@@ -1232,10 +1263,10 @@ def manage_models_dialog(*_args: Any) -> None:
             try:
                 import os as _os
 
-                from . import USER_FILES as _UF
+                from . import settings as _settings
 
                 pix = _image_thumb(
-                    _os.path.join(_UF, _background.IMAGE_DIR, name)
+                    _os.path.join(_settings.user_files(), _background.IMAGE_DIR, name)
                 )
             except Exception:
                 pix = None
@@ -1272,11 +1303,12 @@ def manage_models_dialog(*_args: Any) -> None:
         lbl.setVisible(bool(lbl.text()))
 
     def sync_background_widgets() -> None:
-        """Repaint the Appearance controls from _bg_state (never from
-        config directly — the spec is the pending, unsaved value)."""
-        spec = _bg_state["spec"]
-        _bg_state["syncing"] = True
+        """Repaint the Appearance controls from the state (never from
+        config directly — the state holds the pending, unsaved value)."""
+        spec = state.get("background")
+        _Binding.syncing = True
         try:
+            klausbook_cb.setChecked(bool(state.get("klausbook_design")))
             idx = max(0, bg_mode_combo.findData(spec["mode"]))
             bg_mode_combo.setCurrentIndex(idx)
             bg_fit_combo.setCurrentIndex(
@@ -1284,7 +1316,7 @@ def manage_models_dialog(*_args: Any) -> None:
             )
             bg_blur_slider.setValue(int(spec["blur"]))
             bg_wash_slider.setValue(int(spec["wash"]))
-            r_spec = _bg_state["reviewer_spec"]
+            r_spec = state.get("reviewer_background")
             study_mode_combo.setCurrentIndex(
                 max(0, study_mode_combo.findData(r_spec["mode"]))
             )
@@ -1293,7 +1325,7 @@ def manage_models_dialog(*_args: Any) -> None:
             )
             study_wash_slider.setValue(int(r_spec["wash"]))
         finally:
-            _bg_state["syncing"] = False
+            _Binding.syncing = False
         bg_blur_lbl.setText(f"{spec['blur']}px")
         bg_wash_lbl.setText(f"{spec['wash']}%")
         is_image = spec["mode"] == "image"
@@ -1306,7 +1338,7 @@ def manage_models_dialog(*_args: Any) -> None:
         # hides the whole background block; a mode shows only its own
         # rows. The accent grid alone survives every state: it colours
         # Klaus's own windows, which keep their design in both modes.
-        design_on = klausbook_cb.isChecked()
+        design_on = bool(state.get("klausbook_design"))
         bg_mode_row.klaus_hidden = not design_on
         bg_image_btn.setVisible(is_image)
         _sync_grad_caption(
@@ -1320,7 +1352,7 @@ def manage_models_dialog(*_args: Any) -> None:
             design_on and is_image, design_on,
         )
 
-        r_spec = _bg_state["reviewer_spec"]
+        r_spec = state.get("reviewer_background")
         r_is_image = r_spec["mode"] == "image"
         r_is_colour = r_spec["mode"] == "color"
         study_wash_lbl.setText(f"{r_spec['wash']}%")
@@ -1347,43 +1379,51 @@ def manage_models_dialog(*_args: Any) -> None:
         except Exception:
             pass
 
+    def _edit_spec(key: str, **fields) -> None:
+        """One or more fields of a background spec changed: copy, edit,
+        set — the state owns the value, the handler never holds it."""
+        spec = state.get(key)
+        spec.update(fields)
+        state.set(key, spec)
+
     def on_design_toggled(_checked: bool) -> None:
         # Live-preview like every appearance edit, then re-grey the
         # background rows the switch governs.
+        if _Binding.syncing:
+            return
+        state.set("klausbook_design", klausbook_cb.isChecked())
         appearance_changed()
         sync_background_widgets()
 
     def on_bg_mode_changed(_i: int) -> None:
-        if _bg_state["syncing"]:
+        if _Binding.syncing:
             return
-        _bg_state["spec"]["mode"] = str(
-            bg_mode_combo.currentData() or "theme"
-        )
+        _edit_spec("background", mode=str(bg_mode_combo.currentData() or "theme"))
         appearance_changed()
         sync_background_widgets()
 
     def on_bg_fit_changed(_i: int) -> None:
-        if _bg_state["syncing"]:
+        if _Binding.syncing:
             return
-        _bg_state["spec"]["fit"] = str(bg_fit_combo.currentData() or "cover")
+        _edit_spec("background", fit=str(bg_fit_combo.currentData() or "cover"))
         appearance_changed()
 
     def on_bg_blur_changed(value: int) -> None:
         bg_blur_lbl.setText(f"{value}px")
-        if _bg_state["syncing"]:
+        if _Binding.syncing:
             return
-        _bg_state["spec"]["blur"] = int(value)
+        _edit_spec("background", blur=int(value))
         appearance_changed()
 
     def on_bg_wash_changed(value: int) -> None:
         bg_wash_lbl.setText(f"{value}%")
-        if _bg_state["syncing"]:
+        if _Binding.syncing:
             return
-        _bg_state["spec"]["wash"] = int(value)
+        _edit_spec("background", wash=int(value))
         appearance_changed()
 
     def on_bg_image_removed(_href: str) -> None:
-        _bg_state["spec"]["image"] = ""
+        _edit_spec("background", image="")
         appearance_changed()
         sync_background_widgets()
 
@@ -1396,43 +1436,38 @@ def manage_models_dialog(*_args: Any) -> None:
         )
         if not path:
             return
-        from . import USER_FILES  # type: ignore
+        from . import settings
 
-        stored = _background.store_image(USER_FILES, path)
+        stored = _background.store_image(settings.user_files(), path)
         if not stored:
             showWarning("Could not use that image.", parent=dlg)
             return
-        _bg_state["spec"]["image"] = stored
-        _bg_state["spec"]["mode"] = "image"
+        _edit_spec("background", image=stored, mode="image")
         appearance_changed()
         sync_background_widgets()
 
     def on_study_mode_changed(_i: int) -> None:
-        if _bg_state["syncing"]:
+        if _Binding.syncing:
             return
-        _bg_state["reviewer_spec"]["mode"] = str(
-            study_mode_combo.currentData() or "theme"
-        )
+        _edit_spec("reviewer_background", mode=str(study_mode_combo.currentData() or "theme"))
         appearance_changed()
         sync_background_widgets()
 
     def on_study_fit_changed(_i: int) -> None:
-        if _bg_state["syncing"]:
+        if _Binding.syncing:
             return
-        _bg_state["reviewer_spec"]["fit"] = str(
-            study_fit_combo.currentData() or "cover"
-        )
+        _edit_spec("reviewer_background", fit=str(study_fit_combo.currentData() or "cover"))
         appearance_changed()
 
     def on_study_wash_changed(value: int) -> None:
         study_wash_lbl.setText(f"{value}%")
-        if _bg_state["syncing"]:
+        if _Binding.syncing:
             return
-        _bg_state["reviewer_spec"]["wash"] = int(value)
+        _edit_spec("reviewer_background", wash=int(value))
         appearance_changed()
 
     def on_study_image_removed(_href: str) -> None:
-        _bg_state["reviewer_spec"]["image"] = ""
+        _edit_spec("reviewer_background", image="")
         appearance_changed()
         sync_background_widgets()
 
@@ -1445,14 +1480,13 @@ def manage_models_dialog(*_args: Any) -> None:
         )
         if not path:
             return
-        from . import USER_FILES  # type: ignore
+        from . import settings
 
-        stored = _background.store_image(USER_FILES, path)
+        stored = _background.store_image(settings.user_files(), path)
         if not stored:
             showWarning("Could not use that image.", parent=dlg)
             return
-        _bg_state["reviewer_spec"]["image"] = stored
-        _bg_state["reviewer_spec"]["mode"] = "image"
+        _edit_spec("reviewer_background", image=stored, mode="image")
         appearance_changed()
         sync_background_widgets()
 
@@ -1464,14 +1498,10 @@ def manage_models_dialog(*_args: Any) -> None:
     # screen-reader user nothing). Preset colours come straight from
     # theme.COLOR_THEMES; the last square is the user's own colour and
     # opens a picker. Deferred-save like every other preference:
-    # choosing only updates _accent_state + the dirty flag; save_general
-    # writes color_theme/color_theme_custom and save_all applies live.
+    # choosing is state.set("color_theme"); Save commits it and the
+    # appearance effect applies it live.
     from . import theme as _theme_presets
 
-    _accent_state = {
-        "name": "ocean",
-        "custom": _theme_presets.DEFAULT_CUSTOM_COLOR,
-    }
     _accent_buttons: dict[str, QPushButton] = {}
 
     def _accent_swatch_style(fill: str, checked: bool) -> str:
@@ -1492,17 +1522,17 @@ def manage_models_dialog(*_args: Any) -> None:
 
     def _accent_fill(name: str) -> str:
         if name == _theme_presets.CUSTOM_THEME:
-            return str(_accent_state["custom"])
+            return str(state.get("color_theme_custom"))
         return _theme_presets.COLOR_THEMES[name][False]["blue"]
 
     def sync_accent_swatches() -> None:
         for name, btn in _accent_buttons.items():
-            checked = name == _accent_state["name"]
+            checked = name == state.get("color_theme")
             btn.setChecked(checked)
             btn.setStyleSheet(_accent_swatch_style(_accent_fill(name), checked))
 
     def _pick_accent(name: str) -> None:
-        _accent_state["name"] = name
+        state.set("color_theme", name)
         appearance_changed()
         sync_accent_swatches()
 
@@ -1513,10 +1543,10 @@ def manage_models_dialog(*_args: Any) -> None:
         from aqt.qt import QColor, QColorDialog
 
         chosen = QColorDialog.getColor(
-            QColor(str(_accent_state["custom"])), dlg, "Accent Color"
+            QColor(str(state.get("color_theme_custom"))), dlg, "Accent Color"
         )
         if chosen.isValid():
-            _accent_state["custom"] = chosen.name()
+            state.set("color_theme_custom", chosen.name())
         _pick_accent(_theme_presets.CUSTOM_THEME)
 
     # 14 swatches (13 presets + custom) — wrapped 7 per row so the
@@ -1555,16 +1585,6 @@ def manage_models_dialog(*_args: Any) -> None:
             sw, _idx // _SWATCHES_PER_ROW, _idx % _SWATCHES_PER_ROW
         )
 
-    _cfg_custom = str(_general_cfg.get("color_theme_custom") or "")
-    if _theme_presets.is_hex_colour(_cfg_custom):
-        _accent_state["custom"] = _cfg_custom
-    _cfg_accent = str(_general_cfg.get("color_theme") or "ocean")
-    _accent_state["name"] = (
-        _cfg_accent
-        if _cfg_accent in _theme_presets.COLOR_THEMES
-        or _cfg_accent == _theme_presets.CUSTOM_THEME
-        else "ocean"
-    )
     sync_accent_swatches()
     _row(
         appearance_layout,
@@ -1577,7 +1597,7 @@ def manage_models_dialog(*_args: Any) -> None:
     def _refresh_library_label() -> None:
         from . import pdf_handler
 
-        root = pdf_handler.get_library_root(_pkg().get_config())
+        root = pdf_handler.get_library_root(settings.read())
         library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
 
     _refresh_library_label()
@@ -1621,7 +1641,7 @@ def manage_models_dialog(*_args: Any) -> None:
     close_btn.setObjectName("SecondaryButton")
     close_row.addWidget(close_btn)
     # Save is the primary action (theme default = blue) and the ONLY
-    # writer of preference keys — see mark_dirty()/save_all().
+    # writer of preference keys — see save_all() (state.commit()).
     save_btn = QPushButton("Save")
     save_btn.setEnabled(False)
     # The dialog's default button: Return saves once there is something
@@ -1633,10 +1653,20 @@ def manage_models_dialog(*_args: Any) -> None:
 
     # One background operation at a time in this dialog.
     op_state: dict[str, Any] = {"active": False, "kind": "", "cancel": None}
-    # "syncing"/"dirty" back the deferred-save model: preference widgets
-    # never write on a keystroke or a toggle — Save does. "syncing" is
-    # what stops a programmatic repopulation looking like a user edit.
-    ui_state: dict[str, Any] = {"syncing": False, "dirty": False}
+    bindings: list = []
+
+    def refresh_dirty() -> None:
+        """Save and the unsaved label follow the FACT: pending values exist."""
+        save_btn.setEnabled(state.dirty and not op_state["active"])
+        unsaved_lbl.setText("Unsaved changes" if state.dirty else "")
+
+    def paint_all() -> None:
+        """Every widget from the state — the bound ones, then the
+        Appearance controls and the accent swatches."""
+        for b in bindings:
+            b.paint()
+        sync_background_widgets()
+        sync_accent_swatches()
 
     runtime_state = {"owned": False, "update": False}
 
@@ -1653,30 +1683,11 @@ def manage_models_dialog(*_args: Any) -> None:
         update_runtime_btn.setEnabled(not busy and runtime_state["update"])
         delete_model_btn.setEnabled(not busy and installed_models.currentItem() is not None
                                     and installed_models.currentItem().data(Qt.ItemDataRole.UserRole) is not None)
-        save_btn.setEnabled(not busy and ui_state["dirty"])
         progress.setVisible(busy and op_state["kind"] != "local")
         progress_lbl.setVisible(busy and op_state["kind"] != "local")
-
-    def refresh() -> None:
-        """Reload deferred-save widgets from the current configuration."""
-        sync_embed_widgets()
-        sync_threshold_widget()
+        refresh_dirty()
 
     # ----- Local models handlers --------------------------------------
-
-    def sync_embed_widgets() -> None:
-        """Seed local settings unless the user has pending edits."""
-        if ui_state["dirty"]:
-            return
-        ui_state["syncing"] = True
-        try:
-            cfg = _pkg().get_config()
-            endpoint_edit.setText(str(cfg.get("endpoint") or "http://127.0.0.1:11434"))
-            embed_model_edit.setText(str(cfg.get("embedding_model") or ""))
-            runtime_auto_cb.setChecked(bool(cfg.get("runtime_auto_setup", True)))
-        finally:
-            ui_state["syncing"] = False
-        update_embed_status()
 
     def _fmt_ago(ts: float) -> str:
         secs = max(0, int(time.time() - ts))
@@ -1691,7 +1702,7 @@ def manage_models_dialog(*_args: Any) -> None:
     def update_embed_status() -> None:
         from . import curation, embeddings
 
-        cfg = _pkg().get_config()
+        cfg = settings.read()
         sig = embeddings.index_signature(cfg)
         st = curation.index_stats()
         if not st["exists"]:
@@ -1704,23 +1715,10 @@ def manage_models_dialog(*_args: Any) -> None:
                 txt += " · settings changed: next indexing rebuilds from scratch"
         embed_status.setText(txt)
 
-    def save_embed() -> None:
-        if ui_state["syncing"]:
-            return
-        from . import embeddings
-
-        cfg = _pkg().get_config()
-        # Captured BEFORE the mutations below, off STORED config: this is
-        # what every vector on disk was made with, and comparing it with
-        # what config holds after the write is the only honest way to ask
-        # "did the model move under the index?" (K-152).
-        prev_sig = embeddings.index_signature(cfg)
-        cfg["endpoint"] = endpoint_edit.text().strip() or "http://127.0.0.1:11434"
-        cfg["embedding_model"] = embed_model_edit.text().strip()
-        cfg["runtime_auto_setup"] = runtime_auto_cb.isChecked()
-        _pkg().write_config(cfg)
+    def _run_index_sweep(prev_sig) -> None:
+        """The ``index_sweep`` effect: the stored signature moved under the
+        index, so offer the local rebuild (K-152)."""
         update_embed_status()
-        # Offer a local rebuild when the stored signature changes.
         try:
             from . import index_queue
 
@@ -1731,60 +1729,12 @@ def manage_models_dialog(*_args: Any) -> None:
     def _update_threshold_label(value: int) -> None:
         threshold_value_lbl.setText(f"{value / 100:.2f}")
 
-    def sync_threshold_widget() -> None:
-        from . import retention
-
-        if ui_state["dirty"]:
-            return  # never clobber an unsaved slider position
-        ui_state["syncing"] = True
-        try:
-            cfg = retention._cfg()  # applies the default-bump migration
-            try:
-                value = float(
-                    cfg.get("pdf_match_threshold") or retention.DEFAULT_THRESHOLD
-                )
-            except (TypeError, ValueError):
-                value = retention.DEFAULT_THRESHOLD
-            threshold_slider.setValue(int(round(value * 100)))
-        finally:
-            ui_state["syncing"] = False
-        _update_threshold_label(threshold_slider.value())
-
-    def save_threshold() -> None:
-        """Wired to sliderReleased, not valueChanged — valueChanged only
-        drives the live label (_update_threshold_label), so dragging never
-        writes config on every intermediate pixel, and a programmatic
-        setValue() (sync_threshold_widget, on every refresh()) never emits
-        sliderReleased at all, real Qt never fires it outside a genuine
-        mouse/touch release.
-
-        Still guarded by ui_state['syncing'] like every other save_* here,
-        belt-and-braces, AND a no-op unless the value actually differs from
-        what's stored: opening this dialog and closing it untouched must
-        leave config byte-identical. Getting either guard wrong stamps
-        _threshold_user_set on profiles that never touched the control,
-        which permanently opts them out of every future
-        retention._migrate_default_threshold bump with no visible symptom
-        until that bump ships and silently reaches nobody.
+    def _apply_threshold_to_tuned() -> None:
+        """The ``threshold_changed`` effect, after the new default is
+        written: refresh an open Library and offer to clear the per-PDF
+        overrides that would otherwise hide the change (K-052 rework #2).
         """
-        if ui_state["syncing"]:
-            return
         from . import retention
-
-        value = round(threshold_slider.value() / 100.0, 3)
-        cfg = _pkg().get_config()
-        try:
-            current = round(
-                float(cfg.get("pdf_match_threshold") or retention.DEFAULT_THRESHOLD),
-                3,
-            )
-        except (TypeError, ValueError):
-            current = None
-        if value == current:
-            return
-        cfg["pdf_match_threshold"] = value
-        cfg["_threshold_user_set"] = True
-        _pkg().write_config(cfg)
 
         def _refresh_library() -> None:
             # An open Library window shows retention/cards computed at
@@ -1947,7 +1897,7 @@ def manage_models_dialog(*_args: Any) -> None:
             return
         from . import curation, embeddings
 
-        cfg = _pkg().get_config()
+        cfg = settings.read()
         sig = embeddings.index_signature(cfg)
         st = curation.index_stats()
         if st["exists"] and not embeddings.signature_matches(
@@ -2057,7 +2007,7 @@ def manage_models_dialog(*_args: Any) -> None:
             else:
                 dlg.accept()
 
-        if ui_state["dirty"]:
+        if state.dirty:
             # K-114: hand-built QMessageBox + open() + finished, same
             # shape as clear_assistant_sessions above — never a
             # blocking question() static (its internal exec() is the
@@ -2096,7 +2046,9 @@ def manage_models_dialog(*_args: Any) -> None:
                 msg1.deleteLater()
                 if not confirmed:
                     return
-                clear_dirty()
+                state.discard()
+                paint_all()
+                refresh_dirty()
                 _after_dirty_check()
 
             msg1.finished.connect(_on_discard_answered)
@@ -2104,77 +2056,9 @@ def manage_models_dialog(*_args: Any) -> None:
         else:
             _after_dirty_check()
 
-    def save_general() -> None:
-        cfg = _pkg().get_config()
-        cfg["image_crop_enabled"] = bool(image_crop_cb.isChecked())
-        cfg["pdf_renderer"] = "pdfjs" if pdfjs_cb.isChecked() else "native"
-        spec = _bg_state["spec"]
-        cfg["background_mode"] = spec["mode"]
-        cfg["background_color"] = spec["color"]
-        cfg["background_image"] = spec["image"]
-        cfg["background_fit"] = spec["fit"]
-        cfg["background_blur"] = int(spec["blur"])
-        cfg["background_wash"] = int(spec["wash"])
-        cfg["background_grad_x"] = int(spec["grad_x"])
-        cfg["background_grad_y"] = int(spec["grad_y"])
-        cfg["background_grad_size"] = int(spec["grad_size"])
-        cfg["background_gradients"] = [dict(g) for g in spec["gradients"]]
-        r_spec = _bg_state["reviewer_spec"]
-        cfg["reviewer_background_mode"] = r_spec["mode"]
-        cfg["reviewer_background_color"] = r_spec["color"]
-        cfg["reviewer_background_image"] = r_spec["image"]
-        cfg["reviewer_background_fit"] = r_spec["fit"]
-        cfg["reviewer_background_wash"] = int(r_spec["wash"])
-        cfg["reviewer_background_grad_x"] = int(r_spec["grad_x"])
-        cfg["reviewer_background_grad_y"] = int(r_spec["grad_y"])
-        cfg["reviewer_background_grad_size"] = int(r_spec["grad_size"])
-        cfg["reviewer_background_gradients"] = [
-            dict(g) for g in r_spec["gradients"]
-        ]
-        cfg["color_theme"] = _accent_state["name"]
-        cfg["color_theme_custom"] = _accent_state["custom"]
-        # No heatmap_enabled write: since 2026-08-30 the deck screen's
-        # Edit Widgets mode is the only UI that owns that key, and a
-        # write here would clobber a mid-session ⊖/＋ edit with the
-        # value this dialog happened to open with.
-        cfg["klausbook_design"] = bool(klausbook_cb.isChecked())
-        _pkg().write_config(cfg)
-        # Anki's own theme — the one non-Klaus preference this dialog
-        # writes. Only when actually changed: mw.set_theme re-runs
-        # setupStyle, which repaints every webview in the app.
-        try:
-            from aqt.theme import Theme as _Theme
-
-            _want = int(anki_theme_combo.currentData() or 0)
-            if int(getattr(mw.pm.theme(), "value", 0)) != _want:
-                mw.set_theme(_Theme(_want))
-        except Exception as _exc:
-            print(f"[klausmate] theme apply failed: {_exc}")
-
-    def mark_dirty() -> None:
-        """A preference widget changed — nothing is written until Save.
-
-        Every preference used to write config on its own change signal.
-        That made "I changed it and it didn't take" indistinguishable
-        from "I never committed it", and it silently lost any setting
-        whose signal was left unconnected (exactly what happened to the
-        pdf_renderer checkbox). Save is now the single writer, so an
-        unwired signal costs a missing dirty mark, never a lost setting.
-        """
-        if ui_state["syncing"]:
-            return
-        ui_state["dirty"] = True
-        save_btn.setEnabled(True)
-        unsaved_lbl.setText("Unsaved changes")
-
-    def clear_dirty() -> None:
-        ui_state["dirty"] = False
-        save_btn.setEnabled(False)
-        unsaved_lbl.setText("")
-
     def _bg_preview_cfg() -> dict:
         """The PENDING appearance keys in config shape, for background's
-        preview override — the same keys save_general() writes.
+        preview override — the same keys Save writes (one flattener).
 
         This dict REPLACES config for every reader of
         background.effective_cfg, so a key left out of it does not fall
@@ -2187,61 +2071,22 @@ def manage_models_dialog(*_args: Any) -> None:
         per tick like dashboard_order below — a ⊖/＋ edit made while
         Preferences is open must survive the next preview tick.
         """
-        spec = _bg_state["spec"]
-        return {
-            "background_mode": spec["mode"],
-            "background_color": spec["color"],
-            "background_image": spec["image"],
-            "background_fit": spec["fit"],
-            "background_blur": int(spec["blur"]),
-            "background_wash": int(spec["wash"]),
-            "background_grad_x": int(spec["grad_x"]),
-            "background_grad_y": int(spec["grad_y"]),
-            "background_grad_size": int(spec["grad_size"]),
-            "background_gradients": [dict(g) for g in spec["gradients"]],
-            # The study screen's OWN spec — carried for the same reason
-            # as every key here: the preview dict REPLACES config, so
-            # omitting these would snap the study background back to
-            # its stored value (or default) on the very next preview
-            # tick, even though the main background's edit is what
-            # triggered it.
-            "reviewer_background_mode": _bg_state["reviewer_spec"]["mode"],
-            "reviewer_background_color": _bg_state["reviewer_spec"]["color"],
-            "reviewer_background_image": _bg_state["reviewer_spec"]["image"],
-            "reviewer_background_fit": _bg_state["reviewer_spec"]["fit"],
-            "reviewer_background_wash": int(
-                _bg_state["reviewer_spec"]["wash"]
-            ),
-            "reviewer_background_grad_x": _bg_state["reviewer_spec"]["grad_x"],
-            "reviewer_background_grad_y": _bg_state["reviewer_spec"]["grad_y"],
-            "reviewer_background_grad_size": _bg_state["reviewer_spec"][
-                "grad_size"
-            ],
-            "reviewer_background_gradients": [
-                dict(g) for g in _bg_state["reviewer_spec"]["gradients"]
-            ],
-            "heatmap_enabled": bool(_heatmap.enabled(_pkg().get_config())),
+        out = _prefs_state.flatten_appearance(state.view())
+        out.update({
+            "heatmap_enabled": bool(_heatmap.enabled(settings.read())),
             # The heatmap's own corner menu writes these two, and it can
             # be used while this dialog is open — so they are carried
             # from STORED config and read live per tick, exactly like
             # heatmap_enabled above and dashboard_order below.
-            "heatmap_history_days": _heatmap.history_window(
-                _pkg().get_config()
-            ),
-            "heatmap_forecast": _heatmap.forecast_window(
-                _pkg().get_config()
-            ) > 0,
-            # Same expression save_general writes. The design gates all
-            # read through effective_cfg and their default is OFF, so a
-            # preview dict missing this key would strip the whole look
-            # on the first blur nudge.
-            "klausbook_design": bool(klausbook_cb.isChecked()),
+            "heatmap_history_days": _heatmap.history_window(settings.read()),
+            "heatmap_forecast": _heatmap.forecast_window(settings.read()) > 0,
             # The dashboard reads its order through effective_cfg too;
             # Preferences has no order UI, so carry the stored value —
             # read live per tick, in case the dashboard writes mid-preview.
-            "dashboard_order": _dashboard.order_from_cfg(_pkg().get_config()),
-            "dashboard_hidden": _dashboard.hidden_foreign(_pkg().get_config()),
-        }
+            "dashboard_order": _dashboard.order_from_cfg(settings.read()),
+            "dashboard_hidden": _dashboard.hidden_foreign(settings.read()),
+        })
+        return out
 
     def apply_appearance_live() -> None:
         """Render the pending accent + background EVERYWHERE, saving
@@ -2249,7 +2094,7 @@ def manage_models_dialog(*_args: Any) -> None:
 
         Appearance is the one class of setting judged by eye, so it
         previews live while the dialog is open; Save remains the only
-        writer of config (see mark_dirty). Cancelling runs
+        writer of config (state.commit() in save_all). Cancelling runs
         revert_appearance_preview() to put the stored look back.
         """
         try:
@@ -2257,13 +2102,13 @@ def manage_models_dialog(*_args: Any) -> None:
             _background.set_preview(_bg_preview_cfg())
             # Accent colour before name: set_active_theme("custom") is
             # only meaningful once the colour behind it is loaded.
-            _theme_presets.set_custom_colour(str(_accent_state["custom"]))
-            _theme_presets.set_active_theme(str(_accent_state["name"]))
+            _theme_presets.set_custom_colour(str(state.get("color_theme_custom")))
+            _theme_presets.set_active_theme(str(state.get("color_theme")))
             dlg.setStyleSheet(
                 _theme_presets.dialog_qss(_theme_presets.night_mode())
             )
             # The swatches carry their own inline QSS, so the dialog
-            # sheet swap above wipes them — repaint from _accent_state.
+            # sheet swap above wipes them — repaint from the state.
             sync_accent_swatches()
             # The sidebar star is a baked pixmap filled in blue_accent;
             # re-render it or it keeps the old accent until reopen.
@@ -2327,28 +2172,55 @@ def manage_models_dialog(*_args: Any) -> None:
         main window, and the blur slider emits continuously while it is
         dragged, so an undebounced preview would repaint per pixel.
         """
-        mark_dirty()
+        refresh_dirty()
         _preview_timer.start()
 
-    def save_all() -> None:
-        """The one writer of preference keys (the Save button).
+    def _run_effect(effect: tuple) -> None:
+        """Dispatch one ``Commit.effect`` (prefs_state's fixed vocabulary);
+        ``renderer_restart`` is handled by save_all's closing notice."""
+        kind = effect[0]
+        if kind == "index_sweep":
+            _run_index_sweep(effect[1])
+        elif kind == "threshold_changed":
+            _apply_threshold_to_tuned()
+        elif kind == "anki_theme":
+            # Anki's own theme — the one non-Klaus preference this dialog
+            # writes; only on an actual change (the effect IS the change):
+            # mw.set_theme re-runs setupStyle, which repaints every webview.
+            try:
+                from aqt.theme import Theme as _Theme
 
-        clear_dirty() runs FIRST because save_embed()/save_threshold()
-        re-sync widgets afterwards and those syncs are skipped while the
-        dirty guard is up.
-        """
-        prev_renderer = _renderer_from_config(_pkg().get_config())
-        clear_dirty()
-        save_embed()
-        save_threshold()
-        save_general()
-        # Paint through the same one path as every live edit, THEN drop
-        # the override: stored config now holds identical values, so
-        # leaving it armed would let a stale preview shadow a later
-        # config change for the rest of the session.
-        apply_appearance_live()
-        _background.set_preview(None)
-        if _renderer_from_config(_pkg().get_config()) != prev_renderer:
+                mw.set_theme(_Theme(int(effect[1])))
+            except Exception as _exc:
+                print(f"[klausmate] theme apply failed: {_exc}")
+        elif kind == "appearance":
+            # Paint through the same one path as every live edit, THEN
+            # drop the override: stored config now holds identical
+            # values, so leaving it armed would let a stale preview
+            # shadow a later config change for the rest of the session.
+            apply_appearance_live()
+            _background.set_preview(None)
+
+    def save_all() -> None:
+        """The one writer of preference keys (the Save button): ONE patch
+        of the keys that changed, then the effects that follow from them."""
+        commit = state.commit()
+        if commit.patch:
+            settings.patch(commit.patch)
+        restart = False
+        for effect in commit.effects:
+            if effect[0] == "renderer_restart":
+                restart = True
+                continue
+            _run_effect(effect)
+        if _background.preview_active() and not any(e[0] == "appearance" for e in commit.effects):
+            # A nudge-and-back armed the preview with baseline-equal values
+            # and left nothing pending: stored config already matches, so
+            # the override must not outlive this Save either.
+            _background.set_preview(None)
+        paint_all()
+        refresh_dirty()
+        if restart:
             showInfo(
                 "Preferences saved.\n\nThe PDF viewer change takes effect "
                 "the next time you start Anki.",
@@ -2365,9 +2237,9 @@ def manage_models_dialog(*_args: Any) -> None:
         """
         from aqt.qt import QFileDialog
 
-        from . import USER_FILES, drive_store, pdf_handler
+        from . import drive_store, pdf_handler, settings
 
-        cfg = _pkg().get_config()
+        cfg = settings.read()
         old_root = pdf_handler.get_library_root(cfg)
         new_root = QFileDialog.getExistingDirectory(
             dlg, "Choose a folder for your Klaus Library", old_root or ""
@@ -2376,16 +2248,14 @@ def manage_models_dialog(*_args: Any) -> None:
             return
 
         def do(_col: Any) -> Any:
-            folders = drive_store.load(USER_FILES).get("pdfs", {})
+            folders = drive_store.load(settings.user_files()).get("pdfs", {})
             return pdf_handler.migrate_to_root(
-                USER_FILES, new_root, folders, old_root=old_root
+                settings.user_files(), new_root, folders, old_root=old_root
             )
 
         def on_done(result: Any) -> None:
             set_busy(False)
-            cfg2 = _pkg().get_config()
-            cfg2["library_root"] = new_root
-            _pkg().write_config(cfg2)
+            settings.patch({"library_root": new_root})
             _refresh_library_label()
             failed = (result or {}).get("failed") or {}
             if failed:
@@ -2462,7 +2332,7 @@ def manage_models_dialog(*_args: Any) -> None:
     def run_local(action: str, model: str = "") -> None:
         if op_state["active"] or not local_alive():
             return
-        cfg = _pkg().get_config()
+        cfg = settings.read()
         starting_endpoint = cfg.get("endpoint")
         cfg["endpoint"] = endpoint_edit.text().strip() or "http://127.0.0.1:11434"
         endpoint = cfg["endpoint"]
@@ -2522,10 +2392,15 @@ def manage_models_dialog(*_args: Any) -> None:
                 item.setData(Qt.ItemDataRole.UserRole, (name, capabilities))
                 installed_models.addItem(item)
             installed_models.blockSignals(False)
-            if actual_endpoint != endpoint and endpoint_edit.text().strip() == endpoint:
-                endpoint_edit.setText(actual_endpoint)
-                if _pkg().get_config().get("endpoint") != actual_endpoint:
-                    mark_dirty()
+            if actual_endpoint != endpoint:
+                if settings.read().get("endpoint") == actual_endpoint:
+                    # Stored moved under us: the baseline follows, whatever
+                    # the field holds (a mid-operation edit stays pending).
+                    state.reseed("endpoint", actual_endpoint)
+                elif endpoint_edit.text().strip() == endpoint:
+                    state.set("endpoint", actual_endpoint)  # "Save to use the new endpoint"
+                paint_all()
+                refresh_dirty()
             if snapshot["reachable"]:
                 status = "Ollama is running (managed by Klaus)." if snapshot["owned"] else (
                     "Ollama is running (external). Stop it in the application that started it."
@@ -2535,7 +2410,7 @@ def manage_models_dialog(*_args: Any) -> None:
             if actual_endpoint != endpoint:
                 status += (
                     " The runtime chose another port; its endpoint was saved."
-                    if _pkg().get_config().get("endpoint") == actual_endpoint else
+                    if settings.read().get("endpoint") == actual_endpoint else
                     " The runtime chose another port. Save to use the new endpoint."
                 )
             runtime_status.setText(status)
@@ -2563,8 +2438,9 @@ def manage_models_dialog(*_args: Any) -> None:
         data = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
         delete_model_btn.setEnabled(not op_state["active"] and data is not None)
         if data is not None and "embedding" in data[1]:
-            embed_model_edit.setText(data[0])
-            mark_dirty()
+            state.set("embedding_model", data[0])
+            paint_all()
+            refresh_dirty()
 
     def pull_model() -> None:
         name = pull_model_edit.text().strip()
@@ -2605,7 +2481,6 @@ def manage_models_dialog(*_args: Any) -> None:
     delete_model_btn.clicked.connect(delete_model)
     delete_model_btn.setEnabled(False)
     installed_models.currentItemChanged.connect(lambda *_args: select_installed_model())
-    runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
 
     def test_connection() -> None:
         if op_state["active"]:
@@ -2629,17 +2504,32 @@ def manage_models_dialog(*_args: Any) -> None:
     dlg.confirm_close_cb = confirm_close  # Esc and title-bar ✕ too
     test_conn_btn.clicked.connect(test_connection)
     close_btn.clicked.connect(confirm_close)
-    # Preference widgets only MARK DIRTY; save_all() (Save button) is the
-    # single writer. textEdited rather than editingFinished so the Save
-    # button lights up as you type, not only on focus-out.
-    endpoint_edit.textEdited.connect(lambda _t: mark_dirty())
-    embed_model_edit.textEdited.connect(lambda _t: mark_dirty())
+    # Value widgets are _Binding adapters over the state: a signal is an
+    # edit, Save commits. textEdited rather than editingFinished so the
+    # Save button lights up as you type; valueChanged on the slider so a
+    # keyboard edit counts too (sliderReleased never fires for one).
+    def _paint_threshold(value: float) -> None:
+        threshold_slider.setValue(int(round(value * 100)))
+        _update_threshold_label(threshold_slider.value())
+
+    bindings[:] = [
+        _Binding(state, "image_crop_enabled", image_crop_cb.isChecked, image_crop_cb.setChecked,
+                 image_crop_cb.toggled, refresh_dirty),
+        _Binding(state, "pdf_renderer", lambda: "pdfjs" if pdfjs_cb.isChecked() else "native",
+                 lambda v: pdfjs_cb.setChecked(v == "pdfjs"), pdfjs_cb.toggled, refresh_dirty),
+        _Binding(state, "endpoint", endpoint_edit.text, endpoint_edit.setText, endpoint_edit.textEdited, refresh_dirty),
+        _Binding(state, "embedding_model", embed_model_edit.text, embed_model_edit.setText,
+                 embed_model_edit.textEdited, refresh_dirty),
+        _Binding(state, "runtime_auto_setup", runtime_auto_cb.isChecked, runtime_auto_cb.setChecked,
+                 runtime_auto_cb.toggled, refresh_dirty),
+        _Binding(state, "pdf_match_threshold", lambda: threshold_slider.value() / 100, _paint_threshold,
+                 threshold_slider.valueChanged, refresh_dirty),
+        _Binding(state, "anki_theme", lambda: int(anki_theme_combo.currentData() or 0),
+                 lambda v: anki_theme_combo.setCurrentIndex(max(0, anki_theme_combo.findData(int(v)))),
+                 anki_theme_combo.currentIndexChanged, refresh_dirty),
+    ]
     threshold_slider.valueChanged.connect(_update_threshold_label)
-    threshold_slider.sliderReleased.connect(mark_dirty)
     index_btn.clicked.connect(start_index)
-    image_crop_cb.toggled.connect(lambda _checked: mark_dirty())
-    pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())
-    anki_theme_combo.currentIndexChanged.connect(lambda _i: mark_dirty())
     klausbook_cb.toggled.connect(on_design_toggled)
     bg_mode_combo.currentIndexChanged.connect(on_bg_mode_changed)
     bg_fit_combo.currentIndexChanged.connect(on_bg_fit_changed)
@@ -2678,7 +2568,7 @@ def manage_models_dialog(*_args: Any) -> None:
         except Exception as _exc:
             print(f"[klausmate] gradient replant failed: {_exc}")
 
-    def _on_grad_geom(s: dict, i: int, data: dict) -> None:
+    def _on_grad_geom(spec_key: str, s: dict, i: int, data: dict) -> None:
         """A sphere moved/resized. QUIET on purpose — never
         top_bar.refresh(): the page already shows the dragged stack
         (the editor painted it inline), and a refresh would rebuild
@@ -2686,12 +2576,13 @@ def manage_models_dialog(*_args: Any) -> None:
         g = s["gradients"][i]
         g["x"], g["y"], g["size"] = data["x"], data["y"], data["size"]
         if i == 0:
-            # Legacy single-gradient mirror (what save_general also
+            # Legacy single-gradient mirror (what flatten_appearance also
             # writes), so a downgrade or hand-read config stays sane.
             s["grad_x"], s["grad_y"], s["grad_size"] = (
                 data["x"], data["y"], data["size"],
             )
-        mark_dirty()
+        state.set(spec_key, s)
+        refresh_dirty()
         _quiet_preview()
 
     def _pick_sphere_colour(spec_key: str, i: int) -> None:
@@ -2700,7 +2591,7 @@ def manage_models_dialog(*_args: Any) -> None:
         never run inside a webchannel dispatch)."""
         from aqt.qt import QColor, QColorDialog
 
-        s = _bg_state[spec_key]
+        s = state.get(spec_key)
         if not 0 <= i < len(s["gradients"]):
             return
         chosen = QColorDialog.getColor(
@@ -2711,7 +2602,8 @@ def manage_models_dialog(*_args: Any) -> None:
         s["gradients"][i]["color"] = chosen.name()
         if i == 0:
             s["color"] = chosen.name()
-        mark_dirty()
+        state.set(spec_key, s)
+        refresh_dirty()
         _quiet_preview()
         sync_background_widgets()
         _replant_editor()
@@ -2720,13 +2612,13 @@ def manage_models_dialog(*_args: Any) -> None:
         """The on-screen editor's bridge sink (values already clamped
         in background.grad_edit_event). List bounds and the sphere cap
         are enforced HERE — JS indices are never trusted either."""
-        spec_key = "reviewer_spec" if target == "reviewer" else "spec"
-        s = _bg_state[spec_key]
+        spec_key = "reviewer_background" if target == "reviewer" else "background"
+        s = state.get(spec_key)
         gradients = s["gradients"]
         i = int(data.get("i", 0))
         if op == "geom":
             if 0 <= i < len(gradients):
-                _on_grad_geom(s, i, data)
+                _on_grad_geom(spec_key, s, i, data)
         elif op == "add":
             if len(gradients) < _background.MAX_SPHERES:
                 try:
@@ -2738,7 +2630,8 @@ def manage_models_dialog(*_args: Any) -> None:
                 gradients.append(
                     {"color": new_colour, "x": 50, "y": 45, "size": 60}
                 )
-                mark_dirty()
+                state.set(spec_key, s)
+                refresh_dirty()
                 _quiet_preview()
                 sync_background_widgets()
                 _replant_editor()
@@ -2747,7 +2640,8 @@ def manage_models_dialog(*_args: Any) -> None:
             # empty stack would be flat, which was removed outright.
             if len(gradients) > 1 and 0 <= i < len(gradients):
                 gradients.pop(i)
-                mark_dirty()
+                state.set(spec_key, s)
+                refresh_dirty()
                 _quiet_preview()
                 sync_background_widgets()
                 _replant_editor()
@@ -2811,7 +2705,9 @@ def manage_models_dialog(*_args: Any) -> None:
 
     dlg.finished.connect(_forget_dialog)
 
-    refresh()
+    paint_all()
+    refresh_dirty()
+    update_embed_status()
     # show(), NEVER exec() (live crash, 2026-08-26): on macOS 26.5 +
     # Qt 6.11, showing this dialog application-modal via exec()
     # segfaulted in its first backing-store flush
@@ -2840,12 +2736,11 @@ def manage_models_dialog(*_args: Any) -> None:
     # deck-screen rebuild happens behind the appearing window.
     try:
         if (
-            _bg_state["spec"]["mode"] == "color"
-            or _bg_state["reviewer_spec"]["mode"] == "color"
+            state.get("background")["mode"] == "color"
+            or state.get("reviewer_background")["mode"] == "color"
         ):
             from . import top_bar as _top_bar
 
             _top_bar.refresh()
     except Exception as _exc:
         print(f"[klausmate] gradient handle plant failed: {_exc}")
-

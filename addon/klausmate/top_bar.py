@@ -24,6 +24,8 @@ new look via the shared ``.hitem`` class.
 from __future__ import annotations
 
 import json
+
+from . import settings
 from typing import Any
 
 # Pouya's "impossible star" (K-270, 2026-09-17): five separate FILLED
@@ -207,12 +209,9 @@ def _addon() -> str:
 
 
 def _config() -> dict:
-    try:
-        from aqt import mw
+    from . import settings
 
-        return mw.addonManager.getConfig(__package__) or {}
-    except Exception:
-        return {}
+    return settings.read()
 
 
 def _background_css() -> str:

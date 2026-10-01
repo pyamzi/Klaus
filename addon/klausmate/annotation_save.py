@@ -277,9 +277,9 @@ def _wire_doc_sync(pipe: SavePipeline) -> None:
 def pipeline() -> SavePipeline:
     global _PIPELINE
     if _PIPELINE is None:
-        from . import USER_FILES
+        from . import settings
 
-        _PIPELINE = SavePipeline(USER_FILES, _run_on_main, _start_timer, _pin)
+        _PIPELINE = SavePipeline(settings.user_files(), _run_on_main, _start_timer, _pin)
         _wire_doc_sync(_PIPELINE)
     return _PIPELINE
 

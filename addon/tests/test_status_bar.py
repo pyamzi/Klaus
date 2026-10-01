@@ -19,7 +19,6 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-sys.modules["klausmate"].get_config = lambda: {}
 from PyQt6 import QtCore, QtGui, QtWidgets  # noqa: E402
 
 shim = types.ModuleType("aqt.qt")

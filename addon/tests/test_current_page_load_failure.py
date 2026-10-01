@@ -13,6 +13,8 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section
 
 install()
+
+import klausmate.settings as _settings  # noqa: E402
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6 import QtCore, QtGui, QtWidgets
 
@@ -46,7 +48,7 @@ class UnloadableDoc:
         raise RuntimeError("pdfium said no")
 
 with tempfile.TemporaryDirectory(prefix="klaus_page_failure_") as root:
-    sys.modules["klausmate"].USER_FILES = root
+    _settings.user_files_dir = root
     for folder in ("pdfs", "contexts"):
         Path(root, folder).mkdir()
     for name in ("Sample", "Healthy", "Unloadable"):

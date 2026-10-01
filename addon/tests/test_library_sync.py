@@ -24,7 +24,8 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-sys.modules["klausmate"].get_config = lambda: {}
+
+import klausmate.settings as _settings  # noqa: E402
 
 ts = importlib.import_module("klausmate.tag_sync")
 plan = ts.plan_library_sync
@@ -146,10 +147,7 @@ drive_store = importlib.import_module("klausmate.drive_store")
 pdf_handler = importlib.import_module("klausmate.pdf_handler")
 retention = importlib.import_module("klausmate.retention")
 UF = tempfile.mkdtemp(prefix="klaus-k306-")  # fresh: the stub's scratch dir persists between runs
-for _name, _mod in list(sys.modules.items()):
-    if (_name == "klausmate" or _name.startswith("klausmate.")) and hasattr(_mod, "USER_FILES"):
-        _mod.USER_FILES = UF
-sys.modules["klausmate"].USER_FILES = UF  # pdf_drive._user_files reads the package
+_settings.user_files_dir = UF
 root = tempfile.mkdtemp(prefix="klaus-root-")
 pdf_handler._live_library_root = lambda: root
 os.makedirs(os.path.join(UF, "contexts"), exist_ok=True)

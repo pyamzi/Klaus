@@ -185,12 +185,6 @@ page_store = importlib.import_module("klausmate.page_store")
 pdf_index = importlib.import_module("klausmate.pdf_index")
 pdf_handler = importlib.import_module("klausmate.pdf_handler")
 embeddings = importlib.import_module("klausmate.embeddings")
-# install() gives klausmate a synthetic __init__ (so importing submodules
-# never has to run the real, aqt-heavy klausmate/__init__.py) — it has no
-# get_config of its own, same gap test_tag_migrate.py's own hand-rolled
-# stub package fills the same way.
-importlib.import_module("klausmate").get_config = lambda: {}
-
 _sp_dir = tempfile.mkdtemp(prefix="klaus_test_ap_")
 
 

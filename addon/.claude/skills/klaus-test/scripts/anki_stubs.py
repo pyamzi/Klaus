@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import copy
 import sys
 import types
 
@@ -142,8 +143,9 @@ def install_package_stub(addon_dir: str = ADDON) -> None:
     pkg = types.ModuleType("klausmate")
     pkg.__path__ = [_MIRROR]
     pkg.__package__ = "klausmate"
-    pkg.USER_FILES = os.path.join(_MIRROR, "user_files")
     sys.modules["klausmate"] = pkg
+    # klausmate.settings derives user_files_dir from its own (mirrored)
+    # location, so it lands in the mirror's fresh user_files on its own.
 
 
 def _stub(name: str, **attrs):
@@ -332,9 +334,16 @@ def exec_klausmate_under_qt(scratch_user_files: str, addon_dir: str | None = Non
         "klausmate", os.path.join(addon_dir, "__init__.py"),
         submodule_search_locations=[addon_dir])
     module = importlib.util.module_from_spec(spec)
+    settings = importlib.import_module("klausmate.settings")  # resolves through the stub's path
+    settings.user_files_dir = scratch_user_files
     sys.modules["klausmate"] = module
     spec.loader.exec_module(module)
-    module.USER_FILES = scratch_user_files
+    # __init__ installed the stub mw as settings' profile token and main-thread
+    # hop; the stub answers every attribute with a NEW _Dummy, so the fence
+    # would drop every patch and the hop would swallow it. Tests that want
+    # the fence install their own (tests/test_settings.py).
+    settings.run_on_main = None
+    settings.current_profile = None
     return module
 
 
@@ -359,6 +368,24 @@ def report() -> int:
     """Print the tally; return an exit code for `raise SystemExit(report())`."""
     print(f"\n{_PASS} passed, {_FAIL} failed")
     return 1 if _FAIL else 0
+
+
+class LiveStore:
+    """``settings.store`` over a LIVE dict: reads copy it, so a test may
+    mutate ``cfg`` between calls; each write replaces it and is recorded
+    in ``writes``."""
+
+    def __init__(self, cfg: dict, writes: list | None = None) -> None:
+        self.cfg = cfg
+        self.writes = writes if writes is not None else []
+
+    def read(self) -> dict:
+        return copy.deepcopy(self.cfg)
+
+    def write(self, cfg: dict) -> None:
+        self.cfg.clear()
+        self.cfg.update(copy.deepcopy(cfg))
+        self.writes.append(copy.deepcopy(cfg))
 
 
 def code_only(src: str) -> str:

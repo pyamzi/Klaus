@@ -185,10 +185,10 @@ check("every Preferences toggle is an Md3Switch, whatever their number",
       bool(_TOGGLES)
       and set(_TOGGLES.values()) == {"Md3Switch"},
       str(sorted(_TOGGLES.items())))
-check("the toggles that predate live appearance preview still only "
-      "mark_dirty(), so Save stays the sole writer",
-      all(f"{name}.toggled.connect(lambda _checked: mark_dirty())" in _MM_CODE
-          for name in ("image_crop_cb", "pdfjs_cb")))
+check("the General toggles are _Binding adapters over the prefs state — "
+      "a toggle is an edit, Save commits, nothing else writes",
+      '_Binding(state, "image_crop_enabled", image_crop_cb.isChecked' in _MM
+      and '_Binding(state, "pdf_renderer", lambda: "pdfjs" if pdfjs_cb.isChecked()' in _MM)
 check("...and the appearance one (the design master switch — the "
       "heatmap switch left Preferences 2026-08-30) routes through "
       "on_design_toggled → appearance_changed(): marks dirty AND "

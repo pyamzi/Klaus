@@ -49,6 +49,8 @@ imported inside functions.
 
 from __future__ import annotations
 
+from . import settings
+
 import unicodedata
 from typing import Any, List, Tuple
 
@@ -200,13 +202,9 @@ _search_tokenizer = SearchTokenizer()
 
 
 def _config() -> dict:
-    """Best-effort addon config lookup (mirrors top_bar._config())."""
-    try:
-        from aqt import mw
+    from . import settings
 
-        return mw.addonManager.getConfig(__package__) or {}
-    except Exception:
-        return {}
+    return settings.read()
 
 
 def highlight_default(cfg: dict | None = None) -> bool:

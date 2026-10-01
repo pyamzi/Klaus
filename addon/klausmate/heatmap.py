@@ -46,6 +46,7 @@ import datetime
 from typing import Any
 
 from . import background, theme
+from . import settings
 
 SECS_PER_DAY = 86400
 _EPOCH = datetime.date(1970, 1, 1)
@@ -817,12 +818,9 @@ def _config() -> dict:
     armed — the same seam top_bar reads the background through, so
     flipping the heatmap switch shows up before Save like every other
     setting on the Appearance page."""
-    try:
-        from aqt import mw
+    from . import settings
 
-        stored = mw.addonManager.getConfig(__package__) or {}
-    except Exception:
-        return {}
+    stored = settings.read()
     return background.effective_cfg(stored)
 
 

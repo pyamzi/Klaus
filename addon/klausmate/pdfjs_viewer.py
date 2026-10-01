@@ -32,6 +32,8 @@ ranges over the bridge (``range``) as it needs them. Pure helpers
 
 from __future__ import annotations
 
+from . import settings
+
 import base64
 import colorsys
 import json
@@ -1324,11 +1326,11 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         try:
             rec = removed[0]
             if rec.get("origin") == "external" and self._annotations_name:
-                from . import USER_FILES  # type: ignore
+                from . import settings
                 from . import pdf_handler
 
                 pdf_handler.add_suppressed(
-                    USER_FILES, self._annotations_name, rec
+                    settings.user_files(), self._annotations_name, rec
                 )
         except Exception as exc:
             print(f"[klausmate] pdfjs tombstone failed: {exc}")
@@ -1604,13 +1606,13 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         if self._annotations_name is None:
             return
         try:
-            from . import USER_FILES  # type: ignore
+            from . import settings
             from . import pdf_handler
 
             pdf_handler.save_annotations(
-                USER_FILES, self._annotations_name, self._highlights
+                settings.user_files(), self._annotations_name, self._highlights
             )
-            self._schedule_bake(USER_FILES, self._annotations_name)
+            self._schedule_bake(settings.user_files(), self._annotations_name)
         except Exception as exc:
             print(f"[klausmate] pdfjs save annotations failed: {exc}")
 
@@ -1732,10 +1734,10 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         """Load the shared annotations JSON and push it to the page."""
         self._annotations_name = name
         try:
-            from . import USER_FILES  # type: ignore
+            from . import settings
             from . import pdf_handler
 
-            self._highlights = pdf_handler.load_annotations(USER_FILES, name)
+            self._highlights = pdf_handler.load_annotations(settings.user_files(), name)
         except Exception as exc:
             print(f"[klausmate] pdfjs annotations load failed: {exc}")
             self._highlights = []
@@ -1755,17 +1757,17 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         outside marks. Schedules NO bake — the file already holds those
         marks, and baking here would re-feed the watcher loop."""
         try:
-            from . import USER_FILES  # type: ignore
+            from . import settings
             from . import pdf_handler
 
             changed = pdf_handler.mirror_foreign_annotations(
-                USER_FILES, name, res
+                settings.user_files(), name, res
             )
             if not changed:
                 return
             if self._annotations_name == name:
                 self._highlights = pdf_handler.load_annotations(
-                    USER_FILES, name
+                    settings.user_files(), name
                 )
                 self._push_annotations()
                 if tooltip is not None:
@@ -1780,7 +1782,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         synchronous _save_annotations writes. Same shape as the native
         viewer's method."""
         try:
-            from . import USER_FILES  # type: ignore
+            from . import settings
             from . import pdf_handler
         except Exception:
             return
@@ -1789,13 +1791,13 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
 
         def _worker() -> None:
             try:
-                res = pdf_handler.scan_working_annotations(USER_FILES, name)
+                res = pdf_handler.scan_working_annotations(settings.user_files(), name)
                 if res is None:
                     return
                 if res.get("foreign"):
-                    working = pdf_handler._working_pdf_path(USER_FILES, name)
+                    working = pdf_handler._working_pdf_path(settings.user_files(), name)
                     if not pdf_handler._capture_pristine_stripped(
-                        USER_FILES, name, working
+                        settings.user_files(), name, working
                     ):
                         return
                 if mw is not None:

@@ -9,6 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '.claude', 'skills', 'klaus-test', 'scripts'))
 from anki_stubs import install, check, report
 install()
+import klausmate.settings as _settings  # noqa: E402
 e = importlib.import_module('klausmate.embeddings')
 c = importlib.import_module('klausmate.ollama_client')
 check('local provider ignores legacy provider', e.provider_name({'embedding_provider': 'openai'}) == 'ollama')
@@ -55,13 +56,15 @@ config = {'endpoint': 'http://localhost:12345', 'runtime_auto_setup': True, 'col
 def write_config(value):
     patches.append({key: value[key] for key in value if value[key] != config.get(key)})
     config.update(value)
-pkg = SimpleNamespace(get_config=lambda: dict(config), write_config=write_config)
+class _Store:
+    def read(self): return dict(config)
+    def write(self, cfg): write_config(cfg)
 def ensure(cfg, save_config):
     events.append('ensure')
     cfg['endpoint'] = 'http://127.0.0.1:12346'
     save_config(cfg)
     return runtime.EnsureResult('started', cfg['endpoint'])
-with patch.object(setup, 'QueryOp', Op), patch.object(setup, '_pkg', lambda: pkg), patch.object(setup, 'mw', SimpleNamespace(taskman=SimpleNamespace(run_on_main=main.append))), patch.object(runtime, 'ensure_server', ensure), patch.object(runtime.server_manager, 'stop', lambda: events.append('stop')), patch.object(setup, '_offer_v2_index_sweep', lambda cfg: events.append('sweep')), patch.object(setup, '_readiness_check_body', lambda: events.append('nudge')):
+with patch.object(setup, 'QueryOp', Op), patch.object(_settings, 'store', _Store()), patch.object(setup, 'mw', SimpleNamespace(taskman=SimpleNamespace(run_on_main=main.append))), patch.object(runtime, 'ensure_server', ensure), patch.object(runtime.server_manager, 'stop', lambda: events.append('stop')), patch.object(setup, '_offer_v2_index_sweep', lambda cfg: events.append('sweep')), patch.object(setup, '_readiness_check_body', lambda: events.append('nudge')):
     setup._readiness_after_library_root()
     check('startup deferred and collection free', operations[-1].collection_free and events == [])
     setup._first_run_dialog_shown_this_session = True

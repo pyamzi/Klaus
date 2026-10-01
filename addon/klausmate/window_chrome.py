@@ -62,6 +62,7 @@ import json
 from typing import Any
 
 from . import background, theme
+from . import settings
 
 # The <style> node id on the Stats page. Injection is idempotent by
 # removing any previous node with this id before appending — a redraw
@@ -111,12 +112,9 @@ def _config() -> dict:
     """Stored config through the SAME preview seam as every other
     design-layer reader, so Preferences previews reach these windows
     before Save."""
-    try:
-        from aqt import mw
+    from . import settings
 
-        stored = mw.addonManager.getConfig(__package__) or {}
-    except Exception:
-        return {}
+    stored = settings.read()
     return background.effective_cfg(stored)
 
 

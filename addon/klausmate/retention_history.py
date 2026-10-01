@@ -32,6 +32,8 @@ proven macOS 26 segfault class (K-114), pinned by test.
 
 from __future__ import annotations
 
+from . import settings
+
 import json
 import math
 import os
@@ -367,7 +369,7 @@ def open_history_dialog(parent, safe_name: str, display_name: str):
 
     try:
         entries = sorted_entries(
-            load_history(retention.USER_FILES).get(str(safe_name), [])
+            load_history(settings.user_files()).get(str(safe_name), [])
         )
     except Exception as exc:
         print(f"[klausmate] retention history load failed: {exc}")

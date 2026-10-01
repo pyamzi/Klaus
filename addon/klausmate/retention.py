@@ -37,9 +37,8 @@ from aqt import mw
 from aqt.operations import QueryOp
 
 from . import card_index, curation, embeddings, page_store, pdf_handler, pdf_index
+from . import settings
 
-USER_FILES = curation.USER_FILES
-INDEX_DIR = curation.INDEX_DIR
 
 MATCHES_FILE = "matches.json"
 PREFS_FILE = "prefs.json"
@@ -129,10 +128,6 @@ def _migrate_default_threshold(cfg: dict) -> dict:
         cfg["pdf_match_threshold"] = DEFAULT_THRESHOLD
     cfg[_DEFAULT_APPLIED_KEY] = DEFAULT_THRESHOLD
     cfg.pop("_threshold_default_migrated", None)  # retired one-shot guard
-    try:
-        mw.taskman.run_on_main(lambda c=cfg: curation._pkg().write_config(c))
-    except Exception as e:
-        print(f"[klausmate] threshold default migration failed: {e}")
     return cfg
 
 
@@ -157,19 +152,15 @@ def _migrate_threshold_scale(cfg: dict) -> dict:
     cfg.pop(_THRESHOLD_USER_SET_KEY, None)
     try:
         clear_threshold_overrides()
-        mw.taskman.run_on_main(lambda c=cfg: curation._pkg().write_config(c))
     except Exception as e:  # noqa: BLE001
         print(f"[klausmate] threshold scale migration failed: {e}")
     return cfg
 
 
-def _cfg() -> dict:
-    """The global config, with the one-time threshold-default migration
-    applied. This is the canonical config accessor for retention/curation's
-    shared, threshold-scoped reads — curation._cfg() itself stays a plain
-    pass-through so unrelated config reads (embedding signature, etc.)
-    don't carry this side effect."""
-    return _migrate_default_threshold(_migrate_threshold_scale(curation._cfg()))
+# Registered here so the side effect above stays in retention; the
+# bootstrap runs settings.migrate() once per profile open (scale first).
+settings.register_migration(_migrate_threshold_scale)
+settings.register_migration(_migrate_default_threshold)
 
 
 # ------------------------------------------------------------ pure helpers
@@ -348,7 +339,7 @@ def note_card_counts(
 
 
 def _matches_path(name: str) -> str:
-    return os.path.join(pdf_index.index_dir(USER_FILES, name), MATCHES_FILE)
+    return os.path.join(pdf_index.index_dir(settings.user_files(), name), MATCHES_FILE)
 
 
 def pages_digest(name: str) -> str:
@@ -369,7 +360,7 @@ def pages_digest(name: str) -> str:
     pre-v2 profile's save/load pair agree with itself.
     """
     m = card_index.read_manifest(
-        pdf_index.index_dir(USER_FILES, name),
+        pdf_index.index_dir(settings.user_files(), name),
         pdf_index.INDEX_VERSION,
         pdf_index.MANIFEST_FILE,
     )
@@ -395,7 +386,7 @@ def load_matches(
     """Cached ([(nid, score)], {nid: best page}) when every invalidation key
     matches, else None."""
     m = card_index.read_manifest(
-        pdf_index.index_dir(USER_FILES, name), MATCHES_VERSION, MATCHES_FILE
+        pdf_index.index_dir(settings.user_files(), name), MATCHES_VERSION, MATCHES_FILE
     )
     if m is None:
         return None
@@ -485,7 +476,7 @@ def best_scores(signature: tuple, dims: int, digest: str) -> dict[int, float]:
     ponytail: parses every matches.json whole (~0.3 s for 9 PDFs x 43k
     notes); keep a per-PDF best-score sidecar if libraries grow ~10x.
     """
-    root = os.path.join(USER_FILES, pdf_index.SUBDIR)
+    root = os.path.join(settings.user_files(), pdf_index.SUBDIR)
     try:
         names = sorted(os.listdir(root))
     except OSError:
@@ -523,7 +514,7 @@ def best_lecture_filter(
 ) -> list[tuple[int, float]]:
     """Drop the matches that some other lecture fits clearly better."""
     try:
-        cfg = curation._cfg()  # plain read: no threshold migration on a read path
+        cfg = settings.read()
     except Exception:  # noqa: BLE001 - unreadable config must not hide matches
         cfg = {}
     delta = best_delta(cfg)
@@ -537,7 +528,7 @@ def best_lecture_filter(
 
 
 def _prefs_path() -> str:
-    return os.path.join(USER_FILES, pdf_index.SUBDIR, PREFS_FILE)
+    return os.path.join(settings.user_files(), pdf_index.SUBDIR, PREFS_FILE)
 
 
 def _load_prefs() -> dict:
@@ -649,11 +640,11 @@ def index_status(name: str, sig) -> tuple[bool, bool]:
     sidebar's warning icons both read this, so they cannot disagree.
     (Whether the MATCHES are current needs the card index; see
     priority_rows.)"""
-    st = pdf_index.stats_from_disk(pdf_index.index_dir(USER_FILES, name))
+    st = pdf_index.stats_from_disk(pdf_index.index_dir(settings.user_files(), name))
     indexed = bool(st["exists"] and st["complete"])
     stale = indexed and (
         not embeddings.signature_matches(st["provider"], st["model"], st.get("dims", 0), sig)
-        or pdf_index.source_signature(USER_FILES, name) is None
+        or pdf_index.source_signature(settings.user_files(), name) is None
     )
     return indexed, stale
 
@@ -803,24 +794,24 @@ def ensure_pdf_index(
         _fail(on_error, exc)
 
     def do_build(_col=None) -> pdf_index.PdfIndex:
-        cfg = _cfg()
+        cfg = settings.read()
         sig = embeddings.index_signature(cfg)
-        src_sig = pdf_index.source_signature(USER_FILES, pdf_name)
+        src_sig = pdf_index.source_signature(settings.user_files(), pdf_name)
         if src_sig is None:
             raise RuntimeError(f"No stored text for “{pdf_name}” — re-import the PDF.")
-        dir_path = pdf_index.index_dir(USER_FILES, pdf_name)
+        dir_path = pdf_index.index_dir(settings.user_files(), pdf_name)
         idx = pdf_index.load(dir_path)
 
-        pages = pdf_handler.load_pages(USER_FILES, pdf_name)
+        pages = pdf_handler.load_pages(settings.user_files(), pdf_name)
         if pages is None:
             # Legacy import without per-page JSON: treat the whole text as one page.
             base = pdf_handler._safe_basename(pdf_name)
-            with open(os.path.join(USER_FILES, "contexts", base + ".txt"), encoding="utf-8") as f:
+            with open(os.path.join(settings.user_files(), "contexts", base + ".txt"), encoding="utf-8") as f:
                 pages = [f.read()]
         safe = pdf_handler._safe_basename(pdf_name)
-        path = pdf_handler.pdf_path_for(USER_FILES, safe) or ""
-        page_store.ensure_records(USER_FILES, safe, path, pages)
-        rows = page_store.page_texts(USER_FILES, safe, path, len(pages))   # (page, hash, text)
+        path = pdf_handler.pdf_path_for(settings.user_files(), safe) or ""
+        page_store.ensure_records(settings.user_files(), safe, path, pages)
+        rows = page_store.page_texts(settings.user_files(), safe, path, len(pages))   # (page, hash, text)
         keys = [(p, h) for p, h, _t in rows]
         # is_fresh() is NOT enough on its own (K-236): it stamps
         # contexts/<safe>.json, and a page RECORD can change without that
@@ -849,7 +840,7 @@ def ensure_pdf_index(
         todo = [(i, t) for i, (p, h, t) in enumerate(rows) if t and not (p in old and old[p][0] == h)]
         vectors_by_row: dict[int, list[float]] = {i: old[p][1] for i, (p, h, _t) in enumerate(rows) if p in old and old[p][0] == h}
         total = len(rows)
-        provider = embeddings.provider_from_config(_cfg)
+        provider = embeddings.provider_from_config(settings.read)
         for offset, vecs in embeddings.embed_batches(provider, [t for _i, t in todo], cancel=cancel, kind="document"):
             for k, vec in enumerate(vecs):
                 row_i = todo[offset + k][0]
@@ -925,13 +916,13 @@ def ensure_matches(
             curation._busy = False
 
     def do_match(_col=None) -> tuple[list[tuple[int, float]], dict[int, int]]:
-        cfg = _cfg()
+        cfg = settings.read()
         sig = embeddings.index_signature(cfg)
-        src_sig = pdf_index.source_signature(USER_FILES, pdf_name)
-        pidx = pdf_index.load(pdf_index.index_dir(USER_FILES, pdf_name))
+        src_sig = pdf_index.source_signature(settings.user_files(), pdf_name)
+        pidx = pdf_index.load(pdf_index.index_dir(settings.user_files(), pdf_name))
         if not pdf_index.is_fresh(pidx, src_sig, sig):
             raise RuntimeError(f"“{pdf_name}” isn't embedded yet.")
-        cidx = card_index.load(INDEX_DIR)
+        cidx = card_index.load(curation.index_dir())
         if cidx is None or not card_index.check_signature(cidx, sig):
             raise RuntimeError(
                 "The card index needs a rebuild — press Index Now in "
@@ -950,7 +941,7 @@ def ensure_matches(
 
         matches, pages = match_scores(
             pidx, cidx, cancel=cancel, on_progress=prog,
-            mean=card_index.mean_vector(INDEX_DIR),
+            mean=card_index.mean_vector(curation.index_dir()),
         )
         if cancel is not None and cancel.is_set():
             return matches, pages  # partial — do not cache
@@ -999,7 +990,7 @@ def priority_rows(col, cfg: dict) -> dict:
     history can never break the Library.
     """
     sig = embeddings.index_signature(cfg)
-    cidx = card_index.load(INDEX_DIR)
+    cidx = card_index.load(curation.index_dir())
     digest = card_index_digest(cidx) if cidx is not None else ""
     card_ok = cidx is not None and card_index.check_signature(cidx, sig)
 
@@ -1012,10 +1003,10 @@ def priority_rows(col, cfg: dict) -> dict:
     rows: list[dict] = []
     all_matches: dict[str, list[tuple[int, float]]] = {}
     nid_pool: set[int] = set()
-    for fname in pdf_handler.list_contexts(USER_FILES):
+    for fname in pdf_handler.list_contexts(settings.user_files()):
         name = fname[:-4] if fname.endswith(".txt") else fname
         safe = pdf_handler._safe_basename(name)
-        src_sig = pdf_index.source_signature(USER_FILES, name)
+        src_sig = pdf_index.source_signature(settings.user_files(), name)
         indexed, stale = index_status(name, sig)
         matches = None
         if indexed and not stale and card_ok:
@@ -1068,7 +1059,7 @@ def priority_rows(col, cfg: dict) -> dict:
         # history module must degrade to a log line, never a dead Library.
         from . import retention_history
 
-        retention_history.record_rows(USER_FILES, rows)
+        retention_history.record_rows(settings.user_files(), rows)
     except Exception as exc:
         print(f"[klausmate] retention history not recorded: {exc}")
     return {

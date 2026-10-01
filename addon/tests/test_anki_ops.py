@@ -21,6 +21,8 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
+import klausmate.settings as _settings  # noqa: E402
+
 ep = importlib.import_module("klausmate.anki_endpoint")
 pdf_map = importlib.import_module("klausmate.pdf_map")
 manage_models = importlib.import_module("klausmate.manage_models")
@@ -237,7 +239,7 @@ check("an upper-case background extension is served (IMG_1234.JPG was refused)",
 retention = importlib.import_module("klausmate.retention")
 tag_sync = importlib.import_module("klausmate.tag_sync")
 pdf_handler = importlib.import_module("klausmate.pdf_handler")
-retention.USER_FILES = tempfile.mkdtemp(prefix="klaus-k305-")
+_settings.user_files_dir = tempfile.mkdtemp(prefix="klaus-k305-")
 _real_write = pdf_handler._atomic_write_json
 
 

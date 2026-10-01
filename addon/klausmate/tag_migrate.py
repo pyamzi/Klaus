@@ -55,6 +55,8 @@ __init__.py, out of this file's scope)::
 
 from __future__ import annotations
 
+from . import settings
+
 from aqt import mw
 from aqt.operations import CollectionOp
 
@@ -106,15 +108,6 @@ MIGRATED_FLAG = "_library_tag_migrated"
 # again. A fresh profile's empty combined plan records both flags together
 # in one step, so MIGRATED_FLAG's existing behavior for a brand-new
 # profile is unchanged.
-
-def _pkg():
-    import importlib
-
-    return importlib.import_module(__package__)
-
-
-def _cfg() -> dict:
-    return _pkg().get_config()
 
 
 # ------------------------------------------------------------ pure logic
@@ -229,7 +222,7 @@ def migrate_on_profile_open() -> None:
     always safe even if some pairs/tags already went through.
     """
     try:
-        cfg = _cfg()
+        cfg = settings.read()
 
         def _cleaned(c) -> set[str]:
             done = set(c.get(CLEANED_KEY) or [])
@@ -245,11 +238,11 @@ def migrate_on_profile_open() -> None:
 
         def _record_flags() -> None:
             try:
-                cfg2 = _cfg()
-                cfg2[MIGRATED_FLAG] = True
-                cfg2[CLEANED_KEY] = sorted(_cleaned(cfg2) | set(RETIRED_TAGS))
-                cfg2.pop(_LEGACY_MATCHING_FLAG, None)
-                _pkg().write_config(cfg2)
+                cfg2 = settings.read()
+                settings.patch(
+                    {MIGRATED_FLAG: True, CLEANED_KEY: sorted(_cleaned(cfg2) | set(RETIRED_TAGS))},
+                    remove=[_LEGACY_MATCHING_FLAG],
+                )
             except Exception as exc:  # noqa: BLE001
                 print(f"[klausmate] tag_migrate: failed to record migration flag(s): {exc}")
 

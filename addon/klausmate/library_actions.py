@@ -26,12 +26,7 @@ from aqt.qt import (
 from aqt.utils import showWarning, tooltip
 
 from . import drive_store, pdf_handler, tag_sync
-
-
-def _uf() -> str:
-    from . import pdf_drive
-
-    return pdf_drive._user_files()
+from . import settings
 
 
 def _style(dialog) -> None:
@@ -55,7 +50,7 @@ def _live_root() -> str | None:
 
 
 def pdfs_under(folder: str) -> list[str]:
-    tree = drive_store.build_tree(pdf_handler.list_contexts(_uf()), drive_store.load(_uf()))
+    tree = drive_store.build_tree(pdf_handler.list_contexts(settings.user_files()), drive_store.load(settings.user_files()))
     return sorted(
         p["safe"]
         for f, items in tree["folders"].items()
@@ -68,7 +63,7 @@ def pdfs_under(folder: str) -> list[str]:
 
 
 def show_in_finder(safe: str) -> None:
-    path = pdf_handler.pdf_path_for(_uf(), safe)
+    path = pdf_handler.pdf_path_for(settings.user_files(), safe)
     if not path or not os.path.exists(path):
         tooltip("This PDF's file could not be found.")
         return
@@ -81,7 +76,7 @@ def history(parent, safe: str) -> None:
     from . import retention_history
 
     retention_history.open_history_dialog(
-        parent, safe, tag_sync.strip_pdf_ext(drive_store.display_name(_uf(), safe))
+        parent, safe, tag_sync.strip_pdf_ext(drive_store.display_name(settings.user_files(), safe))
     )
 
 
@@ -93,7 +88,7 @@ def sensitivity(parent, safe: str) -> None:
     recall it previews are loaded off the main thread first."""
     from . import retention
 
-    cfg = retention._cfg()
+    cfg = settings.read()
 
     def load(col):
         matches = tag_sync._cached_matches_many([safe], cfg)[safe]
@@ -108,7 +103,7 @@ def sensitivity(parent, safe: str) -> None:
 def sensitivity_dialog(parent, safe: str, matches, card_r, on_applied: Callable | None = None) -> QDialog:
     from . import retention
 
-    current = retention.get_threshold(safe, retention._cfg())
+    current = retention.get_threshold(safe, settings.read())
     dlg = QDialog(parent)
     dlg.setWindowTitle("Match Sensitivity")
     _style(dlg)
@@ -173,7 +168,7 @@ def new_folder(parent, parent_path: str | None = None) -> None:
         if not name:
             return
         path = f"{parent_path}/{name}" if parent_path else name
-        if not drive_store.add_folder(_uf(), path):
+        if not drive_store.add_folder(settings.user_files(), path):
             showWarning("That folder name isn't valid.", parent=parent)
             return
         root = _live_root()
@@ -197,7 +192,7 @@ def rename_folder(parent, path: str) -> None:
             return
         up = path.rsplit("/", 1)[0] if "/" in path else ""
         new = f"{up}/{name}" if up else name
-        ok, why = pdf_drive.apply_folder_change(_uf(), _live_root(), path, new)
+        ok, why = pdf_drive.apply_folder_change(settings.user_files(), _live_root(), path, new)
         if not ok:
             showWarning(
                 "A folder with that name already exists there." if why == "exists"
@@ -241,7 +236,7 @@ def import_files(paths: list[str], folder: str | None = None) -> int:
         for path in paths:
             safe = import_pdf_file(path)
             if safe and folder:
-                drive_store.set_folder(_uf(), safe, folder)
+                drive_store.set_folder(settings.user_files(), safe, folder)
         _refresh()
         return len(paths)
     dest = os.path.join(root, *[p for p in (folder or "").split("/") if p])

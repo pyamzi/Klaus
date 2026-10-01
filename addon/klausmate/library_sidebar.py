@@ -10,10 +10,9 @@ drag and delete still act on the tag.
 
 Retention: every tag row, not only the Library's, ends in a dimmed
 grey %: the mean FSRS recall of the tag's cards right now, a parent
-counting its children's cards, suspended ones included, new cards left
-out ("—"
-when nothing is studied). Computed in a background op over the whole
-collection and repainted when it lands.
+counting its children's cards, suspended ones included, never-studied
+ones at 0% ("—" only when the tag has no cards). Computed in a
+background op over the whole collection and repainted when it lands.
 
 aqt-free above the "aqt glue" divider.
 """
@@ -23,6 +22,7 @@ import os
 from typing import Callable
 
 from . import tag_sync
+from . import settings
 
 ROOT_TAG = "!Library"
 ROOT_LABEL = "Library"
@@ -63,10 +63,10 @@ def library_index() -> dict:
     prefs (stored tags) changed — this is called once per painted row."""
     from . import curation, drive_store, retention
 
-    paths = (drive_store._drive_path(curation.USER_FILES), retention._prefs_path())
+    paths = (drive_store._drive_path(settings.user_files()), retention._prefs_path())
     key = tuple(os.stat(p).st_mtime_ns if os.path.exists(p) else 0 for p in paths)
     if key != _cache["key"]:
-        _cache["index"] = build_index(drive_store.load(curation.USER_FILES), retention._load_prefs())
+        _cache["index"] = build_index(drive_store.load(settings.user_files()), retention._load_prefs())
         _cache["key"] = key
     return _cache["index"]
 
@@ -76,13 +76,15 @@ def library_labels() -> dict[str, str]:
 
 
 def tag_means(note_tags: dict, card_r: dict) -> dict[str, float]:
-    """``{tag casefolded: mean recall}``. A note's studied cards count
+    """``{tag casefolded: mean recall}``. EVERY card of a note counts
     once toward each of its tags AND each of their parents (a note
-    tagged A::B and A::C counts once in A). Pure."""
+    tagged A::B and A::C counts once in A); a never-studied card counts
+    at 0% (Pouya, 2026-09-30: the number is recall times coverage, so a
+    lecture with most of its cards untouched reads low). Pure."""
     sums: dict[str, float] = {}
     counts: dict[str, int] = {}
     for nid, tags in note_tags.items():
-        rs = [r for r, is_new in card_r.get(nid, ()) if not is_new]
+        rs = [r for r, _is_new in card_r.get(nid, ())]
         if not rs:
             continue
         keys = set()
@@ -429,7 +431,7 @@ def refresh_status() -> None:
     try:
         from . import embeddings, index_queue, retention
 
-        sig = embeddings.index_signature(retention._cfg())
+        sig = embeddings.index_signature(settings.read())
         _state["status"] = pdf_status(
             set(library_index()["safes"].values()),
             index_queue.pending_names(),

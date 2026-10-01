@@ -272,6 +272,7 @@ except Exception:  # headless tests / partial environments
     QDockWidget = QLabel = QStackedWidget = Qt = QTimer = QVBoxLayout = QWidget = None  # type: ignore[assignment]
 
 from .slot_guard import guarded as _guarded
+from . import settings
 
 
 # ``class LectureDock(None)`` is a hard TypeError at IMPORT time, so a
@@ -348,22 +349,11 @@ _BUTTON_JS = """
 """
 
 
-def _user_files() -> str:
-    from . import USER_FILES  # deferred: package root imports aqt
-
-    return USER_FILES
-
-
-def _cfg() -> dict:
-    try:
-        return mw.addonManager.getConfig(__package__) or {}
-    except Exception:
-        return {}
 
 
 def _saved_state() -> dict:
     try:
-        state = pdf_handler._load_tabs_file(_user_files()).get("lecture_view")
+        state = pdf_handler._load_tabs_file(settings.user_files()).get("lecture_view")
         return dict(state) if isinstance(state, dict) else {}
     except Exception:
         return {}
@@ -373,7 +363,7 @@ def _save_state(**updates: Any) -> None:
     try:
         state = _saved_state()
         state.update(updates)
-        pdf_handler._save_tabs_file(_user_files(), {"lecture_view": state})
+        pdf_handler._save_tabs_file(settings.user_files(), {"lecture_view": state})
     except Exception as e:
         print(f"[klausmate] lecture state save failed: {e}")
 
@@ -443,7 +433,7 @@ class LectureDock(_DockBase):  # type: ignore[misc]
             print(f"[klausmate] lecture: card read failed: {e}")
             return
         if _resolver is None:
-            _resolver = LectureResolver(_user_files())
+            _resolver = LectureResolver(settings.user_files())
         try:
             outcome = _resolver.resolve(nid, tags)
         except Exception as e:
@@ -476,7 +466,7 @@ class LectureDock(_DockBase):  # type: ignore[misc]
         try:
             from . import drive_store
 
-            display = drive_store.display_name(_user_files(), m.safe) or m.safe
+            display = drive_store.display_name(settings.user_files(), m.safe) or m.safe
         except Exception:
             pass
         if m.pages_known and m.page > 0:
@@ -604,7 +594,7 @@ def _ensure_dock() -> Any:
         return None  # the gate _DockBase's fallback moved down to here
     _dock = LectureDock()
     if _resolver is None:
-        _resolver = LectureResolver(_user_files())
+        _resolver = LectureResolver(settings.user_files())
     try:
         mw.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, _dock)
         width = int(_saved_state().get("width") or 420)
@@ -693,7 +683,7 @@ def _on_show_question(card: Any) -> None:
 def _on_state_change(new_state: str, old_state: str) -> None:
     try:
         if new_state == "review":
-            if bool(_cfg().get("lecture_view_reopen", True)) and bool(
+            if bool(settings.read().get("lecture_view_reopen", True)) and bool(
                 _saved_state().get("open")
             ):
                 open_lecture_view()

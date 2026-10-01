@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import settings
+
 import os
 import re
 import threading
@@ -1740,9 +1742,9 @@ class PdfViewer(QWidget):
             return
         try:
             from . import pdf_handler
-            from . import USER_FILES  # type: ignore
+            from . import settings
 
-            self._highlights = pdf_handler.load_annotations(USER_FILES, name)
+            self._highlights = pdf_handler.load_annotations(settings.user_files(), name)
             # Self-heal a stale bake: if the annotations json is newer
             # than the stored pdf (bake lost to a quit mid-debounce or a
             # dropped pending job), re-bake now. After a successful bake
@@ -1750,8 +1752,8 @@ class PdfViewer(QWidget):
             try:
                 import os as _os
 
-                jpath = pdf_handler.annotations_path_for(USER_FILES, name)
-                ppath = pdf_handler.pdf_path_for(USER_FILES, name)
+                jpath = pdf_handler.annotations_path_for(settings.user_files(), name)
+                ppath = pdf_handler.pdf_path_for(settings.user_files(), name)
                 if (
                     ppath
                     and _os.path.isfile(jpath)
@@ -1761,7 +1763,7 @@ class PdfViewer(QWidget):
                     print(
                         f"[klausmate] bake stale for {name} — re-baking"
                     )
-                    self._schedule_bake(USER_FILES, name)
+                    self._schedule_bake(settings.user_files(), name)
             except Exception:
                 pass
         except Exception as exc:
@@ -1791,16 +1793,16 @@ class PdfViewer(QWidget):
         and baking here would re-feed the watcher loop."""
         try:
             from . import pdf_handler
-            from . import USER_FILES  # type: ignore
+            from . import settings
 
             changed = pdf_handler.mirror_foreign_annotations(
-                USER_FILES, name, res
+                settings.user_files(), name, res
             )
             if not changed:
                 return
             if self._annotations_name == name:
                 self._highlights = pdf_handler.load_annotations(
-                    USER_FILES, name
+                    settings.user_files(), name
                 )
                 self._refresh_highlight_overlay()
                 tooltip(f"Klaus: synced {changed} outside change(s)")
@@ -1815,7 +1817,7 @@ class PdfViewer(QWidget):
         synchronous _save_annotations writes."""
         try:
             from . import pdf_handler
-            from . import USER_FILES  # type: ignore
+            from . import settings
         except Exception:
             return
         if not getattr(pdf_handler, "BAKE_AVAILABLE", False):
@@ -1824,16 +1826,16 @@ class PdfViewer(QWidget):
         def _worker() -> None:
             try:
                 res = pdf_handler.scan_working_annotations(
-                    USER_FILES, name
+                    settings.user_files(), name
                 )
                 if res is None:
                     return
                 if res.get("foreign"):
                     working = pdf_handler._working_pdf_path(
-                        USER_FILES, name
+                        settings.user_files(), name
                     )
                     if not pdf_handler._capture_pristine_stripped(
-                        USER_FILES, name, working
+                        settings.user_files(), name, working
                     ):
                         return
                 _run_on_main(lambda: self._apply_mirror(name, res))
@@ -1853,14 +1855,14 @@ class PdfViewer(QWidget):
             return
         try:
             from . import pdf_handler
-            from . import USER_FILES  # type: ignore
+            from . import settings
 
             pdf_handler.save_annotations(
-                USER_FILES, self._annotations_name, self._highlights
+                settings.user_files(), self._annotations_name, self._highlights
             )
             # The json is on disk — (re)arm the debounced bake that
             # writes real PDF annotations into the stored .pdf.
-            self._schedule_bake(USER_FILES, self._annotations_name)
+            self._schedule_bake(settings.user_files(), self._annotations_name)
         except Exception as exc:
             print(f"[klausmate] save annotations failed: {exc}")
 
@@ -2050,10 +2052,10 @@ class PdfViewer(QWidget):
                     and self._annotations_name
                 ):
                     from . import pdf_handler
-                    from . import USER_FILES  # type: ignore
+                    from . import settings
 
                     pdf_handler.add_suppressed(
-                        USER_FILES, self._annotations_name, rec
+                        settings.user_files(), self._annotations_name, rec
                     )
             except Exception as exc:
                 print(f"[klausmate] tombstone failed: {exc}")
@@ -3757,9 +3759,9 @@ class PdfViewer(QWidget):
         state: dict = {}
         try:
             from . import pdf_handler
-            from . import USER_FILES  # type: ignore
+            from . import settings
 
-            state = pdf_handler.load_thumbs_state(USER_FILES)
+            state = pdf_handler.load_thumbs_state(settings.user_files())
         except Exception:
             state = {}
         self._thumbs_visible = bool(state.get("thumbs_visible", False))
@@ -4056,10 +4058,10 @@ class PdfViewer(QWidget):
                 width = None
         try:
             from . import pdf_handler
-            from . import USER_FILES  # type: ignore
+            from . import settings
 
             pdf_handler.save_thumbs_state(
-                USER_FILES, visible=self._thumbs_visible, width=width
+                settings.user_files(), visible=self._thumbs_visible, width=width
             )
         except Exception as exc:
             print(f"[klausmate] save thumbs state failed: {exc}")
@@ -4134,9 +4136,9 @@ def _pdf_display_name(safe: str) -> str:
     """
     try:
         from . import drive_store
-        from . import USER_FILES  # type: ignore
+        from . import settings
 
-        return drive_store.display_name(USER_FILES, safe)
+        return drive_store.display_name(settings.user_files(), safe)
     except Exception:
         return safe
 
@@ -4271,9 +4273,8 @@ class PdfSidebar(QWidget):
         self.tabs.bar.tabMoved.connect(lambda *_: self._persist())
         try:
             from . import pdf_handler
-            from . import USER_FILES  # type: ignore
 
-            restored = pdf_handler.load_open_tabs(USER_FILES, self.host_key)
+            restored = pdf_handler.load_open_tabs(settings.user_files(), self.host_key)
         except Exception as exc:
             print(f"[klausmate] tab restore failed: {exc}")
             restored = []
@@ -4306,9 +4307,9 @@ class PdfSidebar(QWidget):
 
     def load_pdf(self, name: str) -> None:
         from . import pdf_handler, viewer_context
-        from . import USER_FILES  # type: ignore
+        from . import settings
 
-        path = pdf_handler.pdf_path_for(USER_FILES, name)
+        path = pdf_handler.pdf_path_for(settings.user_files(), name)
         if not path:
             if self._fallback_label is not None:
                 self._fallback_label.setText(
@@ -4334,7 +4335,7 @@ class PdfSidebar(QWidget):
             # captured now so the eventual async count callback can tell
             # a late count for an abandoned load apart from a fresh one.
             self._pending_count_name = name
-            pages_text = pdf_handler.load_pages(USER_FILES, name) or []
+            pages_text = pdf_handler.load_pages(settings.user_files(), name) or []
             self._page_count = len(pages_text)
             self._viewer.set_page_texts(pages_text)
             self._viewer.on_count = self._on_pdfjs_count
@@ -4352,7 +4353,7 @@ class PdfSidebar(QWidget):
 
         if not PDF_VIEWER_AVAILABLE or self._doc is None:
             self._name = name
-            pages = pdf_handler.load_pages(USER_FILES, name) or []
+            pages = pdf_handler.load_pages(settings.user_files(), name) or []
             self._page_count = len(pages)
             if self._page_count > 0:
                 self._set_active((name, (0, min(2, self._page_count - 1))))
@@ -4380,7 +4381,7 @@ class PdfSidebar(QWidget):
         except Exception:
             self._page_count = 0
 
-        pages_text = pdf_handler.load_pages(USER_FILES, name) or []
+        pages_text = pdf_handler.load_pages(settings.user_files(), name) or []
         if self._viewer is not None:
             self._viewer.set_page_texts(pages_text)
             self._viewer.set_document(self._doc)
@@ -4427,10 +4428,10 @@ class PdfSidebar(QWidget):
         its own docstring for why re-calling this one would be wrong."""
         try:
             from . import drive_store, pdf_handler, viewer_context
-            from . import USER_FILES  # type: ignore
+            from . import settings
 
-            display = drive_store.display_name(USER_FILES, self._name) or self._name
-            path = pdf_handler.pdf_path_for(USER_FILES, self._name) or ""
+            display = drive_store.display_name(settings.user_files(), self._name) or self._name
+            path = pdf_handler.pdf_path_for(settings.user_files(), self._name) or ""
             viewer_context.report_document(
                 id(self), self._name, display, path, self._page_count
             )
@@ -4705,26 +4706,26 @@ class PdfSidebar(QWidget):
     def _persist(self) -> None:
         try:
             from . import pdf_handler
-            from . import USER_FILES  # type: ignore
+            from . import settings
 
-            pdf_handler.save_open_tabs(USER_FILES, self.tabs.names(), self.host_key)
+            pdf_handler.save_open_tabs(settings.user_files(), self.tabs.names(), self.host_key)
         except Exception:
             pass
 
     def _set_active_pointer(self, name: str) -> None:
         from . import pdf_handler
-        from . import USER_FILES  # type: ignore
+        from . import settings
 
         # The active PDF is the editor dock's pointer (what it opens next
         # session); another host's reader must not move it.
         if self.host_key == "editor":
             try:
-                pdf_handler.set_active_pdf(USER_FILES, name)
+                pdf_handler.set_active_pdf(settings.user_files(), name)
             except Exception:
                 pass
         try:
             # Recency signal for the ＋ menu's most-recent-first ordering.
-            pdf_handler.touch_last_used(USER_FILES, name)
+            pdf_handler.touch_last_used(settings.user_files(), name)
         except Exception:
             pass
 
@@ -4775,9 +4776,9 @@ class PdfSidebar(QWidget):
             if self.host_key == "editor":
                 try:
                     from . import pdf_handler
-                    from . import USER_FILES  # type: ignore
+                    from . import settings
 
-                    pdf_handler.clear_active_pdf(USER_FILES)
+                    pdf_handler.clear_active_pdf(settings.user_files())
                 except Exception:
                     pass
 
@@ -4785,7 +4786,7 @@ class PdfSidebar(QWidget):
     def _show_add_menu(self, *_args) -> None:
         # *_args: @_guarded's wrapper accepts every signal argument.
         from . import pdf_handler
-        from . import USER_FILES  # type: ignore
+        from . import settings
 
         menu = QMenu(self)
         open_names = set(self.tabs.names())
@@ -4794,10 +4795,10 @@ class PdfSidebar(QWidget):
         # last_used, falling back to contexts/<safe>.txt mtime — ingest
         # time — rather than pdfs/<safe>.pdf's mtime, which shutil.copy2
         # preserves from the source file).
-        for base in pdf_handler.list_by_recency(USER_FILES):
+        for base in pdf_handler.list_by_recency(settings.user_files()):
             if base in open_names:
                 continue
-            if pdf_handler.pdf_path_for(USER_FILES, base):
+            if pdf_handler.pdf_path_for(settings.user_files(), base):
                 stored.append(base)
         # No cap. This menu is the only way to open a stored PDF in the
         # editor's viewer, so truncating it would strand every PDF past

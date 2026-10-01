@@ -45,6 +45,8 @@ from anki_stubs import (  # noqa: E402
 
 install()
 
+import klausmate.settings as _settings  # noqa: E402
+
 import importlib  # noqa: E402
 
 bt = importlib.import_module("klausmate.browse_toolkit")
@@ -575,6 +577,7 @@ if _HAVE_QT:
 
         _app = _QtW.QApplication.instance() or _QtW.QApplication(["klaus-test"])
         bt = importlib.import_module("klausmate.browse_toolkit")
+        _settings = importlib.import_module("klausmate.settings")  # rebuilt with the package above
         card_index = importlib.import_module("klausmate.card_index")
         embeddings = importlib.import_module("klausmate.embeddings")
         theme = importlib.import_module("klausmate.theme")
@@ -593,8 +596,7 @@ if _HAVE_QT:
             _idx.vectors.extend(array.array("f", [1.0, 0.0, 0.0, 0.0]))
         card_index.save(_idx, _IDX)
         bt._index_dir = lambda: _IDX  # the module's own seam
-        _curation = importlib.import_module("klausmate.curation")
-        _curation._cfg = lambda: _CFG
+        _settings.store = _settings.DictStore(_CFG)
 
         # ---- Browse replica: the real tree from _aqt/forms/browser_qt6 ----
         #   splitter[0] = widget > verticalLayout_2 > (gridLayout>searchEdit)
@@ -774,13 +776,13 @@ if _HAVE_QT:
               and strip.status.full_text() == bt.NO_INDEX_TEXT)
         panel._sync_enabled()
         # A stale signature is a different message on the same surface.
-        _curation._cfg = lambda: {"embedding_model": "different-local-model"}
+        _settings.store = _settings.DictStore({"embedding_model": "different-local-model"})
         bt._index_dir = lambda: _IDX
         panel._sync_enabled()
         check("an index from another embedding model says SO, and does "
               "not pretend the index is missing",
               panel.empty.text() == bt.STALE_INDEX_TEXT)
-        _curation._cfg = lambda: _CFG
+        _settings.store = _settings.DictStore(_CFG)
         panel._sync_enabled()
         check("fixing the model re-enables the tool",
               panel.refusal() == "" and panel.scan_btn.isEnabled())

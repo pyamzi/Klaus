@@ -42,6 +42,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(ADDON), ".claude", "skills", "kl
 from anki_stubs import install_package_stub  # noqa: E402
 
 install_package_stub()
+
+import klausmate.settings as _settings  # noqa: E402
 pkg = sys.modules["klausmate"]
 
 # projection.py must be importable with NO aqt/Qt stub in place at all —
@@ -337,7 +339,7 @@ try:
     src_b = _write_context("PdfB")
     src_c = _write_context("PdfC")  # enumerated, but gets no matches.json
 
-    retention.USER_FILES = tmp  # redirect the module-global path, same
+    _settings.user_files_dir = tmp  # redirect the user-files path, same
     # pattern tests/test_klausmate.py uses to point retention at a scratch
     # dir instead of the real klausmate/user_files.
 
@@ -489,7 +491,7 @@ try:
 
     _mk_index()
     os.makedirs(os.path.join(cache_tmp, "contexts"))
-    retention.USER_FILES = cache_tmp
+    _settings.user_files_dir = cache_tmp
 
     # One PDF with a match cache, so the graph has a node whose threshold
     # can be moved later without touching the card index.

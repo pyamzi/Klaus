@@ -5,16 +5,16 @@ from pathlib import Path
 from enum import IntEnum
 from unittest.mock import patch
 sys.path.insert(0, '.claude/skills/klaus-test/scripts')
-from anki_stubs import install, exec_klausmate_under_qt, check, report
+from anki_stubs import install, exec_klausmate_under_qt, check, report, LiveStore
 install()
+import klausmate.settings as _settings  # noqa: E402
 from PyQt6 import QtWidgets
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 with tempfile.TemporaryDirectory(prefix='external clients ') as root:
     K = exec_klausmate_under_qt(root)
     cfg = json.loads(Path('klausmate/config.json').read_text())
-    K.get_config = lambda: dict(cfg)
     writes = []
-    K.write_config = lambda c: writes.append(c)
+    _settings.store = LiveStore(cfg, writes)
     mw = QtWidgets.QMainWindow()
     mw.taskman = types.SimpleNamespace(run_on_main=lambda fn: None)
     mw.reset = lambda: None
@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix='external clients ') as root:
     check('real clipboard exact JSON', app.clipboard().text() == field.toPlainText())
     actual = json.loads(field.toPlainText())['mcpServers']['klaus']
     check('actual runtime paths absolute', all(os.path.isabs(p) for p in (actual['command'],actual['args'][0],actual['args'][2])))
-    check('discovery belongs to scratch user files', actual['args'][2] == str(Path(K.USER_FILES)/'mcp_connection.json'))
+    check('discovery belongs to scratch user files', actual['args'][2] == str(Path(_settings.user_files())/'mcp_connection.json'))
     check('no configuration writes', not writes and before == sorted(str(p.relative_to(root)) for p in Path(root).rglob('*')))
     tester = dlg.findChild(QtWidgets.QPushButton, 'test_external_client_connection')
     status = next((label for label in dlg.findChildren(QtWidgets.QLabel) if label.property('mcp_status')), None)

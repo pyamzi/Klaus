@@ -26,6 +26,8 @@ import re
 import time
 from typing import Any, Callable
 
+from . import settings
+
 _ADDON_DIR = os.path.dirname(__file__)
 _USER_FILES = os.path.join(_ADDON_DIR, "user_files")
 
@@ -219,8 +221,7 @@ def _semantic_pdf_search(query: str, top_k: int, user_files: str) -> list[dict]:
     """
     from . import embeddings, page_store, pdf_handler, pdf_index
 
-    pkg = __import__(__package__, fromlist=["get_config"])
-    cfg = pkg.get_config() or {}
+    cfg = settings.read()
     provider = embeddings.provider_from_config(lambda: cfg)
     raw = provider.embed([query], kind="query")
     vec = embeddings.normalize(raw[0]) if raw else None

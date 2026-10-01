@@ -10,16 +10,12 @@ from aqt.qt import QMessageBox, QTimer
 from aqt.utils import showWarning, tooltip
 
 from .manage_models import manage_models_dialog
+from . import settings
 
 LOCAL_MODELS_COPY = (
     "Semantic search uses local Ollama embeddings. Configure your Ollama endpoint "
     "and embedding model in KlausMate Preferences → Local models."
 )
-
-def _pkg():
-    import importlib
-
-    return importlib.import_module(__package__)
 
 
 def _themed_message_box(parent: Any, title: str, icon: Any) -> QMessageBox:
@@ -58,7 +54,7 @@ def first_run_check() -> None:
     global _first_run_dialog_shown_this_session
     # Reset each profile-open so profile switches re-evaluate cleanly.
     _first_run_dialog_shown_this_session = False
-    cfg = _pkg().get_config()
+    cfg = settings.read()
     generation = _profile_generation
     if cfg.get("_first_run_done"):
         return
@@ -99,9 +95,7 @@ def first_run_check() -> None:
         # anything else that ran while the welcome dialog was up) may
         # have written config — writing the snapshot captured before
         # the dialog would silently revert all of it.
-        cfg2 = _pkg().get_config()
-        cfg2["_first_run_done"] = True
-        _pkg().write_config(cfg2)
+        settings.patch({"_first_run_done": True})
         msg.deleteLater()
 
     # K-114: window-modal open() + finished callback, never app-modal
@@ -136,7 +130,7 @@ def _library_root_check(then: Callable[[], None]) -> None:
     """
     from . import pdf_handler
 
-    cfg = _pkg().get_config()
+    cfg = settings.read()
     generation = _profile_generation
     if pdf_handler.get_library_root(cfg):
         then()
@@ -173,17 +167,15 @@ def _library_root_check(then: Callable[[], None]) -> None:
             return
 
         def do(_col: Any) -> Any:
-            from . import USER_FILES, drive_store
+            from . import drive_store, settings
 
-            folders = drive_store.load(USER_FILES).get("pdfs", {})
-            return pdf_handler.migrate_to_root(USER_FILES, chosen, folders)
+            folders = drive_store.load(settings.user_files()).get("pdfs", {})
+            return pdf_handler.migrate_to_root(settings.user_files(), chosen, folders)
 
         def on_done(result: Any) -> None:
             if generation != _profile_generation:
                 return
-            cfg2 = _pkg().get_config()
-            cfg2["library_root"] = chosen
-            _pkg().write_config(cfg2)
+            settings.patch({"library_root": chosen})
             failed = (result or {}).get("failed") or {}
             if failed:
                 tooltip(
@@ -309,13 +301,11 @@ def runtime_endpoint_saver(
         def apply() -> None:
             if cancel.is_set() or generation != _profile_generation:
                 return
-            cfg = _pkg().get_config()
-            if cfg.get("endpoint") != starting_endpoint:
+            if settings.read().get("endpoint") != starting_endpoint:
                 return
-            # Read, compare and merge in this single main-thread callback.
-            # patch_config queues again, leaving a gap for newer endpoint edits.
-            cfg["endpoint"] = endpoint
-            _pkg().write_config(cfg)
+            # Read, compare and merge in this single main-thread callback:
+            # settings.patch applies inline on the main thread, no gap.
+            settings.patch({"endpoint": endpoint})
 
         mw.taskman.run_on_main(apply)
 
@@ -324,7 +314,7 @@ def runtime_endpoint_saver(
 
 def _readiness_after_library_root() -> None:
     from . import ollama_runtime
-    cfg = _pkg().get_config()
+    cfg = settings.read()
     lifetime = runtime_lifetime()
     generation, _cancel = lifetime
 
@@ -348,14 +338,26 @@ def _readiness_after_library_root() -> None:
         if _first_run_dialog_shown_this_session:
             return
         if result.status in ("reachable", "started"):
-            _offer_v2_index_sweep(_pkg().get_config())
+            _offer_v2_index_sweep(settings.read())
             _rematch_stale_matches()
+            _resume_unindexed()
         else:
             _readiness_check_body()
 
     op = QueryOp(parent=mw, op=work, success=done)
     op.failure(lambda _exc: done(ollama_runtime.EnsureResult("failed", "")))
     op.without_collection().run_in_background()
+
+
+def _resume_unindexed() -> None:
+    """Queue every PDF that has text but no complete index (a batch the
+    user never cancelled by hand, dropped by a failure or a restart)."""
+    try:
+        from . import index_queue
+
+        index_queue.resume_unindexed()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] resume of unindexed PDFs failed: {exc}")
 
 
 def _rematch_stale_matches() -> None:
@@ -365,9 +367,8 @@ def _rematch_stale_matches() -> None:
     each job ends with uses the new thresholds. Self-healing, no flag: the
     re-match rewrites the cache at the current version."""
     try:
-        from . import index_queue, retention
+        from . import index_queue
 
-        retention._cfg()
         names = index_queue.stale_match_names()
         if names:
             index_queue.request([(index_queue.JOB_PDF, n) for n in names], announce=False)
@@ -408,9 +409,7 @@ def _offer_v2_index_sweep(cfg: dict) -> bool:
     except Exception as exc:
         print(f"[klausmate] v2 index sweep offer failed: {exc}")
         return False
-    cfg2 = _pkg().get_config()
-    cfg2["_v2_index_sweep_offered"] = True
-    _pkg().write_config(cfg2)
+    settings.patch({"_v2_index_sweep_offered": True})
     return True
 
 

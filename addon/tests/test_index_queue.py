@@ -36,6 +36,8 @@ sys.path.insert(
 from anki_stubs import ADDON, check, code_only, install, report, section  # noqa: E402
 
 install()
+
+import klausmate.settings as _settings  # noqa: E402
 iq = importlib.import_module("klausmate.index_queue")
 
 
@@ -215,18 +217,9 @@ class FakeCol:
         return 1234
 
 
-class FakeAddonManager:
-    def __init__(self, cfg):
-        self.cfg = cfg
-
-    def getConfig(self, _pkg):
-        return self.cfg
-
-
 class FakeMw:
-    def __init__(self, cfg):
+    def __init__(self):
         self.col = FakeCol()
-        self.addonManager = FakeAddonManager(cfg)
 
     def addDockWidget(self, *_a):
         pass
@@ -332,7 +325,7 @@ def new_world(cfg=None, names=("a", "b", "c")):
         with open(os.path.join(tmp, "contexts", n + ".txt"), "w") as f:
             f.write("page text " + n)
     pkg = sys.modules["klausmate"]
-    pkg.USER_FILES = tmp
+    _settings.user_files_dir = tmp
 
     pipe = Pipeline()
     for dotted, obj in (
@@ -343,7 +336,8 @@ def new_world(cfg=None, names=("a", "b", "c")):
         sys.modules[dotted] = obj
         setattr(pkg, dotted.split(".")[1], obj)
 
-    iq.mw = FakeMw(cfg if cfg is not None else {"api_key_openai": "sk"})
+    _settings.store = _settings.DictStore(cfg if cfg is not None else {"api_key_openai": "sk"})
+    iq.mw = FakeMw()
     iq.QTimer = FakeTimer
     iq.QDockWidget = None  # headless: no dock, the pure status_line is the pin
     FakeTimer.pending = []
@@ -689,6 +683,16 @@ check(
     iq.stale_index_names() == ["b"],
     str(iq.stale_index_names()),
 )
+section("the resume pass: PDFs with text but no complete index are queued at profile open")
+check("unindexed_pdf_names lists the PDF whose index is absent or incomplete, not the complete one",
+      iq.unindexed_pdf_names() == ["b"], str(iq.unindexed_pdf_names()))
+_settings.store = _settings.DictStore({"auto_index_on_add": False})
+check("with auto-indexing off the resume pass queues nothing", iq.resume_unindexed() == 0 and iq.pending_names() == set())
+_settings.store = _settings.DictStore({})
+check("with it on (the default) every unindexed PDF is queued quietly",
+      iq.resume_unindexed() == 1 and iq.pending_names() == {"b"}, str(iq.pending_names()))
+check("a second pass re-queues nothing while the job is pending", iq.resume_unindexed() == 0)
+iq.cancel_all()
 check(
     "a stale-version manifest is the THIRD sweep trigger: it offers the "
     "re-index even though the signature never moved and the key is not "
@@ -783,7 +787,7 @@ check(
 
 section("local sweep avoids paid estimates")
 tmp, pipe = new_world(names=("a",))
-check("unchanged model offers no sweep", iq.offer_model_sweep(None, embeddings.index_signature(iq._cfg())) is False)
+check("unchanged model offers no sweep", iq.offer_model_sweep(None, embeddings.index_signature(_settings.read())) is False)
 check("changed local model offers sweep", iq.offer_model_sweep(None, ("ollama", "previous", 0)) is True)
 
 # ----------------------------------------------------- K-237: the card-index
@@ -850,19 +854,19 @@ def _restore_confirm_box():
 tmp, pipe = new_world()
 check(
     "a fresh, signature-matching manifest is not a from-scratch embed",
-    iq.card_index_from_scratch(iq._cfg()) is False,
+    iq.card_index_from_scratch(_settings.read()) is False,
 )
 pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
 check(
     "no manifest on disk at all IS one",
-    iq.card_index_from_scratch(iq._cfg()) is True,
+    iq.card_index_from_scratch(_settings.read()) is True,
 )
 pipe._index_stats = {"exists": True, "provider": "voyage", "model": "voyage-3-lite", "dims": 0}
 check(
     "a manifest under the OLD provider/model is one too — the same "
     "signature comparison offer_model_sweep's own trigger uses, not a "
     "hand-spelled tuple check",
-    iq.card_index_from_scratch(iq._cfg()) is True,
+    iq.card_index_from_scratch(_settings.read()) is True,
 )
 
 # -- wired into phase one: the RED case this card exists to fix -------------

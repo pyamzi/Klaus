@@ -367,6 +367,8 @@ itself: ``set_idle_rotation(want)`` (opt-in, window only) and
 
 from __future__ import annotations
 
+from . import settings
+
 import math
 import random
 from dataclasses import dataclass
@@ -2074,9 +2076,9 @@ _instance = None  # the one open MapWindow; closeEvent clears it
 def _addon_cfg() -> dict:
     """The addon config, or {} — never a stub/dummy object."""
     try:
-        from aqt import mw
+        from . import settings
 
-        cfg = mw.addonManager.getConfig(__package__) if mw is not None else None
+        cfg = settings.read()
         return cfg if isinstance(cfg, dict) else {}
     except Exception as exc:
         print(f"[klausmate] map config read failed: {exc}")
@@ -2089,7 +2091,7 @@ def _load_graph() -> dict:
     try:
         from . import curation, pdf_graph
 
-        graph = pdf_graph.build_graph_data(curation.USER_FILES, _addon_cfg())
+        graph = pdf_graph.build_graph_data(settings.user_files(), _addon_cfg())
         if isinstance(graph, dict):
             return graph
     except Exception as exc:

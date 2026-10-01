@@ -80,6 +80,8 @@ and to keep this module importable under a minimal aqt stub for tests.
 
 from __future__ import annotations
 
+from . import settings
+
 import os
 import re
 from typing import Callable
@@ -578,7 +580,7 @@ def set_stored_tag(safe: str, tag: str) -> None:
 def _folder_and_display(safe: str) -> tuple[str | None, str]:
     from . import curation, drive_store
 
-    data = drive_store.load(curation.USER_FILES)
+    data = drive_store.load(settings.user_files())
     entry = data.get("pdfs", {}).get(safe) or {}
     return entry.get("folder"), (entry.get("display") or safe)
 
@@ -589,16 +591,16 @@ def _cached_matches_many(safes: list[str], cfg: dict) -> dict[str, list | None]:
     None for a PDF whose cache is cold, missing, or invalidated — exactly
     retention.load_matches' "don't know", which callers must treat as a
     no-op, never as "zero matches"."""
-    from . import card_index, embeddings, pdf_index, retention
+    from . import card_index, curation, embeddings, pdf_index, retention
 
     cfg_sig = embeddings.index_signature(cfg)
-    cidx = card_index.load(retention.INDEX_DIR)
+    cidx = card_index.load(curation.index_dir())
     if cidx is None or not card_index.check_signature(cidx, cfg_sig):
         return {safe: None for safe in safes}
     digest = retention.card_index_digest(cidx)
     out: dict[str, list | None] = {}
     for safe in safes:
-        src_sig = pdf_index.source_signature(retention.USER_FILES, safe)
+        src_sig = pdf_index.source_signature(settings.user_files(), safe)
         cached = retention.load_matches(safe, cfg_sig, cidx.dims, src_sig, digest)
         out[safe] = cached[0] if cached is not None else None
     return out
@@ -653,15 +655,6 @@ def _do_sync_one(col, safe: str, tag: str, desired_nids: set[int]) -> dict:
 
 # ------------------------------------------------------------- aqt glue
 
-
-def _pkg():
-    import importlib
-
-    return importlib.import_module(__package__)
-
-
-def _cfg() -> dict:
-    return _pkg().get_config()
 
 
 # Klaus's own tag ops still in flight. A reconcile that reads the
@@ -769,7 +762,7 @@ def sync_after_matches(
             print(f"[klausmate] tag_sync: on_done callback failed: {exc}")
 
     try:
-        cfg = _cfg()
+        cfg = settings.read()
         if not library_tags_enabled(cfg):
             settled()
             return
@@ -815,7 +808,7 @@ def sync_after_threshold(
 
     """
     try:
-        cfg = _cfg()
+        cfg = settings.read()
         if not library_tags_enabled(cfg):
             return
         if matches is None:
@@ -848,7 +841,7 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
     tag) without blocking the rest of the batch.
     """
     try:
-        cfg = _cfg()
+        cfg = settings.read()
         if not library_tags_enabled(cfg) or not cleared_safes:
             return
         from . import retention
@@ -897,7 +890,7 @@ def sync_after_rename(parent, pdf_name: str) -> None:
     the right one the first time it is.
     """
     try:
-        cfg = _cfg()
+        cfg = settings.read()
         if not library_tags_enabled(cfg):
             return
         safe = _safe(pdf_name)
@@ -932,7 +925,7 @@ def sync_after_folder_rename(parent, safes: list[str]) -> None:
     ONE undo entry regardless of how many PDFs are affected.
     """
     try:
-        cfg = _cfg()
+        cfg = settings.read()
         if not library_tags_enabled(cfg) or not safes:
             return
         pairs: list[tuple[str, str]] = []
@@ -982,7 +975,7 @@ def sync_after_delete(parent, pdf_name: str, display: str | None = None) -> None
     guards against.
     """
     try:
-        cfg = _cfg()
+        cfg = settings.read()
         if not library_tags_enabled(cfg):
             return
         safe = _safe(pdf_name)
@@ -1041,7 +1034,7 @@ def _reapply_missing(col, missing: dict[str, str], cfg: dict) -> None:
 def _library_state(col):
     from . import curation, drive_store, pdf_handler, retention
 
-    uf = curation.USER_FILES
+    uf = settings.user_files()
     tree = drive_store.build_tree(pdf_handler.list_contexts(uf), drive_store.load(uf))
     pdfs = {
         p["safe"]: (p["folder"], p["display"])
@@ -1092,7 +1085,7 @@ def _move_pdf(safe: str, folder: str | None, display: str | None = None) -> None
     (K-075), or the next disk rescan would snap it back."""
     from . import curation, drive_store, pdf_handler
 
-    uf = curation.USER_FILES
+    uf = settings.user_files()
     root = _library_root()
     if display:
         drive_store.rename_display(uf, safe, display)
@@ -1117,7 +1110,7 @@ def _apply_moves(actions: list[dict]) -> bool:
                 from . import pdf_drive
 
                 ok, why = pdf_drive.apply_folder_change(
-                    curation.USER_FILES, _library_root(), a["old"], a["new"]
+                    settings.user_files(), _library_root(), a["old"], a["new"]
                 )
                 if not ok:  # the directory would not move: move the PDFs one by one
                     print(f"[klausmate] tag_sync: folder move {a['old']!r} -> {a['new']!r} failed ({why}); moving its PDFs")
@@ -1269,7 +1262,7 @@ def reconcile_from_tags(col) -> dict:
     ``{"actions": [...]}``, or ``{}`` when switched off or on failure.
     """
     try:
-        cfg = _cfg()
+        cfg = settings.read()
         if not library_tags_enabled(cfg):
             return {}
         actions = _plan(col, cfg)

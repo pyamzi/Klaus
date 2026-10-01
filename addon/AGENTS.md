@@ -38,6 +38,7 @@ Addons/                       # Git repo root
 │   └── package.sh            # Builds dist/klausmate.ankiaddon
 └── klausmate/                # Anki add-on package (copy/symlink into addons21/)
     ├── README.md              # Ships inside the add-on — user-facing usage
+    ├── settings.py             # The settings store: read/patch/user_files, migrations; adapters installed by __init__ (aqt-free)
     ├── __init__.py             # Bootstrap, gui_hooks, JS bridge, Tools→Klaus menu, PDF tab/window management, image-crop context menu
     ├── embeddings.py           # Local Ollama embedding adapter and cache signature
     ├── anki_endpoint.py        # Authenticated localhost server, discovery, current_view/current_page tools
@@ -63,6 +64,7 @@ Addons/                       # Git repo root
     ├── addons_menu.py          # other add-ons' top-level menus → one Add-ons menu before Help (main window + Browse)
     ├── library_actions.py      # Window-free Library actions the sidebar menus call
     ├── drive_store.py          # Library's virtual folder layer (user_files/drive.json); nothing on disk moves
+    ├── prefs_state.py        # Preferences value state: keys, dirty, commit() → one patch + effects (aqt-free)
     ├── manage_models.py        # General, Appearance, Local models and external MCP configuration
     ├── setup_flow.py           # First-run dialog + per-profile-open readiness checks (library root and local runtime readiness)
     ├── tag_migrate.py          # One-time klaus:: -> !Library:: tag rename for upgrading collections
@@ -211,7 +213,7 @@ gui_hooks.webview_will_set_content.append(on_webview_will_set_content)
 gui_hooks.webview_did_receive_js_message.append(on_js_message)      # pycmd routing ("klausmate:" prefix)
 gui_hooks.editor_will_show_context_menu.append(on_editor_context_menu)  # right-click crop
 gui_hooks.main_window_did_init.append(install_menu)                 # Tools → KlausMate Preferences…
-gui_hooks.profile_did_open.append(_migrate_config)                  # legacy chat_*/claude_* key cleanup
+gui_hooks.profile_did_open.append(settings.migrate)                 # registered dict->dict migrations, legacy key scrub
 gui_hooks.profile_did_open.append(tag_migrate.migrate_on_profile_open)  # one-time klaus:: -> !Library:: rename
 gui_hooks.profile_did_open.append(first_run_check)                  # first-run: library root + local-model setup
 gui_hooks.profile_did_open.append(setup_readiness_check)
@@ -343,15 +345,24 @@ wrap's own guards since K-151: `_klausmate_drop_wrapped` / `_drop_orig`.
 - Key docs: `klausmate/config.md`
 
 The current [defaults](klausmate/config.json), [configuration reference](klausmate/config.md)
-and [migration](klausmate/__init__.py) select Ollama and native vector dimensions. Migration removes retired cloud credentials, Plus,
+and [migrations](klausmate/settings.py) select Ollama and native vector dimensions. Migration removes retired cloud credentials, Plus,
 judge, dock and transcription settings. The local migration marker preserves later model choices.
 General and appearance keys retain their existing roles.
 
-Use `patch_config` for narrow config updates and background writers; it
-merges on the main thread. `write_config` replaces the whole stored blob,
-so a one-key dict would discard other settings. Preserve legacy-key
-cleanup until users have upgraded; D4 explicitly un-retires its local
-runtime keys. See [configuration helpers](klausmate/__init__.py).
+**Config accessors (`klausmate/settings.py`, aqt-free, 2026-09-30):**
+`settings.read()` is a fresh dict of the stored config; `settings.patch(
+updates, remove=())` is the ONE writer (merge into a fresh read, inline
+on the main thread, hopped through `run_on_main` from any other thread,
+dropped if the profile changed first); `settings.user_files()` is the
+user-files path; `settings.register_migration(fn)` takes a pure
+`dict -> dict` that `settings.migrate()` runs once per profile open.
+`__init__.py` installs the adapters (`AnkiStore` over `mw.addonManager`,
+`run_on_main`, `current_profile`). There is no whole-blob writer:
+`write_config`, `patch_config`, `get_config`, the `_pkg()` helpers and
+the per-module `USER_FILES` copies are gone. Tests swap `settings.store`
+for a `DictStore` and `settings.user_files_dir` for a scratch dir.
+Preserve legacy-key cleanup until users have upgraded; D4 explicitly
+un-retires its local runtime keys.
 
 ---
 
