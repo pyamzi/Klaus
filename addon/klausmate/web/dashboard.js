@@ -33,6 +33,7 @@
   var savedOrder = [];
   var sizes = {};
   var foreignSize = "2x2";
+  var shadowCss = {};
   var grid = { cell: 160, gap: 16 };
   var uniform = false;
 
@@ -226,6 +227,27 @@
   function applySizes() {
     var ws = widgets();
     for (var i = 0; i < ws.length; i++) applySize(ws[i]);
+  }
+
+  // An add-on card drawn in an open shadow root gets dashboard.SHADOW_CSS
+  // adopted into that root (a constructed sheet, not a node: the add-on's
+  // own renderer owns the root's children and would drop a <style>).
+  function dressShadows() {
+    var ws = widgets();
+    for (var i = 0; i < ws.length; i++) {
+      var kids = bodyOf(ws[i]).children;
+      for (var k = 0; k < kids.length; k++) {
+        var root = kids[k].shadowRoot;
+        var css = shadowCss[String(kids[k].tagName).toLowerCase()];
+        if (!root || !css || root.klausDressed) continue;
+        try {
+          var sheet = new CSSStyleSheet();
+          sheet.replaceSync(css);
+          root.adoptedStyleSheets = root.adoptedStyleSheets.concat([sheet]);
+          root.klausDressed = true;
+        } catch (e) {}
+      }
+    }
   }
 
   function setUniform(on) {
@@ -443,9 +465,11 @@
       }
       dragState.over = target;
       // Keep the grabbed point under the pointer wherever the widget's
-      // grid slot now is: measure the slot with the drag offset removed.
+      // grid slot now is: measure the slot with the drag offset removed,
+      // and outline it — that is where the widget lands on release.
       w.style.transform = "none";
       var slot = w.getBoundingClientRect();
+      showSlot(w, slot);
       w.style.transform =
         "translate(" + (ev.clientX - dragState.gx - slot.left) + "px, " +
         (ev.clientY - dragState.gy - slot.top) + "px) scale(1.02)";
@@ -457,6 +481,7 @@
       dragState = null;
       w.classList.remove("klaus-w-drag");
       w.style.transform = "";
+      hideSlot();
       if (!moved) return;
       var order = currentOrder();
       if (order.join(",") !== startOrder.join(","))
@@ -464,6 +489,28 @@
     };
     shield.addEventListener("pointerup", finish);
     shield.addEventListener("pointercancel", finish);
+  }
+
+  // The landing box: absolutely positioned in the grid <center>, so it
+  // takes no grid cell (an in-flow element would shift every widget).
+  function showSlot(w, slot) {
+    var host = w.parentNode;
+    var box = document.querySelector(".klaus-dash-slot");
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "klaus-dash-slot";
+      host.appendChild(box);
+    }
+    var h = host.getBoundingClientRect();
+    box.style.left = slot.left - h.left + "px";
+    box.style.top = slot.top - h.top + "px";
+    box.style.width = slot.width + "px";
+    box.style.height = slot.height + "px";
+  }
+
+  function hideSlot() {
+    var boxes = document.querySelectorAll(".klaus-dash-slot");
+    for (var i = 0; i < boxes.length; i++) boxes[i].parentNode.removeChild(boxes[i]);
   }
 
   function indexOfNode(list, node) {
@@ -477,6 +524,7 @@
     dragState = null;
     st.w.classList.remove("klaus-w-drag");
     st.w.style.transform = "";
+    hideSlot();
     // Back to the order the drag started from.
     applyOrder(st.startOrder);
   }
@@ -555,6 +603,7 @@
     savedOrder = state.order || [];
     sizes = state.sizes || {};
     foreignSize = state.foreignSize || "2x2";
+    shadowCss = state.shadowCss || {};
     grid = state.grid || grid;
     if (!wrap()) return;
     var col = widgetById("decks").parentNode;
@@ -563,6 +612,7 @@
     applyOrder(savedOrder);
     setUniform(state.uniform);
     applySizes();
+    dressShadows();
     if (!window.klausDashBound) {
       // Real Anki never re-runs this script in one document (every
       // refresh is a fresh page), but the guard keeps a double eval —

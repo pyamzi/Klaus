@@ -190,14 +190,37 @@ def wrap_foreign(body: str, hidden: Any = ()) -> str:
 # it when its content is bigger. Klaus decides each box (Pouya, same day:
 # "set up predecided 2x1, 1x2, and whatnot for it, and then I will just
 # move it around"), measured once from each widget's rendered content:
-# the heatmap is a 159px strip that wants width (4x1); AMBOSS's Qbank card
-# is 440px wide and 222px tall with its own 2em margins (3x2); the deck
-# list holds ~17 decks before it scrolls (3x3). An add-on block not
-# listed here gets FOREIGN_SIZE. Nothing is saved: sizes are not a setting.
+# the heatmap is a 159px strip that wants width (4x1); AMBOSS's Qbank card,
+# its margins stripped by SHADOW_CSS, is 142px tall at full width (4x1);
+# Anki's deck table is ~546px wide with its 1rem padding and holds ~12
+# decks before it scrolls (4x3). An add-on block not listed here gets
+# FOREIGN_SIZE. Nothing is saved: sizes are not a setting.
 GRID_CELL = 160
 GRID_GAP = 16
-SIZES = {"decks": "3x3", "heatmap": "4x1", "x:amboss-qbank-widget": "3x2"}
+# Pouya, 2026-10-01: "I don't want the widget grid to get wider than
+# 800 px, keep it aligned center" — 4 columns (4*176+16 = 720px).
+GRID_MAX = 800
+SIZES = {"decks": "4x3", "heatmap": "4x1", "x:amboss-qbank-widget": "4x1"}
 FOREIGN_SIZE = "2x2"
+
+
+# Add-on blocks that draw their card inside an open shadow root, where the
+# page's CSS cannot reach: these rules are adopted INTO that root (keyed
+# by the host's tag) so the card fills its box like every other widget.
+# AMBOSS's Qbank card is a 440px React div with 2em margins around it
+# (amboss-anki-qbank-widget.js); that margin is what sat it ~30px lower
+# than the heatmap. :host-context() follows Same Look from inside.
+SHADOW_CSS = {
+    "amboss-component-wrapper": (
+        'div:has(> [data-e2e-test-id="qbank-container"])'
+        " { width: auto !important; margin: 0 !important; height: 100%; }"
+        ' [data-e2e-test-id="qbank-container"] { height: 100%; box-sizing: border-box; }'
+        ' :host-context(body.klaus-dash-uniform) [data-e2e-test-id="qbank-container"]'
+        " { background: transparent !important; box-shadow: none !important; }"
+        ' :host-context(body.klaus-dash-uniform) [data-e2e-test-id="qbank-box"]'
+        " { padding: 0 !important; }"
+    ),
+}
 
 
 def size_of(wid: str) -> str:
@@ -276,6 +299,7 @@ def boot_state(cfg: Any, edit: bool) -> dict:
         "hiddenForeign": hidden_foreign(cfg),
         "sizes": dict(SIZES),
         "foreignSize": FOREIGN_SIZE,
+        "shadowCss": dict(SHADOW_CSS),
         "grid": {"cell": GRID_CELL, "gap": GRID_GAP},
         "uniform": uniform_from_cfg(cfg),
         "edit": bool(edit),
@@ -361,7 +385,23 @@ def _palette_vars(night: bool) -> str:
         f" --klaus-dash-badge: {colours['grey_light']};"
         f" --klaus-dash-edge: {edge};"
         f" --klaus-dash-chip: {chip};"
+        f" --klaus-dash-cells: {_cell_tile(night)};"
     )
+
+
+def _cell_tile(night: bool) -> str:
+    """One grid cell as a background tile (GRID_CELL plus a GAP of
+    nothing to its right and below): a faint dashed rounded square, the
+    slots edit mode shows widgets can snap to."""
+    import urllib.parse
+
+    fill, stroke = (("rgba(255,255,255,0.04)", "rgba(255,255,255,0.22)") if night
+                    else ("rgba(0,0,0,0.03)", "rgba(0,0,0,0.18)"))
+    step = GRID_CELL + GRID_GAP
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' width='{step}' height='{step}'>"
+           f"<rect x='0.5' y='0.5' width='{GRID_CELL - 1}' height='{GRID_CELL - 1}' rx='12'"
+           f" fill='{fill}' stroke='{stroke}' stroke-dasharray='5 4'/></svg>")
+    return 'url("data:image/svg+xml,' + urllib.parse.quote(svg) + '")'
 
 
 def dashboard_css() -> str:
@@ -393,8 +433,28 @@ def dashboard_css() -> str:
         f" display: grid; grid-template-columns: repeat(auto-fill, {GRID_CELL}px);"
         f" grid-auto-rows: {GRID_CELL}px; gap: {GRID_GAP}px; padding: {GRID_GAP}px;"
         " justify-content: center;"
+        # At most GRID_MAX wide and centred: auto-fill counts columns
+        # against the max width (definite), and fit-content then shrinks
+        # the box onto exactly those columns, so the cell tiles below
+        # line up with the tracks from the content box's corner.
+        f" width: fit-content; max-width: min({GRID_MAX}px, 100%);"
+        " box-sizing: border-box; margin: 0 auto; position: relative;"
         " }"
         " center.klaus-dash-col > br { display: none; }"
+        # EDIT MODE SHOWS THE GRID (Pouya: "I can't tell where I can latch
+        # widgets to"): every cell as a faint dashed slot behind the
+        # widgets, and while dragging, the box the widget will land in.
+        " body.klaus-dash-editing center.klaus-dash-col {"
+        " background-image: var(--klaus-dash-cells);"
+        f" background-size: {GRID_CELL + GRID_GAP}px {GRID_CELL + GRID_GAP}px;"
+        " background-origin: content-box; background-clip: content-box;"
+        " background-repeat: repeat;"
+        " }"
+        " .klaus-dash-slot {"
+        " position: absolute; z-index: 1; pointer-events: none; box-sizing: border-box;"
+        " border: 2px solid var(--klaus-dash-accent); border-radius: 12px;"
+        " background: color-mix(in srgb, var(--klaus-dash-accent) 12%, transparent);"
+        " }"
         # Each widget fills a whole COLUMNS x ROWS box: the page sets the
         # two spans (--kw-cols/--kw-rows) from SIZES, clamped to
         # the columns the window has. position:relative always, so the
@@ -420,7 +480,14 @@ def dashboard_css() -> str:
         " .klaus-w-body > :only-child:not(table) {"
         " box-sizing: border-box; width: 100%; min-height: 100%; margin: 0;"
         " }"
-        " .klaus-w-body > table { margin: 0 auto; }"
+        # Anki's table spans its box's width so its card's edges line up
+        # with every other widget's (border-box: Anki pads it 1rem with
+        # content-box sizing, and 100% of that overflowed the box).
+        " .klaus-w-body > table { margin: 0 auto; width: 100%; box-sizing: border-box; }"
+        # A shadow-root card's host is inline by default; as a block the
+        # full height of its box, the adopted SHADOW_CSS can fill it.
+        + "".join(f" .klaus-w-body > {tag} {{ display: block; height: 100%; }}" for tag in SHADOW_CSS)
+        + ""
         # SAME LOOK (dashboard_uniform): one card from DESIGN.md on every
         # widget, other add-ons' blocks included, and each widget's own
         # OUTER card switched off so cards never nest. Only the direct

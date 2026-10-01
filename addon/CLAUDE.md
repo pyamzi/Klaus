@@ -340,7 +340,16 @@ same reason.
   measured once from the rendered content (re-measure in the offscreen
   harness when a widget's content changes shape), `FOREIGN_SIZE` for an
   add-on block not listed. A stale `dashboard_sizes` in meta.json is
-  ignored. A box's ONE card stretches to fill it (`:only-child`,
+  ignored. The grid is at most `GRID_MAX` (800px, 4 columns) wide and
+  centred (`width: fit-content; max-width: min(800px, 100%)`, so the
+  box sits exactly on its tracks); edit mode tiles every cell as a
+  dashed slot (`--klaus-dash-cells`, an SVG tile from the content box's
+  corner) and outlines the landing box while dragging
+  (`.klaus-dash-slot`, absolutely positioned so it takes no cell).
+  Add-on cards drawn in an OPEN shadow root (AMBOSS) get
+  `SHADOW_CSS[tag]` adopted into the root as a constructed sheet (a
+  `<style>` node would be the add-on renderer's to drop): AMBOSS's
+  440px div with 2em margins is what sat its card ~30px low. A box's ONE card stretches to fill it (`:only-child`,
   never Anki's table: a stretched table spreads height into its rows).
   **Same Look** (`dashboard_uniform`, explicit True only, a chip in the
   edit bar): one DESIGN.md card on every box and each widget's own outer

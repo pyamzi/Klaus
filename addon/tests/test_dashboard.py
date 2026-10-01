@@ -288,6 +288,28 @@ check("a box's one card fills it, so sizes show with Same Look off; never Anki's
       "table (its rows would stretch) and never a second element (it overflowed the decks box)",
       ".klaus-w-body > :only-child:not(table) {" in _css
       and "min-height: 100%" in _css.split(".klaus-w-body > :only-child:not(table) {")[1].split("}")[0])
+check("the grid is at most GRID_MAX (800px) wide, centred, and shrinks onto its "
+      "columns so the cell tiles line up with the tracks",
+      dash.GRID_MAX == 800 and "width: fit-content; max-width: min(800px, 100%);" in _css
+      and "margin: 0 auto;" in _css.split("center.klaus-dash-col {")[1].split("}")[0])
+check("…and 4 columns (720px with padding) fit under it, so every 4-wide box does",
+      4 * (dash.GRID_CELL + dash.GRID_GAP) + dash.GRID_GAP <= dash.GRID_MAX
+      < 5 * (dash.GRID_CELL + dash.GRID_GAP) + dash.GRID_GAP)
+check("edit mode shows every cell as a slot, tiled from the content box's corner",
+      "body.klaus-dash-editing center.klaus-dash-col {" in _css
+      and "background-origin: content-box" in _css and "--klaus-dash-cells: url(" in _css
+      and _css.count("--klaus-dash-cells: url(") == 2)
+check("the landing outline is out of flow (an in-flow node would take a grid cell)",
+      "position: absolute;" in _css.split(".klaus-dash-slot {")[1].split("}")[0]
+      and "pointer-events: none" in _css.split(".klaus-dash-slot {")[1].split("}")[0])
+check("Anki's table spans its box with border-box sizing (its 1rem padding overflowed at 100%)",
+      ".klaus-w-body > table { margin: 0 auto; width: 100%; box-sizing: border-box; }" in _css)
+check("a shadow-root card's host is a full-height block so its adopted CSS can fill the box",
+      ".klaus-w-body > amboss-component-wrapper { display: block; height: 100%; }" in _css)
+check("AMBOSS's card loses its 2em margins and 440px width inside its root",
+      "margin: 0 !important" in dash.SHADOW_CSS["amboss-component-wrapper"]
+      and "width: auto !important" in dash.SHADOW_CSS["amboss-component-wrapper"]
+      and dash.boot_state({}, False)["shadowCss"] == dash.SHADOW_CSS)
 check("no size chip: sizes are Klaus's, not the user's",
       ".klaus-w-size" not in _css)
 check("Same Look's card padding replaces the child's, so the 4x1 heatmap "
@@ -397,8 +419,8 @@ else:
 
 section("sizes and Same Look: config policy")
 check("Klaus fixes each widget's box from its measured content; unknown add-on blocks share one",
-      dash.size_of("decks") == "3x3" and dash.size_of("heatmap") == "4x1"
-      and dash.size_of("x:amboss-qbank-widget") == "3x2"
+      dash.size_of("decks") == "4x3" and dash.size_of("heatmap") == "4x1"
+      and dash.size_of("x:amboss-qbank-widget") == "4x1"
       and dash.size_of("x:.ankihub-thing") == dash.FOREIGN_SIZE == "2x2")
 check("every size is a real COLUMNS x ROWS box no wider than 4 columns",
       all(re.fullmatch(r"[1-4]x[1-4]", v) for v in list(dash.SIZES.values()) + [dash.FOREIGN_SIZE]))

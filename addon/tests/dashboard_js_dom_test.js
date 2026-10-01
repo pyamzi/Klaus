@@ -453,6 +453,12 @@ fire(sh3, "pointermove", { clientX: 100, clientY: 100, pointerId: 1 });
 ok("dragging sideways onto the first widget takes its place",
    ord(widget("x:amboss-qbank-widget")) === 1 && ord(widget("decks")) === 2,
    [ord(widget("x:amboss-qbank-widget")), ord(widget("decks"))]);
+const landing = d.center.querySelector(".klaus-dash-slot");
+ok("while dragging, the box it will land in is outlined in the grid",
+   landing && landing.parentNode === d.center && landing.style.left === "0px" && landing.style.width === "280px",
+   landing && JSON.stringify(landing.style));
+ok("…and the outline is no widget (it takes no place in the order)",
+   !hasClass(landing, "klaus-widget") && landing.style.order === undefined);
 ok("…and the widget follows the pointer in both directions",
    /^translate\(-?[\d.]+px, -?[\d.]+px\) scale\(1.02\)$/.test(widget("x:amboss-qbank-widget").style.transform),
    widget("x:amboss-qbank-widget").style.transform);
@@ -461,6 +467,20 @@ ok("the drop reports the new order",
    JSON.stringify(decoded(SENT.length - 1)) === '{"action":"order","order":["x:amboss-qbank-widget","decks","heatmap"]}',
    JSON.stringify(decoded(SENT.length - 1)));
 ok("…without ever re-connecting the add-on's element", amb3.connects === 1, String(amb3.connects));
+ok("dropping clears the landing outline", d.center.querySelectorAll(".klaus-dash-slot").length === 0);
+
+// 19. A shadow-root card gets dashboard.SHADOW_CSS adopted into its root,
+//     once, as a constructed sheet (never a node the add-on's renderer owns).
+global.CSSStyleSheet = class { replaceSync(t) { this.text = t; } };
+d = build({});
+const amb4 = el("amboss-component-wrapper", "", "amboss-qbank-widget");
+amb4.shadowRoot = { adoptedStyleSheets: [{ own: true }] };
+d.center.appendChild(pw("x:amboss-qbank-widget", amb4));
+boot(Object.assign({}, SIZED, { shadowCss: { "amboss-component-wrapper": "div { margin: 0 }" } }));
+boot(Object.assign({}, SIZED, { shadowCss: { "amboss-component-wrapper": "div { margin: 0 }" } }));
+const sheets = amb4.shadowRoot.adoptedStyleSheets;
+ok("the add-on's own sheets stay and ours is added once",
+   sheets.length === 2 && sheets[0].own && sheets[1].text === "div { margin: 0 }", String(sheets.length));
 
 let failed = 0;
 for (const [name, pass, detail] of results) {
