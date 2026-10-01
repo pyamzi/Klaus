@@ -8,8 +8,8 @@ separate pass from the viewport. This module hosts ``web/pdfjs_viewer.html``
 canvases are GPU-composited by Chromium, scrolling translates
 already-rendered layers, and the text layer gives native browser selection.
 
-Selected by config key ``pdf_renderer`` (``"native"`` default until the
-K-101 cutover). ``PdfSidebar`` branches on :func:`renderer_from_config`.
+Every reader runs on it (PDF reader 3/5); ``PdfSidebar`` falls back to the
+native ``PdfViewer`` only when QtWebEngine is missing (``PDFJS_AVAILABLE``).
 
 Division of labour (K-097..K-099): the page owns rendering and gestures;
 THIS MODULE OWNS THE ANNOTATIONS JSON. JS sends mutations over the bridge
@@ -25,9 +25,9 @@ forked.
 Feed (PDF reader 2/5): Python hands the page the file length and the
 first ``pdf_source.FIRST_CHUNK`` bytes; pdf.js asks for further byte
 ranges over the bridge (``range``) as it needs them. Pure helpers
-(:func:`renderer_from_config`, :func:`first_chunk`, :func:`handle_range`,
-:func:`build_page_html`, :func:`parse_bridge`, :func:`decode_b64_json`,
-:func:`records_from_rect_map`) stay aqt-free for the headless tests.
+(:func:`first_chunk`, :func:`handle_range`, :func:`build_page_html`,
+:func:`parse_bridge`, :func:`decode_b64_json`, :func:`records_from_rect_map`)
+stay aqt-free for the headless tests.
 """
 
 from __future__ import annotations
@@ -74,8 +74,8 @@ except Exception:  # pragma: no cover — only in stripped test stubs
 # ``class PdfJsViewer(None)`` is a hard TypeError AT IMPORT TIME —
 # "NoneType takes no arguments" — so a partial Qt surface would not cost
 # the viewer, it would cost the WHOLE MODULE: every aqt-free helper below
-# (renderer_from_config, handle_range, build_page_html, parse_bridge,
-# decode_b64_json, records_from_rect_map) and PDFJS_AVAILABLE itself,
+# (handle_range, build_page_html, parse_bridge, decode_b64_json,
+# records_from_rect_map) and PDFJS_AVAILABLE itself,
 # which never got to be False because the module never finished importing
 # to set it. The handler above says "only in stripped test stubs", which
 # is precisely where the fallback is load-bearing and precisely where it
@@ -121,18 +121,6 @@ TEXT_INK_MIN_CONTRAST = 4.5
 # The PDF spec caps a page dimension at 14,400 pt (200 in) — any
 # coordinate beyond that is garbage whatever the document says.
 MAX_PAGE_PT = 14400.0
-
-
-def renderer_from_config(cfg: Any) -> str:
-    """``"pdfjs"`` or ``"native"`` from the addon config dict.
-
-    Unknown values and malformed configs degrade to ``"native"`` — the
-    proven path stays the default until the K-101 cutover.
-    """
-    if not isinstance(cfg, dict):
-        return "native"
-    val = cfg.get("pdf_renderer")
-    return "pdfjs" if val == "pdfjs" else "native"
 
 
 def first_chunk(source: Any) -> tuple[int, str]:
@@ -905,7 +893,7 @@ def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
 
 
 class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
-    """Drop-in for ``PdfViewer`` behind the ``pdf_renderer`` flag.
+    """Drop-in for ``PdfViewer``: every reader's viewer (PDF reader 3/5).
 
     Matches the surface PdfSidebar and the tab container actually use:
     ``load_path`` (the pdf.js entry — the sidebar calls it instead of

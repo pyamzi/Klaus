@@ -29,10 +29,9 @@ embeddings = importlib.import_module("klausmate.embeddings")
 
 section("seeding and normalisation")
 st = ps.PrefsState.from_config({"endpoint": " http://x:1 ", "embedding_model": "m",
-                                "pdf_match_threshold": 0.456, "pdf_renderer": "weird"})
+                                "pdf_match_threshold": 0.456})
 check("seed normalises endpoint", st.get("endpoint") == "http://x:1")
 check("seed rounds the threshold", st.get("pdf_match_threshold") == 0.46)
-check("seed coerces an unknown renderer", st.get("pdf_renderer") == "native")
 check("missing keys take defaults", st.get("image_crop_enabled") is True and st.get("runtime_auto_setup") is True)
 check("the threshold default is retention's", ps.DEFAULT_THRESHOLD == importlib.import_module("klausmate.retention").DEFAULT_THRESHOLD == 0.45
       and ps.PrefsState.from_config({}).get("pdf_match_threshold") == 0.45)
@@ -55,14 +54,13 @@ check("reseed on an unknown key raises", raises(KeyError, lambda: st.reseed("nop
 
 section("commit: changed keys only, effects in the fixed order")
 st.set("pdf_match_threshold", 0.6)
-st.set("pdf_renderer", "pdfjs")
 c = st.commit()
 check("commit writes changed keys only, threshold with its user-set mark",
-      c.patch == {"embedding_model": "n", "pdf_match_threshold": 0.6, "_threshold_user_set": True, "pdf_renderer": "pdfjs"},
+      c.patch == {"embedding_model": "n", "pdf_match_threshold": 0.6, "_threshold_user_set": True},
       str(c.patch))
 check("effects in the fixed order",
       c.effects == [("index_sweep", embeddings.index_signature({"embedding_model": "m"})),
-                    ("threshold_changed", 0.46, 0.6), ("renderer_restart",)], str(c.effects))
+                    ("threshold_changed", 0.46, 0.6)], str(c.effects))
 check("commit moves the baseline", st.dirty is False and st.get("embedding_model") == "n" and st.get("pdf_match_threshold") == 0.6)
 st.set("image_crop_enabled", False)
 st.discard()

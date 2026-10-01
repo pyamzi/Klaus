@@ -323,16 +323,13 @@ class FakeJsViewer(QtWidgets.QWidget):
         pass
 
 
-real_js, real_flag = pj.PdfJsViewer, pj.renderer_from_config
+real_js = pj.PdfJsViewer
 pj.PdfJsViewer, pj.PDFJS_AVAILABLE = FakeJsViewer, True
-# A profile that still says "native": the flag is retired, nothing reads it.
-pj.renderer_from_config = lambda cfg: "native"
 try:
     js_sb = pv.PdfSidebar(None, host_key="lecture")
 finally:
-    pj.PdfJsViewer, pj.PDFJS_AVAILABLE, pj.renderer_from_config = real_js, False, real_flag
-check("with QtWebEngine every reader builds the pdf.js viewer, whatever "
-      "pdf_renderer says", js_sb._renderer == "pdfjs"
+    pj.PdfJsViewer, pj.PDFJS_AVAILABLE = real_js, False
+check("with QtWebEngine every reader builds the pdf.js viewer", js_sb._renderer == "pdfjs"
       and isinstance(js_sb._viewer, FakeJsViewer), js_sb._renderer)
 js_sb.cleanup()
 js_sb.close()

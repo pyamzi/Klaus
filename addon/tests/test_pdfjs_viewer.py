@@ -16,14 +16,6 @@ from anki_stubs import check, install, report, section
 install()
 pv = importlib.import_module("klausmate.pdfjs_viewer")
 
-section("renderer flag resolution")
-check("empty config -> native", pv.renderer_from_config({}) == "native")
-check("explicit native", pv.renderer_from_config({"pdf_renderer": "native"}) == "native")
-check("explicit pdfjs", pv.renderer_from_config({"pdf_renderer": "pdfjs"}) == "pdfjs")
-check("unknown value degrades to native",
-      pv.renderer_from_config({"pdf_renderer": "webgl"}) == "native")
-check("non-dict degrades to native", pv.renderer_from_config(None) == "native")
-
 section("PDF reader 2/5: the whole-file feed is gone")
 check("chunk_b64 is gone", not hasattr(pv, "chunk_b64"))
 check("CHUNK_CHARS is gone", not hasattr(pv, "CHUNK_CHARS"))
@@ -546,12 +538,6 @@ check("pdf.min.js vendored",
       os.path.getsize(os.path.join(pdfjs, "pdf.min.js")) > 100_000)
 check("pdf.worker.min.js vendored",
       os.path.getsize(os.path.join(pdfjs, "pdf.worker.min.js")) > 500_000)
-
-section("config default")
-import json
-cfg = json.load(open(os.path.join(here, "..", "klausmate", "config.json")))
-check("config.json no longer carries the retired pdf_renderer flag "
-      "(every reader runs on pdf.js)", "pdf_renderer" not in cfg)
 
 section("bridge dialogs deferred past the webchannel call (live crash)")
 # The deferral rule itself — QTimer.singleShot(0, ...) around every
@@ -1988,8 +1974,8 @@ assert pv.QWidget is None, "probe did not reproduce a partial aqt.qt"
 assert pv.PDFJS_AVAILABLE is False, pv.PDFJS_AVAILABLE
 assert pv.PdfJsViewer.__bases__ == (object,), pv.PdfJsViewer.__bases__
 
-# The six aqt-free helpers the card names, each actually exercised.
-assert pv.renderer_from_config({"pdf_renderer": "pdfjs"}) == "pdfjs"
+# The aqt-free helpers the card names, each actually exercised (the
+# renderer-flag reader among them is gone with the setting).
 assert pv.handle_range("1:0", None, 1) == {"refused": True}
 assert "__ADDON__" not in pv.build_page_html("klausmate", night=False)
 assert pv.parse_bridge("klausmate_pdfjs:hl-add:a:b") == ("hl-add", "a:b")

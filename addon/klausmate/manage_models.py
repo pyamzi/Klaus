@@ -945,20 +945,6 @@ def manage_models_dialog(*_args: Any) -> None:
         image_crop_cb,
     )
 
-    # Advanced: renderer flag for the K-095 pdf.js migration. Maps the
-    # config's pdf_renderer ("native"/"pdfjs") onto one checkbox — the
-    # only UI that touches the key.
-    pdfjs_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
-    _row(
-        general_layout,
-        "Use the new pdf.js viewer",
-        "Smoother, flicker-free scrolling. Beta — not yet in it: "
-        "inserting a page image into the editor's focused field, and "
-        "exact-phrase find highlighting. Takes effect after Anki "
-        "restarts.",
-        pdfjs_cb,
-    )
-
     # Library folder (K-070, part A of K-057) — where Library PDFs live
     # on disk. "Change…" re-runs the same guarded migration the
     # per-profile-open setup prompt uses (setup_flow._library_root_check),
@@ -2176,8 +2162,7 @@ def manage_models_dialog(*_args: Any) -> None:
         _preview_timer.start()
 
     def _run_effect(effect: tuple) -> None:
-        """Dispatch one ``Commit.effect`` (prefs_state's fixed vocabulary);
-        ``renderer_restart`` is handled by save_all's closing notice."""
+        """Dispatch one ``Commit.effect`` (prefs_state's fixed vocabulary)."""
         kind = effect[0]
         if kind == "index_sweep":
             _run_index_sweep(effect[1])
@@ -2207,11 +2192,7 @@ def manage_models_dialog(*_args: Any) -> None:
         commit = state.commit()
         if commit.patch:
             settings.patch(commit.patch)
-        restart = False
         for effect in commit.effects:
-            if effect[0] == "renderer_restart":
-                restart = True
-                continue
             _run_effect(effect)
         if _background.preview_active() and not any(e[0] == "appearance" for e in commit.effects):
             # A nudge-and-back armed the preview with baseline-equal values
@@ -2220,14 +2201,7 @@ def manage_models_dialog(*_args: Any) -> None:
             _background.set_preview(None)
         paint_all()
         refresh_dirty()
-        if restart:
-            showInfo(
-                "Preferences saved.\n\nThe PDF viewer change takes effect "
-                "the next time you start Anki.",
-                parent=dlg,
-            )
-        else:
-            tooltip("Klaus: preferences saved", parent=dlg)
+        tooltip("Klaus: preferences saved", parent=dlg)
 
     def change_library_folder() -> None:
         """Point the Library at a different on-disk folder, moving
@@ -2515,8 +2489,6 @@ def manage_models_dialog(*_args: Any) -> None:
     bindings[:] = [
         _Binding(state, "image_crop_enabled", image_crop_cb.isChecked, image_crop_cb.setChecked,
                  image_crop_cb.toggled, refresh_dirty),
-        _Binding(state, "pdf_renderer", lambda: "pdfjs" if pdfjs_cb.isChecked() else "native",
-                 lambda v: pdfjs_cb.setChecked(v == "pdfjs"), pdfjs_cb.toggled, refresh_dirty),
         _Binding(state, "endpoint", endpoint_edit.text, endpoint_edit.setText, endpoint_edit.textEdited, refresh_dirty),
         _Binding(state, "embedding_model", embed_model_edit.text, embed_model_edit.setText,
                  embed_model_edit.textEdited, refresh_dirty),

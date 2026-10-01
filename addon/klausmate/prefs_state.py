@@ -13,8 +13,7 @@ baseline. ``dirty`` is a fact — ``view() != baseline`` — never a flag.
 
 Effects are a pure function of (baseline, view), in ONE fixed order:
 ``("index_sweep", prev_signature)``, ``("threshold_changed", old,
-new)``, ``("anki_theme", value)``, ``("renderer_restart",)``,
-``("appearance",)``. A clean commit is ``Commit({}, [])``.
+new)``, ``("anki_theme", value)``, ``("appearance",)``. A clean commit is ``Commit({}, [])``.
 
 The shell (manage_models.py) owns the widgets, the prompts, the live
 preview and the operations; this module knows nothing of Qt.
@@ -30,7 +29,6 @@ DEFAULT_ENDPOINT = "http://127.0.0.1:11434"
 # retention.DEFAULT_THRESHOLD, spelled here because retention imports aqt;
 # tests/test_prefs_state.py pins the two equal.
 DEFAULT_THRESHOLD = 0.45
-RENDERERS = ("native", "pdfjs")
 _SPEC_FIELDS = ("mode", "color", "image", "fit", "blur", "wash", "grad_x", "grad_y", "grad_size", "gradients")
 _REVIEWER_FIELDS = tuple(f for f in _SPEC_FIELDS if f != "blur")  # the study screen has no blur
 _INT_FIELDS = ("blur", "wash", "grad_x", "grad_y", "grad_size")
@@ -47,10 +45,6 @@ def _endpoint(value: Any) -> str:
 
 def _model(value: Any) -> str:
     return str(value or "").strip()
-
-
-def _renderer(value: Any) -> str:
-    return value if value in RENDERERS else "native"
 
 
 def _threshold(value: Any) -> float:
@@ -98,7 +92,6 @@ def _bool(default: bool) -> Callable[[Any], bool]:
 # key -> (default, normaliser)
 _SPEC: dict[str, tuple[Any, Callable[[Any], Any]]] = {
     "image_crop_enabled": (True, _bool(True)),
-    "pdf_renderer": ("native", _renderer),
     "endpoint": (DEFAULT_ENDPOINT, _endpoint),
     "embedding_model": ("", _model),
     "runtime_auto_setup": (True, _bool(True)),
@@ -206,8 +199,6 @@ class PrefsState:
             effects.append(("threshold_changed", before["pdf_match_threshold"], after["pdf_match_threshold"]))
         if "anki_theme" in patch:
             effects.append(("anki_theme", after["anki_theme"]))
-        if "pdf_renderer" in patch:
-            effects.append(("renderer_restart",))
         if any(k in patch for k in APPEARANCE_KEYS if k not in PSEUDO_KEYS):
             flat = flatten_appearance(after)
             for key in ("background", "reviewer_background"):

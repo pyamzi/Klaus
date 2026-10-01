@@ -187,8 +187,7 @@ check("every Preferences toggle is an Md3Switch, whatever their number",
       str(sorted(_TOGGLES.items())))
 check("the General toggles are _Binding adapters over the prefs state — "
       "a toggle is an edit, Save commits, nothing else writes",
-      '_Binding(state, "image_crop_enabled", image_crop_cb.isChecked' in _MM
-      and '_Binding(state, "pdf_renderer", lambda: "pdfjs" if pdfjs_cb.isChecked()' in _MM)
+      '_Binding(state, "image_crop_enabled", image_crop_cb.isChecked' in _MM)
 check("...and the appearance one (the design master switch — the "
       "heatmap switch left Preferences 2026-08-30) routes through "
       "on_design_toggled → appearance_changed(): marks dirty AND "

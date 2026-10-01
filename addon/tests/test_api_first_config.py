@@ -78,35 +78,33 @@ check("later migration preserves local choices and writes nothing", len(writes) 
 
 
 section("PDF reader 3/5: the retired pdf_renderer key is scrubbed")
-# Whichever owner exists: settings (after the seam) or __init__ (before it).
-try:
-    import klausmate.settings as _st12
-except ImportError:
-    _st12 = None
+import importlib as _il12  # noqa: E402
+
+_st12 = _il12.import_module("klausmate.settings")
 _profile12 = {"pdf_renderer": "native", "color_theme": "rose",
               "_local_embeddings_migrated": True}
-if _st12 is not None:
-    _legacy12 = _st12.LEGACY_KEYS_DROPPED
-    _store12 = _st12.store
-    _st12.store = _st12.DictStore(_profile12)
-    try:
-        _st12.migrate()
-        _after12 = _st12.store.read()
-    finally:
-        _st12.store = _store12
-else:
-    _legacy12 = K._LEGACY_KEYS_DROPPED
-    _after12 = dict(_profile12)
-    _io12 = K.get_config, K.write_config
-    K.get_config = lambda: dict(_after12)
-    K.write_config = lambda c: (_after12.clear(), _after12.update(c))
-    try:
-        K._migrate_config()
-    finally:
-        K.get_config, K.write_config = _io12
-check("pdf_renderer is in the retired-keys list", "pdf_renderer" in _legacy12)
+_store12 = _st12.store
+_st12.store = _st12.DictStore(_profile12)
+try:
+    _st12.migrate()
+    _after12 = _st12.store.read()
+finally:
+    _st12.store = _store12
+check("pdf_renderer is in the retired-keys list", "pdf_renderer" in _st12.LEGACY_KEYS_DROPPED)
 check("a stored pdf_renderer: 'native' is removed; other choices stay",
       "pdf_renderer" not in _after12 and _after12.get("color_theme") == "rose",
       str(_after12))
+_here12 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "klausmate")
+with open(os.path.join(_here12, "config.json"), encoding="utf-8") as _f12:
+    check("config.json no longer carries it (every reader runs on pdf.js)",
+          "pdf_renderer" not in json.load(_f12))
+check("it is no preference any more: no key, no restart effect",
+      "pdf_renderer" not in _il12.import_module("klausmate.prefs_state")._SPEC
+      and "renderer_restart" not in open(os.path.join(_here12, "prefs_state.py"), encoding="utf-8").read())
+with open(os.path.join(_here12, "manage_models.py"), encoding="utf-8") as _f12:
+    _mm12 = _f12.read()
+check("...and Preferences has no row for it",
+      "pdf_renderer" not in _mm12 and "renderer_restart" not in _mm12
+      and "Use the new pdf.js viewer" not in _mm12)
 
 raise SystemExit(report())

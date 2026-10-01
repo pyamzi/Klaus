@@ -4210,7 +4210,7 @@ class PdfSidebar(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Every reader runs on pdf.js (PDF reader 3/5; the pdf_renderer flag
+        # Every reader runs on pdf.js (PDF reader 3/5; the renderer setting
         # is retired). Without QtWebEngine the QPdfView path stays as the
         # fallback rather than a blank panel; phase 5 deletes it.
         self._renderer = "native"
