@@ -437,6 +437,7 @@ class FakeConverter:
         converted.append(list(nids))
 
 
+RealConverter = nconvert.ImgOccNoteConverter
 nconvert.ImgOccNoteConverter = FakeConverter
 prog = []
 bmw = types.SimpleNamespace(
@@ -456,6 +457,45 @@ check("answer No: nothing converted", converted == [] and prog == [])
 asks[0].on_answer(True)
 check("answer Yes: the selected notes are converted inside progress",
       converted == ["init", [5, 6]] and prog == ["start", "finish"], "%r %r" % (converted, prog))
+
+
+section("nconvert: _saveMask writes the mask under the note id (IOE's node_id NameError, R5)")
+import tempfile  # noqa: E402
+
+media = tempfile.mkdtemp(prefix="io-media-")
+conv = object.__new__(RealConverter)
+conv._media_path = media
+try:
+    name = conv._saveMask("<svg>ü</svg>", "abc-ao", "O")
+    err = None
+except Exception as e:  # noqa: BLE001
+    name, err = None, e
+check("_saveMask does not raise", err is None, repr(err))
+check("...and writes <note_id>-<type>.svg into the media folder, UTF-8",
+      name == "abc-ao-O.svg" and os.path.isfile(os.path.join(media, "abc-ao-O.svg"))
+      and open(os.path.join(media, "abc-ao-O.svg"), "rb").read() == "<svg>ü</svg>".encode("utf8"),
+      repr(name))
+shutil.rmtree(media, ignore_errors=True)
+
+
+section("options: GrabKey's notices are non-blocking io_info boxes (R4)")
+opts = M["options"]
+check("options.py names no showInfo at all",
+      "showInfo" not in open(os.path.join(PKG, "options.py"), encoding="utf-8").read())
+infos = []
+opts.io_info = lambda msgkey, **kw: infos.append((msgkey, kw))
+gk = object.__new__(opts.GrabKey)
+for mods, extra, want in (
+        ((False, False, False), "K", "Please use at least one keyboard modifier (Ctrl, Alt, Shift)"),
+        ((False, False, True), "K", "Shift needs to be combined with at least one other "
+                                    "modifier (Ctrl, Alt)"),
+        ((True, False, False), None, "Please press at least one key that is not a keyboard "
+                                     "modifier (not Ctrl/Alt/Shift)")):
+    del infos[:]
+    gk.active, (gk.ctrl, gk.alt, gk.shift), gk.extra = 1, mods, extra
+    gk.keyReleaseEvent(None)
+    check("GrabKey notice via io_info, IOE's text, the grabber as parent: " + want[:30],
+          infos == [("custom", {"text": want, "parent": gk})], repr(infos))
 
 
 section("options: Save writes collection config through set_config")

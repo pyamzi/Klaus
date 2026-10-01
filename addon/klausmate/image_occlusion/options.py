@@ -57,9 +57,8 @@ from aqt.qt import (
     Qt,
     QVBoxLayout,
 )
-from aqt.utils import showInfo
-
 from .config import *
+from .dialogs import io_info
 from .lang import _
 
 
@@ -109,24 +108,31 @@ class GrabKey(QDialog):
         if self.active != 0:
             return
         if not (self.shift or self.ctrl or self.alt):
-            showInfo(
-                _("Please use at least one keyboard " "modifier (Ctrl, Alt, Shift)")
+            # Klaus: io_info, not aqt's blocking info box; this grabber is window-modal
+            io_info(
+                "custom",
+                text=_("Please use at least one keyboard " "modifier (Ctrl, Alt, Shift)"),
+                parent=self,
             )
             return
         if self.shift and not (self.ctrl or self.alt):
-            showInfo(
-                _(
+            io_info(
+                "custom",
+                text=_(
                     "Shift needs to be combined with at "
                     "least one other modifier (Ctrl, Alt)"
-                )
+                ),
+                parent=self,
             )
             return
         if not self.extra:
-            showInfo(
-                _(
+            io_info(
+                "custom",
+                text=_(
                     "Please press at least one key "
                     "that is not a keyboard modifier (not Ctrl/Alt/Shift)"
-                )
+                ),
+                parent=self,
             )
             return
 

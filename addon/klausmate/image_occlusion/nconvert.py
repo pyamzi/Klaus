@@ -229,8 +229,9 @@ class ImgOccNoteConverter(object):
 
     def _saveMask(self, mask, note_id, mtype):
         """Write mask to file in media collection"""
+        # Klaus: IOE passed an undefined node_id here (NameError on every conversion)
         logging.debug(
-            _("!saving %(node_id)s, %(mtype)s"), {"node_id": node_id, "mtype": mtype}
+            _("!saving %(node_id)s, %(mtype)s"), {"node_id": note_id, "mtype": mtype}
         )
         mask_filename = "%s-%s.svg" % (note_id, mtype)
         mask_path = os.path.join(self._media_path, mask_filename)
