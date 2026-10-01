@@ -304,6 +304,32 @@ def decode_b64_json(payload: str) -> Any:
         return None
 
 
+def gesture_action(gesture_type: Any, value: float) -> tuple | None:
+    """What a native trackpad gesture means for the page, or None to let
+    it through to Chromium.
+
+    ``value`` of a ``ZoomNativeGesture`` is an INCREMENTAL scale delta per
+    event, not a running total: Qt documents it as a scale-factor delta,
+    Cocoa feeds it ``[NSEvent magnification]`` per event, and QtWebEngine
+    itself applies it as a pinch step of ``1 + value``. ``exp(value)``
+    agrees with that to second order and stays symmetric (out by v then
+    in by v nets exactly 1.0), the same exponential response the page
+    gives ctrl-wheel (``PINCH_K``). Matched by enum NAME so this stays
+    pure: no Qt import, and headless stubs need no real enum.
+    """
+    name = getattr(gesture_type, "name", "")
+    if name == "ZoomNativeGesture":
+        return ("pinch", math.exp(value))
+    if name == "SmartZoomNativeGesture":  # macOS two-finger double-tap
+        return ("smart",)
+    return None
+
+
+# A vv-scale report this soon after the last vv-scale reload is not
+# reloaded again: if a reload ever kept the scale, that would loop.
+VV_RELOAD_GAP_S = 10.0
+
+
 def validate_hex_color(value: Any, default: str = HIGHLIGHT_COLOR) -> str:
     """A trusted ``#rrggbb`` out of an untrusted bridge value.
 
@@ -1019,6 +1045,31 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             if event.type() == event.Type.ShortcutOverride and self._claimed(event):
                 event.accept()
                 return True
+            # Trackpad pinch / smart zoom, taken BEFORE Chromium sees it:
+            # Chromium pinch-zooms the visual viewport (the whole page,
+            # gray background too) for any gesture the page cannot cancel
+            # as a ctrl-wheel — one landing before the page script runs,
+            # or the two-finger double-tap. Consumed even while the page
+            # is still loading (_eval then drops it): that IS the fix.
+            # (Not the page label: the header owns it, outside the view.)
+            if event.type() == event.Type.NativeGesture and obj is not self._page_label:
+                act = gesture_action(event.gestureType(), event.value())
+                if act is not None:
+                    if act[0] == "smart":
+                        self._eval("window.klausSmartZoom && window.klausSmartZoom();")
+                    else:
+                        pos = event.position()
+                        if obj is not self._web:  # the focusProxy child
+                            pos = obj.mapTo(self._web, pos)
+                        # Frame zoom is pinned to 1.0: view px == CSS px.
+                        self._eval(
+                            "window.klausPinch && window.klausPinch("
+                            f"{act[1]!r}, {pos.x()!r}, {pos.y()!r});"
+                        )
+                    # Accepted, or Qt re-sends it to the parent view, whose
+                    # filter (this one) would zoom a second time.
+                    event.accept()
+                    return True
         except Exception:
             pass
         try:
@@ -1103,6 +1154,51 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
     def _reload_current(self) -> None:
         if self._path is not None and self._name is not None:
             self.load_path(self._path, self._name, keep_view=True)
+
+    # Class defaults, so __new__-built test stand-ins carry them too.
+    _user_zoom = 0.0  # the page's committed user zoom; 0 = fit width
+    _vv_reload_at = float("-inf")
+
+    def _bridge_zoom(self, payload: str) -> None:
+        try:
+            z = float(payload)
+        except ValueError:
+            return
+        self._user_zoom = z if math.isfinite(z) and z > 0 else 0.0
+
+    def _bridge_vv_scale(self, payload: str) -> None:
+        """Chromium zoomed the visual viewport — the WHOLE page — on a
+        gesture nothing caught. Nothing in the page can undo that; only a
+        new page resets it, so reload the HTML and re-open the document
+        at the same scroll and zoom. Malformed or unzoomed reports are
+        ignored."""
+        try:
+            scale = float(payload)
+        except ValueError:
+            return
+        if not (math.isfinite(scale) and scale > 0 and abs(scale - 1) > 0.01):
+            return
+        if self._path is None or self._name is None:
+            return
+        import time
+
+        now = time.monotonic()
+        if now - self._vv_reload_at < VV_RELOAD_GAP_S:
+            print(f"[klausmate] pdfjs page still zoomed to {scale:.2f}; not reloading again")
+            return
+        self._vv_reload_at = now
+        print(f"[klausmate] pdfjs page zoomed to {scale:.2f}; reloading the page")
+        # Deferred: the reload replaces the page this bridge call came from.
+        QTimer.singleShot(0, self._reload_page)
+
+    def _reload_page(self) -> None:
+        if self._web is None or self._path is None or self._name is None:
+            return
+        self._page_loaded = False
+        self._ensure_page()
+        if self._user_zoom:  # the new page starts at fit; keepView keeps this
+            self._eval(f"window.klausKeepZoom && window.klausKeepZoom({self._user_zoom!r});")
+        self._reload_current()
 
     def _close_source(self) -> None:
         src, self._source = getattr(self, "_source", None), None
@@ -1550,6 +1646,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._path = path
         if not keep_view:
             self._scroll_pos = 0
+            self._user_zoom = 0.0
         self._hold_scroll = keep_view
         self._gen += 1
         self._close_source()

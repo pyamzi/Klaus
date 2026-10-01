@@ -2234,4 +2234,190 @@ if _HAVE_QT154:
               _stand154, _ev_hl154
           ) == "highlight")
 
+
+section("PDF reader 2/5: trackpad pinch and smart zoom go to the PDF, "
+        "never the whole page")
+# The page cancels every ctrl-wheel, yet a pinch still zoomed the WHOLE
+# page (gray background too): Chromium pinch-zooms the visual viewport
+# for gestures the page never sees as a cancellable wheel — one landing
+# before the page script attached, or the macOS two-finger double-tap.
+# So Qt takes the native gesture before Chromium does and hands it to
+# the page's own zoom.
+import math as _m10
+from types import SimpleNamespace as _NS10
+
+from PyQt6.QtCore import QObject as _QObj10, QPointF as _QPF10, Qt as _Qt10
+from PyQt6.QtGui import QNativeGestureEvent as _NGE10
+from PyQt6.QtGui import QPointingDevice as _QPD10
+from PyQt6.QtWidgets import QApplication as _QApp10, QWidget as _QW10
+
+_NG10 = _Qt10.NativeGestureType
+check("a zoom gesture is a pinch by exp(value)",
+      pv.gesture_action(_NG10.ZoomNativeGesture, 0.1)
+      == ("pinch", _m10.exp(0.1)))
+check("the two-finger double-tap is a smart zoom",
+      pv.gesture_action(_NG10.SmartZoomNativeGesture, 0.0) == ("smart",))
+for _g10 in (_NG10.BeginNativeGesture, _NG10.EndNativeGesture,
+             _NG10.RotateNativeGesture, _NG10.PanNativeGesture,
+             _NG10.SwipeNativeGesture):
+    check(f"{_g10.name} passes through",
+          pv.gesture_action(_g10, 0.3) is None)
+
+_app10 = _QApp10.instance() or _QApp10([])
+
+
+class _Recv10(_QW10):
+    """QWebEngineView's focusProxy stand-in: records what reaches it."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.got = []
+
+    def event(self, e):
+        if e.type() == e.Type.NativeGesture:
+            self.got.append(e.gestureType())
+        return super().event(e)
+
+
+_view10 = _QW10()
+_proxy10 = _Recv10(_view10)
+_proxy10.setGeometry(10, 20, 300, 300)
+_js10 = []
+_stand10 = _NS10(_page_label=None, _web=_view10, _eval=_js10.append,
+                 _claimed=lambda _e: False)
+
+
+class _Filter10(_QObj10):
+    """PdfJsViewer.eventFilter itself, installed on the stand-in."""
+
+    def eventFilter(self, obj, ev):
+        return pv.PdfJsViewer.eventFilter(_stand10, obj, ev)
+
+
+_filter10 = _Filter10()
+_proxy10.installEventFilter(_filter10)
+_view10.installEventFilter(_filter10)
+
+
+def _gesture10(kind, value, x=5.0, y=6.0):
+    p = _QPF10(x, y)
+    return _NGE10(kind, _QPD10.primaryPointingDevice(), 2, p, p, p,
+                  value, _QPF10(0, 0))
+
+
+_QApp10.sendEvent(_proxy10, _gesture10(_NG10.ZoomNativeGesture, 0.1))
+check("a pinch on the focusProxy never reaches Chromium",
+      _proxy10.got == [], repr(_proxy10.got))
+check("...and becomes ONE klausPinch at the point in view coordinates",
+      _js10 == ["window.klausPinch && window.klausPinch(%r, 15.0, 26.0);"
+                % _m10.exp(0.1)], repr(_js10))
+_js10.clear()
+_QApp10.sendEvent(_proxy10, _gesture10(_NG10.SmartZoomNativeGesture, 0.0))
+check("a two-finger double-tap is consumed and becomes klausSmartZoom",
+      _proxy10.got == []
+      and _js10 == ["window.klausSmartZoom && window.klausSmartZoom();"],
+      repr(_js10))
+_js10.clear()
+_QApp10.sendEvent(_proxy10, _gesture10(_NG10.RotateNativeGesture, 0.2))
+check("a non-zoom gesture is not consumed",
+      _proxy10.got == [_NG10.RotateNativeGesture] and _js10 == [])
+_QApp10.sendEvent(_view10, _gesture10(_NG10.ZoomNativeGesture, -0.1))
+check("a pinch delivered to the view itself needs no mapping",
+      _js10 == ["window.klausPinch && window.klausPinch(%r, 5.0, 6.0);"
+                % _m10.exp(-0.1)], repr(_js10))
+_label10 = _Recv10()                  # the page label lives in the header
+_stand10._page_label = _label10
+_label10.installEventFilter(_filter10)
+_js10.clear()
+_QApp10.sendEvent(_label10, _gesture10(_NG10.ZoomNativeGesture, 0.1))
+check("a pinch over the page label (outside the view) is left alone",
+      _js10 == [] and _label10.got == [_NG10.ZoomNativeGesture])
+
+# Backstop: if Chromium zooms the visual viewport anyway, only a new
+# page resets it — the page reports it, Python reloads the HTML and
+# re-opens the document at the same scroll and zoom.
+_v10 = _viewer8()
+_v10.load_path(_pdf8, "lecture.pdf")
+_v10._scroll_pos = 700
+_pages10 = []
+
+
+def _ensure10():   # stdHtml stand-in; a no-op once loaded, like the real one
+    if _v10._page_loaded:
+        return
+    _pages10.append(1)
+    _v10._page_loaded = True
+
+
+_v10._ensure_page = _ensure10
+_qt10 = pv.QTimer
+pv.QTimer = _NowTimer
+_out10 = _io.StringIO()
+
+
+def _bridge10(cmd):
+    with _ctxl.redirect_stdout(_out10):
+        _v10._on_bridge("klausmate_pdfjs:" + cmd)
+
+
+try:
+    _bridge10("zoom:abc")
+    _bridge10("zoom:1.75")
+    _v10._web.js.clear()
+    for _bad10 in ("abc", "nan", "inf", "-2", "", "1.0", "1.005"):
+        _bridge10("vv-scale:" + _bad10)
+    check("malformed or unzoomed vv-scale reports are ignored",
+          _pages10 == [] and _v10._web.js == [], repr(_v10._web.js))
+    _bridge10("vv-scale:1.4")
+    check("a zoomed visual viewport reloads the page once", _pages10 == [1])
+    _open10 = [i for i, j in enumerate(_v10._web.js)
+               if "klausPdfOpen(2, " in j and '"lecture.pdf", true);' in j]
+    _keep10 = [i for i, j in enumerate(_v10._web.js)
+               if j == "window.klausKeepZoom && window.klausKeepZoom(1.75);"]
+    check("...re-opens the document once, keeping the view",
+          len(_open10) == 1, repr(_v10._web.js))
+    check("...at the user's zoom, set before the document opens",
+          len(_keep10) == 1 and _keep10[0] < _open10[0], repr(_v10._web.js))
+    check("...and the scroll position", _v10._scroll_pos == 700)
+    _bridge10("vv-scale:1.4")
+    check("a second report right after does not reload again (no loop "
+          "if a reload ever kept the scale)", _pages10 == [1])
+finally:
+    pv.QTimer = _qt10
+check("the recovery is logged and nothing raised",
+      "pdfjs page zoomed to 1.40; reloading" in _out10.getvalue()
+      and "error" not in _out10.getvalue(), _out10.getvalue())
+_v10.load_path(_pdf8, "lecture.pdf")
+check("a new document forgets the user zoom", _v10._user_zoom == 0.0)
+
+_HTML10 = _src(os.path.join("web", "pdfjs_viewer.html"))
+_KP10 = _HTML10.split("window.klausPinch = function", 1)[1].split("\n};\n", 1)[0]
+check("klausPinch feeds the SAME zoom session as ctrl-wheel, at the point",
+      "zoomTo(sessionTarget() * factor, x, y, false)" in _KP10
+      and 'getElementById("scroll").contains(' in _KP10)
+_SZ10 = _HTML10.split("window.klausSmartZoom = async function", 1)[1]
+_SZ10 = _SZ10.split("\n};\n", 1)[0]
+check("klausSmartZoom toggles fit-width and the previous user zoom "
+      "(2x fit if none), centred",
+      "zoomTo(fit, c[0], c[1], true)" in _SZ10
+      and "state.prevZoom || fit * 2" in _SZ10
+      and "viewportCenter()" in _SZ10)
+check("the page watches visualViewport resize and scroll",
+      'window.visualViewport.addEventListener("resize", vvCheck)' in _HTML10
+      and 'window.visualViewport.addEventListener("scroll", vvCheck)'
+      in _HTML10)
+_VV10 = _HTML10.split("function vvCheck()", 1)[1].split("\n}\n", 1)[0]
+check("...and posts vv-scale once, debounced, only when zoomed",
+      'post("vv-scale:" + vv.scale)' in _VV10
+      and "Math.abs(vv.scale - 1) <= 0.01" in _VV10
+      and "vvPosted" in _VV10 and ", 200)" in _VV10)
+check("...checking once at boot too (a pinch before the script ran)",
+      "\nvvCheck();\n" in _HTML10)
+check("every committed zoom is reported so a page reload can restore it",
+      'post("zoom:" + (state.userZoomed ? state.scale : 0))' in _HTML10
+      and "window.klausKeepZoom = function" in _HTML10)
+check("a fresh document's fit clears a stale user-zoom flag",
+      "state.scale = clampScale(avail / base.width);\n"
+      "    state.userZoomed = false;" in _HTML10)
+
 raise SystemExit(report())

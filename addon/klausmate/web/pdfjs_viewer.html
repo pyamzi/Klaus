@@ -429,6 +429,7 @@ const state = {
   marquee: null,         // {page, x0, y0} while alt-dragging
   persistMarquee: null,  // {page0,x,y,w,h,dataUrl} kept after release (K-100)
   zoom: null,            // live zoom session — pinch or stepped (zoomTo)
+  prevZoom: 0,           // last committed user zoom: smart zoom's way back
   tool: null,            // "hl" | "text" | null — annobar mode
   ink: "yellow",         // selected highlight ink — a theme --ink-* NAME
   tink: "black",         // selected TEXT ink — a --tink-* NAME (K-150)
@@ -594,7 +595,10 @@ async function buildPlaceholders() {
   const first = await state.doc.getPage(1);
   const base = first.getViewport({ scale: 1.0 });
   const avail = await availWidth();
-  if (!(state.keepZoom && state.userZoomed)) state.scale = clampScale(avail / base.width);
+  if (!(state.keepZoom && state.userZoomed)) {
+    state.scale = clampScale(avail / base.width);
+    state.userZoomed = false;
+  }
   applyScaleFactor();
   for (let i = 1; i <= state.doc.numPages; i++) {
     const div = document.createElement("div");
@@ -1399,6 +1403,9 @@ async function zoomSettle() {
   }
   state.userZoomed = !p.fit;
   state.scale = target;
+  if (state.userZoomed) state.prevZoom = target;
+  // Python keeps it, so a page reload (vv-scale) can restore it.
+  post("zoom:" + (state.userZoomed ? state.scale : 0));
   zoomGen++;
   await softRelayout();
   const div = p.hit ? state.pageDivs[p.hit.page0] : null;
@@ -1542,6 +1549,28 @@ document.addEventListener("wheel", (ev) => {
   zoomTo(sessionTarget() * Math.exp(-ev.deltaY * PINCH_K),
          ev.clientX, ev.clientY, false);
 }, { passive: false });
+
+/* Backstop: if Chromium ever zooms the visual viewport anyway (a gesture
+   neither Python's native-gesture filter nor the wheel listener above
+   caught), nothing in the page can undo it; only a new page resets it.
+   Report it once — Python reloads the page and re-opens the document at
+   the same scroll and zoom, and the fresh page re-arms this. Checked at
+   boot too: a pinch that landed before this script ran. */
+let vvPosted = false, vvTimer = null;
+function vvCheck() {
+  clearTimeout(vvTimer);
+  vvTimer = setTimeout(() => {
+    const vv = window.visualViewport;
+    if (!vv || vvPosted || Math.abs(vv.scale - 1) <= 0.01) return;
+    vvPosted = true;
+    post("vv-scale:" + vv.scale);
+  }, 200);
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", vvCheck);
+  window.visualViewport.addEventListener("scroll", vvCheck);
+}
+vvCheck();
 
 /* WebKit-lineage gesture events: if the engine ever synthesizes them,
    cancelling keeps a second zoom path from double-firing. */
@@ -2367,15 +2396,48 @@ window.klausSetZoom = function (factor) {
   zoomTo(sessionTarget() * factor, c[0], c[1], false);
 };
 
-window.klausZoomReset = async function () {
-  if (!state.doc) return;
+async function fitScale() {
   const first = await state.doc.getPage(1);
   const base = first.getViewport({ scale: 1.0 });
-  const fit = clampScale(
+  return clampScale(
     (document.getElementById("scroll").clientWidth - 24) / base.width
   );
+}
+
+window.klausZoomReset = async function () {
+  if (!state.doc) return;
+  const fit = await fitScale();
   const c = viewportCenter();
   zoomTo(fit, c[0], c[1], true);   // fit: settle clears userZoomed
+};
+
+/* Native trackpad gestures, forwarded by Python's eventFilter before
+   Chromium sees them (macOS pinch no longer arrives as a ctrl-wheel;
+   ctrl + mouse wheel still does). x/y: CSS px in the page viewport. */
+window.klausPinch = function (factor, x, y) {
+  if (!state.doc) return;
+  const el = document.elementFromPoint(x, y);
+  if (!el || !document.getElementById("scroll").contains(el)) return;
+  zoomTo(sessionTarget() * factor, x, y, false);
+};
+
+/* Two-finger double-tap: fit width <-> the previous user zoom (2x fit
+   if there is none), centred. */
+window.klausSmartZoom = async function () {
+  if (!state.doc) return;
+  const fit = await fitScale();
+  if (!state.doc) return;
+  const c = viewportCenter();
+  if (state.userZoomed) zoomTo(fit, c[0], c[1], true);
+  else zoomTo(state.prevZoom || fit * 2, c[0], c[1], false);
+};
+
+/* Python re-feeds the user zoom across a page reload, before
+   klausPdfOpen(..., keepView), which then keeps it instead of fitting. */
+window.klausKeepZoom = function (s) {
+  state.scale = clampScale(s);
+  state.userZoomed = true;
+  state.prevZoom = state.scale;
 };
 
 async function rezoom(keepPage) {
