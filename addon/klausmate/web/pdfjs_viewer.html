@@ -218,7 +218,11 @@ origin, matching the native viewer and the bake pipeline exactly
   /* highlights render UNDER the text layer, above the canvas */
   .hlLayer { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
   .hlLayer .hl { position: absolute; border-radius: 2px; }
+  /* Text boxes draw in Helvetica, the font the bake writes into the PDF
+     (/Helv) and Preview draws: the UI font runs ~7% wider and made a box
+     look bigger here than in Preview. */
   .hlLayer .hltext { position: absolute; white-space: pre-wrap;
+                     font-family: Helvetica, Arial, sans-serif;
                      line-height: 1.15; overflow: hidden; }
   /* ---- in-place text editor (K-150) ----
      Preview's shape: click, and a box appears ON the page that you
@@ -249,7 +253,7 @@ origin, matching the native viewer and the bake pipeline exactly
   .editLayer .editBody {
     outline: none; white-space: pre-wrap; overflow-wrap: break-word;
     line-height: 1.15; cursor: text; min-height: 1em;
-    font-family: var(--font); margin: 0; padding: 0;
+    font-family: Helvetica, Arial, sans-serif; margin: 0; padding: 0;
   }
   /* The grip is the move handle: the interior is a text field, so
      dragging inside it selects text (Preview behaves the same — you
