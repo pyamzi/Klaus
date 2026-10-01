@@ -439,15 +439,15 @@ pub async fn serve(
     Ok((addr, async move { axum::serve(listener, app).await }))
 }
 
-/// Anki's SvelteKit shell, with what Anki's Qt webview would provide: the host
-/// script (`bridgeCommand`) before any page script runs, and base styling.
 /// aqt/mediasrv.py UNTRUSTED_MEDIA_CSP, verbatim.
 const UNTRUSTED_MEDIA_CSP: &str = "default-src 'none'; script-src 'none'; connect-src 'none'; \
     object-src 'none'; frame-src 'none'; child-src 'none'; base-uri 'none'; form-action 'none'; \
     style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; media-src 'self'; \
     sandbox allow-same-origin";
 
-/// Serves an Anki page shell with Klaus's host script, and the response CSP Anki's
+/// Anki's SvelteKit shell, with what Anki's Qt webview would provide: the host
+/// script (`bridgeCommand`) before any page script runs, and base styling. Sent with
+/// the response CSP Anki's
 /// mediasrv sends in place of the build's meta tag: pages are never framed, and the
 /// pages that show note HTML (editor, image-occlusion) only run Anki's and Klaus's
 /// own scripts and can't submit forms.
