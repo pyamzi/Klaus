@@ -388,7 +388,7 @@ pdf_handler.save_open_tabs(tabs_tmp, ["Foo", "Bar"])
 pdf_handler.touch_last_used(tabs_tmp, "Foo")
 raw_tabs = pdf_handler._load_tabs_file(tabs_tmp)
 check("pdf_tabs.json round-trips through the shared atomic writer (multi-writer merge)",
-      raw_tabs.get("open") == ["Foo", "Bar"] and "Foo" in raw_tabs.get("last_used", {}),
+      raw_tabs.get("tabs") == {"editor": ["Foo", "Bar"]} and "Foo" in raw_tabs.get("last_used", {}),
       str(raw_tabs))
 check("pdf_tabs.json has no leftover tmp file",
       not any(n.startswith(".pdf_tabs.json.") for n in os.listdir(tabs_tmp)))

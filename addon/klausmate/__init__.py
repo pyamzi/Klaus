@@ -716,28 +716,14 @@ def _on_library_button(editor: Editor) -> None:
         else:
             _ensure_sidebar_pdf(editor)
             tabs.panel_show()
-            if tabs._tabs.count() == 0:
-                tabs._show_add_menu()
+            strip = getattr(tabs._sidebar, "tabs", None)
+            if strip is not None and not strip.names():
+                tabs._sidebar._show_add_menu()
     except Exception as e:
         print(
             "[klausmate] library button action failed: "
             f"{type(e).__name__}: {e}"
         )
-
-
-def _pdf_display_name(safe: str) -> str:
-    """Human label for a stored PDF, falling back to its safe basename.
-
-    A drive_store lookup that is safe on any failure: display names are
-    bookkeeping, and a missing or corrupt drive.json must cost a label,
-    never a menu.
-    """
-    try:
-        from . import drive_store
-
-        return drive_store.display_name(USER_FILES, safe)
-    except Exception:
-        return safe
 
 
 # Where the PDF dock may sit. Three window edges — the placement engine
@@ -755,13 +741,13 @@ AREA_NAMES = {area: name for name, area in PANEL_AREAS.items()}
 
 
 class _PanelBar(QWidget):
-    """The dock's title bar: ``[◫] [＋] [tabs]  …  [page n/m] [⧉] [✕]``.
+    """The dock's title bar: ``[◫]  …  [⧉] [✕]``. The tabs, ＋ and the
+    page label live inside the reader (``PdfSidebar.tabs``, PDF reader
+    3/5).
 
     Presses the bar does not handle are IGNORED so they reach the
     QDockWidget, which moves, docks and floats from them — Qt's
-    setTitleBarWidget contract. The tab bar does NOT stretch over the
-    empty space (a stretch follows it), so a press there is the bar's
-    and starts a drag, while a press on a tab stays the tab bar's.
+    setTitleBarWidget contract; the whole empty bar is the drag strip.
     With a custom title bar Qt draws no float or close button, hence
     the two at the right end. Colours only through theme tokens.
     """
@@ -802,33 +788,7 @@ class _PanelBar(QWidget):
 
         self.thumbs_btn.clicked.connect(_toggle_thumbs)
         row.addWidget(self.thumbs_btn)
-
-        self.add_btn = QToolButton(self)
-        self.add_btn.setText("＋")
-        self.add_btn.setAutoRaise(True)
-        self.add_btn.setToolTip("Open another PDF in a new tab")
-        row.addWidget(self.add_btn)
-
-        self.tabs = QTabBar(self)
-        self.tabs.setDocumentMode(True)
-        self.tabs.setDrawBase(False)
-        self.tabs.setMovable(True)
-        self.tabs.setUsesScrollButtons(True)
-        self.tabs.setExpanding(False)
-        self.tabs.setElideMode(Qt.TextElideMode.ElideMiddle)
-        # Stretch factor 0 plus the stretch below: the tab bar takes only
-        # the width its tabs need, and the leftover belongs to the bar —
-        # which is the surface Qt drags the dock by.
-        row.addWidget(self.tabs, 0)
         row.addStretch(1)
-
-        # The viewer's page indicator sits at the right end of the bar.
-        page_label = (
-            getattr(viewer, "_page_label", None) if viewer is not None else None
-        )
-        if page_label is not None:
-            page_label.setVisible(True)
-            row.addWidget(page_label)
 
         self.float_btn = QToolButton(self)
         self.float_btn.setText("⧉")
@@ -841,21 +801,6 @@ class _PanelBar(QWidget):
         self.hide_btn.setAutoRaise(True)
         self.hide_btn.setToolTip("Hide the PDF panel (Library… shows it again)")
         row.addWidget(self.hide_btn)
-
-        # First layout, before any resizeEvent fires: keep the cap right
-        # from the very first paint (F1, review round 1). 250 was measured
-        # with a Record button on the left (K-257, removed in K-314); it now
-        # leaves a wider drag strip than the >= 60px it guarantees.
-        self.tabs.setMaximumWidth(max(80, self.width() - 250))
-
-    def resizeEvent(self, ev) -> None:  # noqa: N802
-        # Cap the tab bar so a drag strip always survives between it and
-        # the float button, however many tabs are open: past one tab the
-        # trailing stretch alone collapsed to a measured 4px (F1, review
-        # round 1) — with the placement menu gone, dragging this bar is
-        # the only way to move the panel between areas.
-        super().resizeEvent(ev)
-        self.tabs.setMaximumWidth(max(80, self.width() - 250))
 
     # Ignore, never accept: the dock handles these (drag, double-click).
     def mousePressEvent(self, ev) -> None:  # noqa: N802
@@ -889,14 +834,12 @@ class PdfDock(QDockWidget):
     session, never from Anki's saved QMainWindow state, so a stale saved
     layout can never overrule the user's last move.
 
-    - **✕ on each tab** closes that PDF (the stored file survives; reopen
-      it from ＋). Closing the last tab hides the panel.
-    - **＋** opens another stored PDF.
     - **⧉** floats the panel or docks it back; **✕** at the bar's end
       hides it (the toolbar's Library… button shows it again).
+    - The tabs live in the reader (``PdfSidebar.tabs``): closing the last
+      one hides the panel.
 
-    One viewer instance is reused across tabs; per-tab reading position
-    is kept for the session; the tab set and placement persist.
+    Placement persists here; the tab set persists in the reader.
     """
 
     def __init__(self, editor: Editor, sidebar: Any, main_window: Any) -> None:
@@ -904,8 +847,6 @@ class PdfDock(QDockWidget):
         self._editor = editor
         self._sidebar = sidebar
         self._win = main_window
-        self._syncing = False
-        self._last_page: dict[str, int] = {}
         self._closed = False
         # _placed means the remembered placement has been applied this
         # session; until then panel_show() applies it.
@@ -931,16 +872,13 @@ class PdfDock(QDockWidget):
         )
 
         self._bar = _PanelBar(self, sidebar)
-        self._tabs = self._bar.tabs
-        self._add_btn = self._bar.add_btn
-        self._bar.add_btn.clicked.connect(self._show_add_menu)
         self._bar.float_btn.clicked.connect(self._toggle_float)
         self._bar.hide_btn.clicked.connect(self.panel_hide)
-        self._tabs.currentChanged.connect(self._on_tab_changed)
-        self._tabs.tabMoved.connect(lambda *_: self._persist())
         self.setTitleBarWidget(self._bar)
         self.setWidget(sidebar)
-        sidebar.on_loaded = self._on_sidebar_loaded
+        strip = getattr(sidebar, "tabs", None)
+        if strip is not None:
+            strip.closed.connect(self._on_tab_closed)
 
         # Nesting lets this dock share Browse's left area with Anki's own
         # sidebar dock (side by side, not only tabbed).
@@ -982,16 +920,6 @@ class PdfDock(QDockWidget):
             self._win.destroyed.connect(self._on_host_destroyed)
         except Exception:
             pass
-
-        # Restore last session's tab set as labels only — the document
-        # itself loads lazily when a tab is selected / the panel is shown.
-        self._syncing = True
-        try:
-            for name in pdf_handler.load_open_tabs(USER_FILES):
-                if self._find_tab(name) < 0:
-                    self._decorate_tab(self._tabs.addTab(name))
-        finally:
-            self._syncing = False
 
     # ---- show / hide (the toolbar Library… button and chips) ----
 
@@ -1227,166 +1155,11 @@ class PdfDock(QDockWidget):
         except Exception:
             pass
 
-
-    # ---- per-tab ✕ ----
-
-    def _decorate_tab(self, idx: int) -> None:
-        # Both call sites (session restore, _on_sidebar_loaded) route
-        # through here, so this is the one place a tab's tooltip needs
-        # setting: the FULL name, since ElideMiddle can only show part
-        # of it once tabs saturate the bar (final-review M9).
-        self._tabs.setTabToolTip(idx, self._tabs.tabText(idx))
-        btn = QToolButton(self._tabs)
-        btn.setText("✕")
-        btn.setAutoRaise(True)
-        btn.setFixedSize(16, 16)
-        btn.setStyleSheet("font-size: 10px; border: none;")
-        btn.setToolTip("Close this PDF (keeps the stored file)")
-        btn.clicked.connect(lambda _=False, b=btn: self._close_tab_of(b))
-        self._tabs.setTabButton(idx, QTabBar.ButtonPosition.RightSide, btn)
-
-    def _close_tab_of(self, btn: QToolButton) -> None:
-        for i in range(self._tabs.count()):
-            if self._tabs.tabButton(i, QTabBar.ButtonPosition.RightSide) is btn:
-                self._on_tab_close(i)
-                return
-
-    # ---- tab bookkeeping ----
-
-    def _tab_names(self) -> list[str]:
-        return [self._tabs.tabText(i) for i in range(self._tabs.count())]
-
-    def _find_tab(self, name: str) -> int:
-        for i in range(self._tabs.count()):
-            if self._tabs.tabText(i) == name:
-                return i
-        return -1
-
-    def _persist(self) -> None:
-        try:
-            pdf_handler.save_open_tabs(USER_FILES, self._tab_names())
-        except Exception:
-            pass
-
-    def _set_active_pointer(self, name: str) -> None:
-        try:
-            pdf_handler.set_active_pdf(USER_FILES, name)
-        except Exception:
-            pass
-        try:
-            # Recency signal for the ＋ menu's most-recent-first ordering.
-            pdf_handler.touch_last_used(USER_FILES, name)
-        except Exception:
-            pass
-
-    def _on_sidebar_loaded(self, name: str) -> None:
-        """Sidebar loaded a PDF (from any call site): make sure a tab
-        exists for it and is selected, without re-triggering a load."""
-        if not name:
-            return
-        self._last_page.setdefault(name, 0)
-        self._syncing = True
-        try:
-            idx = self._find_tab(name)
-            if idx < 0:
-                idx = self._tabs.addTab(name)
-                self._decorate_tab(idx)
-            if self._tabs.currentIndex() != idx:
-                self._tabs.setCurrentIndex(idx)
-        finally:
-            self._syncing = False
-        self._persist()
-        self._set_active_pointer(name)
-
     @_guarded
-    def _on_tab_changed(self, idx: int) -> None:
-        if self._syncing or idx < 0:
-            return
-        name = self._tabs.tabText(idx)
-        if not name:
-            return
-        prev = getattr(self._sidebar, "_name", None)
-        if prev and prev != name:
-            self._last_page[prev] = getattr(
-                self._sidebar, "_current_page", 0
-            )
-        if self._sidebar.is_loaded(name):
-            self._set_active_pointer(name)
-            return
-        self._sidebar.load_pdf(name)
-        page = self._last_page.get(name, 0)
-        if page > 0:
-            # One tick so QPdfView finishes laying out the new document
-            # before we jump back to the remembered position.
-            QTimer.singleShot(
-                0, lambda: self._sidebar.jump_to_page(page)
-            )
-
-    def _on_tab_close(self, idx: int) -> None:
-        name = self._tabs.tabText(idx)
-        # Removing the current tab makes QTabBar select a neighbour, which
-        # fires currentChanged and loads that PDF into the viewer.
-        self._tabs.removeTab(idx)
-        self._last_page.pop(name, None)
-        self._persist()
-        if self._tabs.count() == 0:
-            try:
-                self._sidebar.clear()
-            except Exception:
-                pass
-            try:
-                pdf_handler.clear_active_pdf(USER_FILES)
-            except Exception:
-                pass
+    def _on_tab_closed(self, *_args) -> None:
+        # The reader already cleared itself; the last tab gone hides us.
+        if not self._sidebar.tabs.names():
             self.panel_hide()
-
-    def close_tab(self, name: str) -> None:
-        idx = self._find_tab(name)
-        if idx >= 0:
-            self._on_tab_close(idx)
-
-    # ---- ＋ menu / placement ----
-
-    @_guarded
-    def _show_add_menu(self, *_args) -> None:
-        # *_args for the same reason as panel_hide: ＋ is a `clicked`
-        # button and @_guarded's wrapper accepts every signal argument.
-        menu = QMenu(self)
-        open_names = set(self._tab_names())
-        stored: list[str] = []
-        # Most recently used first (pdf_handler.list_by_recency ranks by
-        # last_used, falling back to contexts/<safe>.txt mtime — ingest
-        # time — rather than pdfs/<safe>.pdf's mtime, which shutil.copy2
-        # preserves from the source file).
-        for base in pdf_handler.list_by_recency(USER_FILES):
-            if base in open_names:
-                continue
-            if pdf_handler.pdf_path_for(USER_FILES, base):
-                stored.append(base)
-        # No cap. This menu is the only way to open a stored PDF in the
-        # editor's viewer, so truncating it would strand every PDF past
-        # the cut with no route in. (The deck screen used to carry a
-        # top-20 curate-from-recent menu, the shortcut this was
-        # contrasted against; K-146 removed it and the Library is the
-        # full path now.) QMenu scrolls natively when it overflows.
-        for base in stored:
-            act = menu.addAction(_pdf_display_name(base))
-            act.triggered.connect(
-                lambda _=False, b=base: self._sidebar.load_pdf(b)
-            )
-        if not stored:
-            # The editor deliberately has no way to ADD a PDF (K-056) —
-            # only the Library window's drop zone imports new ones.
-            hint = menu.addAction(
-                "Every Library PDF is already open"
-                if open_names
-                else "No PDFs in your Library yet"
-            )
-            hint.setEnabled(False)
-        menu.exec(
-            self._add_btn.mapToGlobal(self._add_btn.rect().bottomLeft())
-        )
-        menu.deleteLater()  # its actions already fired inside exec()
 
 
 def on_editor_did_init(editor: Editor) -> None:

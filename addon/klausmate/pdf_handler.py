@@ -333,14 +333,23 @@ def _save_tabs_file(user_files_dir: str, updates: dict) -> None:
         pass
 
 
-def load_open_tabs(user_files_dir: str) -> list[str]:
-    """Names of PDFs that were open as viewer tabs last session, filtered
-    to contexts that still exist in the store."""
-    names = [
-        n
-        for n in _load_tabs_file(user_files_dir).get("open", [])
-        if isinstance(n, str)
-    ]
+def _tab_sets(data: dict) -> dict:
+    """``{host_key: [names]}`` from pdf_tabs.json's ``"tabs"``. The legacy
+    top-level ``"open"`` list (one tab set, before each reader had its own)
+    is the editor's until the editor has a set of its own."""
+    sets = data.get("tabs")
+    sets = dict(sets) if isinstance(sets, dict) else {}
+    legacy = data.get("open")
+    if "editor" not in sets and isinstance(legacy, list):
+        sets["editor"] = legacy
+    return sets
+
+
+def load_open_tabs(user_files_dir: str, host_key: str = "editor") -> list[str]:
+    """Names of PDFs that were open as tabs in ``host_key``'s reader last
+    session, filtered to contexts that still exist in the store."""
+    names = _tab_sets(_load_tabs_file(user_files_dir)).get(host_key)
+    names = [n for n in names if isinstance(n, str)] if isinstance(names, list) else []
     stored = {
         n[:-4] if n.endswith(".txt") else n
         for n in list_contexts(user_files_dir)
@@ -348,8 +357,20 @@ def load_open_tabs(user_files_dir: str) -> list[str]:
     return [n for n in names if n in stored]
 
 
-def save_open_tabs(user_files_dir: str, names: list[str]) -> None:
-    _save_tabs_file(user_files_dir, {"open": list(names)})
+def save_open_tabs(
+    user_files_dir: str, names: list[str], host_key: str = "editor"
+) -> None:
+    """Store ``host_key``'s tab set beside the other hosts' sets; the first
+    save moves a legacy ``"open"`` list under ``"editor"`` and drops it."""
+    data = _load_tabs_file(user_files_dir)
+    sets = _tab_sets(data)
+    sets[host_key] = list(names)
+    data.pop("open", None)
+    data["tabs"] = sets
+    try:
+        _atomic_write_json(os.path.join(user_files_dir, _OPEN_TABS_FILE), data)
+    except Exception:
+        pass
 
 
 def load_last_used(user_files_dir: str) -> dict:

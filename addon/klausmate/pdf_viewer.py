@@ -100,6 +100,8 @@ else:
 
 PDF_VIEWER_AVAILABLE = QT_PDF_AVAILABLE and QT_PDF_WIDGETS_AVAILABLE
 
+from .slot_guard import guarded as _guarded
+
 
 def _page_size_points(doc: QPdfDocument, page: int) -> QSizeF:
     try:
@@ -1020,8 +1022,8 @@ class PdfViewer(QWidget):
         """Put the page indicator in the viewer's own footer when no
         host adopted it (K-153).
 
-        Adoption IS a reparent — ``_PanelBar.__init__`` calls
-        ``row.addWidget(page_label)``, which makes the bar the label's
+        Adoption IS a reparent — ``ReaderTabs.__init__`` calls
+        ``row.addWidget(page_label)``, which makes the strip the label's
         parent — so "is it still parented to us" is the entire test, and
         it needs no cooperation from any host. Re-run on every show, so
         a host that adopts later simply takes the label back out of our
@@ -4123,6 +4125,22 @@ def cleanup_all_sidebars() -> None:
             print(f"[klausmate] sidebar cleanup sweep failed: {exc}")
 
 
+def _pdf_display_name(safe: str) -> str:
+    """Human label for a stored PDF, falling back to its safe basename.
+
+    A drive_store lookup that is safe on any failure: display names are
+    bookkeeping, and a missing or corrupt drive.json must cost a label,
+    never a menu.
+    """
+    try:
+        from . import drive_store
+        from . import USER_FILES  # type: ignore
+
+        return drive_store.display_name(USER_FILES, safe)
+    except Exception:
+        return safe
+
+
 class PdfSidebar(QWidget):
     """Right-side sidebar: one scrollable PDF document."""
 
@@ -4176,9 +4194,11 @@ class PdfSidebar(QWidget):
         # touching viewer_context, so a late count for a document this
         # sidebar has since left cannot resurrect it.
         self._pending_count_name: Optional[str] = None
-        # Set by the tab container so every load — regardless of which
-        # call site triggered it — is reflected in the tab bar.
+        # Set by a host that wants to hear every load (any call site).
         self.on_loaded: Optional[Callable[[str], None]] = None
+        # Per-tab reading position for the session (PDF reader 3/5).
+        self._syncing = False
+        self._last_page: dict[str, int] = {}
 
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -4235,6 +4255,30 @@ class PdfSidebar(QWidget):
             self._fallback_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._fallback_label.setWordWrap(True)
             outer.addWidget(self._fallback_label, 1)
+
+        # The tab strip lives in the reader (PDF reader 3/5), so every host
+        # has its own tab set, stored under its host_key. It adopts the
+        # viewer's page label. Last session's set comes back as labels
+        # only; a document loads when a tab is selected.
+        from .reader_tabs import ReaderTabs
+
+        self.tabs = ReaderTabs(
+            self, page_label=getattr(self._viewer, "_page_label", None)
+        )
+        outer.insertWidget(0, self.tabs)
+        self.tabs.activated.connect(self._on_tab_changed)
+        self.tabs.closed.connect(self._on_tab_close)
+        self.tabs.add_requested.connect(self._show_add_menu)
+        self.tabs.bar.tabMoved.connect(lambda *_: self._persist())
+        try:
+            from . import pdf_handler
+            from . import USER_FILES  # type: ignore
+
+            restored = pdf_handler.load_open_tabs(USER_FILES, self.host_key)
+        except Exception as exc:
+            print(f"[klausmate] tab restore failed: {exc}")
+            restored = []
+        self.tabs.set_tabs(restored, None)
 
     def notify_page_changed(self, page: int) -> None:
         self._on_page_changed(page)
@@ -4397,6 +4441,7 @@ class PdfSidebar(QWidget):
 
     def _notify_loaded(self, name: str) -> None:
         self._report_document()
+        self._on_sidebar_loaded(name)
         cb = self.on_loaded
         if cb is None:
             return
@@ -4610,6 +4655,8 @@ class PdfSidebar(QWidget):
         end = min(last, page + 1)
         self._current_page = max(0, min(page, last))
         self._set_active((self._name, (start, end)))
+        if self._viewer is None:  # no viewer label to adopt: ours shows it
+            self.tabs.set_page(self._current_page + 1, self._page_count)
         try:
             from . import viewer_context
 
@@ -4650,3 +4697,126 @@ class PdfSidebar(QWidget):
             viewer_context.activate(id(self))
         except Exception as exc:
             print(f"[klausmate] viewer_context: {exc}")
+
+    # ---- tabs (moved from PdfDock, PDF reader 3/5) ----
+
+    def _persist(self) -> None:
+        try:
+            from . import pdf_handler
+            from . import USER_FILES  # type: ignore
+
+            pdf_handler.save_open_tabs(USER_FILES, self.tabs.names(), self.host_key)
+        except Exception:
+            pass
+
+    def _set_active_pointer(self, name: str) -> None:
+        from . import pdf_handler
+        from . import USER_FILES  # type: ignore
+
+        # The active PDF is the editor dock's pointer (what it opens next
+        # session); another host's reader must not move it.
+        if self.host_key == "editor":
+            try:
+                pdf_handler.set_active_pdf(USER_FILES, name)
+            except Exception:
+                pass
+        try:
+            # Recency signal for the ＋ menu's most-recent-first ordering.
+            pdf_handler.touch_last_used(USER_FILES, name)
+        except Exception:
+            pass
+
+    def _on_sidebar_loaded(self, name: str) -> None:
+        """A PDF loaded (from any call site): make sure a tab exists for
+        it and is selected, without re-triggering a load."""
+        if not name:
+            return
+        self._last_page.setdefault(name, 0)
+        self._syncing = True
+        try:
+            self.tabs.open(name)
+        finally:
+            self._syncing = False
+        self._persist()
+        self._set_active_pointer(name)
+
+    @_guarded
+    def _on_tab_changed(self, name: str) -> None:
+        if self._syncing or not name:
+            return
+        prev = self._name
+        if prev and prev != name:
+            self._last_page[prev] = self._current_page
+        if self.is_loaded(name):
+            self._set_active_pointer(name)
+            return
+        self.load_pdf(name)
+        page = self._last_page.get(name, 0)
+        if page > 0:
+            # One tick so QPdfView finishes laying out the new document
+            # before we jump back to the remembered position.
+            QTimer.singleShot(
+                0, lambda: self.jump_to_page(page)
+            )
+
+    @_guarded
+    def _on_tab_close(self, name: str) -> None:
+        # The strip removed the tab first; closing the current one has
+        # already selected (and loaded) a neighbour.
+        self._last_page.pop(name, None)
+        self._persist()
+        if not self.tabs.names():
+            try:
+                self.clear()
+            except Exception:
+                pass
+            if self.host_key == "editor":
+                try:
+                    from . import pdf_handler
+                    from . import USER_FILES  # type: ignore
+
+                    pdf_handler.clear_active_pdf(USER_FILES)
+                except Exception:
+                    pass
+
+    @_guarded
+    def _show_add_menu(self, *_args) -> None:
+        # *_args: @_guarded's wrapper accepts every signal argument.
+        from . import pdf_handler
+        from . import USER_FILES  # type: ignore
+
+        menu = QMenu(self)
+        open_names = set(self.tabs.names())
+        stored: list[str] = []
+        # Most recently used first (pdf_handler.list_by_recency ranks by
+        # last_used, falling back to contexts/<safe>.txt mtime — ingest
+        # time — rather than pdfs/<safe>.pdf's mtime, which shutil.copy2
+        # preserves from the source file).
+        for base in pdf_handler.list_by_recency(USER_FILES):
+            if base in open_names:
+                continue
+            if pdf_handler.pdf_path_for(USER_FILES, base):
+                stored.append(base)
+        # No cap. This menu is the only way to open a stored PDF in the
+        # editor's viewer, so truncating it would strand every PDF past
+        # the cut with no route in. (The deck screen used to carry a
+        # top-20 curate-from-recent menu, the shortcut this was
+        # contrasted against; K-146 removed it and the Library is the
+        # full path now.) QMenu scrolls natively when it overflows.
+        for base in stored:
+            act = menu.addAction(_pdf_display_name(base))
+            act.triggered.connect(
+                lambda _=False, b=base: self.load_pdf(b)
+            )
+        if not stored:
+            # The editor deliberately has no way to ADD a PDF (K-056) —
+            # only the Library window's drop zone imports new ones.
+            hint = menu.addAction(
+                "Every Library PDF is already open"
+                if open_names
+                else "No PDFs in your Library yet"
+            )
+            hint.setEnabled(False)
+        add_btn = self.tabs.add_btn
+        menu.exec(add_btn.mapToGlobal(add_btn.rect().bottomLeft()))
+        menu.deleteLater()  # its actions already fired inside exec()

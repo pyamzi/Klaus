@@ -103,6 +103,7 @@ K = exec_klausmate_under_qt(_scratch)
 # check() genuinely still passes — report() prints 0 failed — right up
 # until the interpreter crashes on the way out, after main() returns).
 _all_docks: list = []
+_rt = importlib.import_module("klausmate.reader_tabs")
 
 # load_open_tabs filters the stored tab set against contexts/ — a name
 # with no ingested text is not in the store and never comes back as a tab.
@@ -114,10 +115,17 @@ for _name in ("stored.pdf", "lecture.pdf", "a.pdf", "b.pdf"):
 
 
 class _FakeSidebar(_QtW.QWidget):
-    """What PdfDock reads off PdfSidebar, nothing else."""
+    """What PdfDock reads off PdfSidebar, nothing else. Its ``tabs`` is a
+    real ReaderTabs strip; a load opens a tab and closing the last one
+    clears the reader, as PdfSidebar does (tests/test_reader_tabs.py pins
+    that half)."""
 
     def __init__(self):
         super().__init__(None)
+        self.tabs = _rt.ReaderTabs(self)
+        self.tabs.closed.connect(
+            lambda _n: None if self.tabs.names() else self.clear())
+        self.picker_shown = 0
         self._viewer = None
         self._name = None
         self._current_page = 0
@@ -132,8 +140,12 @@ class _FakeSidebar(_QtW.QWidget):
     def load_pdf(self, name):
         self.loaded.append(name)
         self._name = name
+        self.tabs.open(name)
         if self.on_loaded:
             self.on_loaded(name)
+
+    def _show_add_menu(self, *_a):
+        self.picker_shown += 1
 
     def clear(self):
         self._name = None
@@ -166,10 +178,10 @@ def _dock(placement=None, geom=None, tabs=()):
     # (the panel really does restore both from disk).
     K.pdf_handler.save_panel_state(_scratch, placement=placement or "right",
                                    geom=geom)
-    K.pdf_handler.save_open_tabs(_scratch, list(tabs))
     K.pdf_handler.clear_active_pdf(_scratch)
     win, editor = _host()
     sb = _FakeSidebar()
+    sb.tabs.set_tabs(list(tabs), None)  # what PdfSidebar restores
     d = K.PdfDock(editor, sb, win)
     editor._klausmate_pdf_tabs = d
     editor._klausmate_sidebar = sb
@@ -182,10 +194,9 @@ def _dock(placement=None, geom=None, tabs=()):
 
 section("construction: a QDockWidget of the host, hidden, bar as title")
 win, editor, sb, d = _dock("right", tabs=["stored.pdf"])
-check("last session's tab set comes back as LABELS — no document is "
-      "loaded until a tab is selected or the panel shown",
-      d._tabs.count() == 1 and d._tabs.tabText(0) == "stored.pdf"
-      and sb.loaded == [])
+check("building the dock loads nothing — a restored tab is a label "
+      "until it is selected or the panel shown",
+      sb.tabs.names() == ["stored.pdf"] and sb.loaded == [])
 win, editor, sb, d = _dock("right")
 check("PdfDock is a QDockWidget whose parent is the host window",
       isinstance(d, _QtW.QDockWidget) and d.parent() is win)
@@ -201,6 +212,10 @@ check("movable, floatable, closable — Qt's own drag, float and hide",
                        | F.DockWidgetClosable))
 check("the bar is the title-bar widget and the sidebar is the dock's widget",
       d.titleBarWidget() is d._bar and d.widget() is sb)
+check("the tabs live in the reader, not the title bar (PDF reader 3/5): "
+      "the bar keeps thumbnails, float and hide only",
+      not hasattr(d._bar, "tabs") and not hasattr(d._bar, "add_btn")
+      and sb.tabs.parent() is sb)
 check("hidden until panel_show — a hidden dock takes no space",
       not d.isVisible())
 check("dock nesting is enabled on the host so the panel can sit beside "
@@ -258,7 +273,7 @@ for old, new in (("notes-left", "left"), ("above", "bottom"),
     win, editor, sb, d = _dock(old)
     check(f"stored {old!r} reads as {new!r}", d._placement == new, d._placement)
 
-section("the title-bar contract: empty bar ignores, tabs accept")
+section("the title-bar contract: the empty bar ignores presses")
 win, editor, sb, d = _dock("right")
 d.panel_show()
 _app.processEvents()
@@ -306,43 +321,23 @@ _app.sendEvent(d, _QtG.QMouseEvent(  # end the move Qt just started
     _QtC.QEvent.Type.MouseButtonRelease, _empty,
     _QtC.Qt.MouseButton.LeftButton, _QtC.Qt.MouseButton.NoButton,
     _QtC.Qt.KeyboardModifier.NoModifier))
-# F1 (review round 1): a single short tab name left 96px of drag strip;
-# two tabs already saturated the bar down to a measured 4px gap, and a
-# real panel routinely carries several open lecture PDFs with long names.
-# Pin the strip at a SATURATED bar, not the one-tab best case.
-_LECTURE_NAMES = (
-    "Lecture 12 - Introduction to Quantum Field Theory and Renormalization.pdf",
-    "Week 03 - Cardiovascular Physiology and Pathophysiology Overview.pdf",
-    "CS 6820 Advanced Algorithms - Network Flow and Linear Programming.pdf",
-    "Organic Chemistry II - Reaction Mechanisms and Stereochemistry Review.pdf",
-)
-for _name in _LECTURE_NAMES:
+# F1 (review round 1) pinned a >= 60px drag strip beside a saturated tab
+# bar. The tabs left the bar (PDF reader 3/5), so the strip is now the bar
+# between ◫ and ⧉, however many PDFs are open.
+for _name in ("Lecture 12 - Introduction to Quantum Field Theory.pdf",
+              "Week 03 - Cardiovascular Physiology Overview.pdf",
+              "CS 6820 Advanced Algorithms - Network Flow.pdf",
+              "Organic Chemistry II - Reaction Mechanisms Review.pdf"):
     sb.load_pdf(_name)
 _app.processEvents()
-check("four open PDFs saturate the tab bar — the failure mode a real "
-      "session hits, not a one-tab best case",
-      bar.tabs.count() == 4, f"count={bar.tabs.count()}")
-r = bar.tabs.tabRect(0)
+_strip = bar.float_btn.x() - (bar.thumbs_btn.x() + bar.thumbs_btn.width())
+check("with four PDFs open the bar keeps a wide drag strip (>= 60px)",
+      sb.tabs.names() and _strip >= 60, f"strip={_strip}")
 _spy.hits = 0
-ev2 = _press(bar.tabs, r.center())
-_app.sendEvent(bar.tabs, ev2)
-check("a press on a tab IS accepted by the tab bar — select and reorder "
-      "stay the tab bar's",
-      ev2.isAccepted())
-check("...and never reaches the dock, so dragging a tab reorders tabs "
-      "instead of moving the panel",
-      _spy.hits == 0, f"hits={_spy.hits}")
-_strip = bar.float_btn.x() - (bar.tabs.x() + bar.tabs.width())
-check("a drag strip still survives between the saturated tab bar and the "
-      "float button (>= 60px) — the resizeEvent cap on the tab bar, not "
-      "just the trailing stretch, is what keeps this space alive",
-      _strip >= 60, f"strip={_strip}")
-_spy.hits = 0
-_mid = _QtC.QPointF(bar.tabs.x() + bar.tabs.width() + _strip / 2,
+_mid = _QtC.QPointF(bar.thumbs_btn.x() + bar.thumbs_btn.width() + _strip / 2,
                     bar.height() / 2)
 _app.sendEvent(bar, _press(bar, _mid))
-check("...and a press in the middle of that free strip still reaches the "
-      "QDockWidget, same as the empty-bar case above",
+check("...and a press in the middle of that strip reaches the QDockWidget",
       _spy.hits == 1, f"hits={_spy.hits}")
 _app.sendEvent(d, _QtG.QMouseEvent(  # end the move Qt just started
     _QtC.QEvent.Type.MouseButtonRelease, _mid,
@@ -362,44 +357,6 @@ _app.processEvents()
 check("float button toggles floating", d.isFloating())
 
 
-class _FakeAction:
-    def __init__(self, text):
-        self.text = text
-        self.triggered = types.SimpleNamespace(connect=lambda *_: None)
-
-    def setEnabled(self, on):
-        pass
-
-
-class _FakeMenu:
-    """QMenu with a recording exec(). The real one opens a nested loop
-    with nobody to close it headlessly."""
-
-    shown = []
-
-    def __init__(self, *_a):
-        self.items = []
-
-    def addAction(self, text):
-        act = _FakeAction(text)
-        self.items.append(text)
-        return act
-
-    def exec(self, *_a):
-        _FakeMenu.shown.append(self.items)
-
-
-_real_menu, K.QMenu = K.QMenu, _FakeMenu
-try:
-    bar.add_btn.click()
-    _app.processEvents()
-finally:
-    K.QMenu = _real_menu
-check("＋ actually REACHES _show_add_menu — a @_guarded zero-arg slot on "
-      "`clicked` raises into its own guard and silently never runs, which "
-      "is what kept this button dead",
-      len(_FakeMenu.shown) == 1, str(_FakeMenu.shown))
-
 section("tabs and the library button keep their behaviour")
 win, editor, sb, d = _dock("right", tabs=["a.pdf"])
 K._on_library_button(editor)
@@ -414,28 +371,26 @@ check("visible → the library button hides it", not d.isVisible())
 # so the call is observed, not run. (QMenu.exec is the one exec() the
 # conventions allow; it is not a dialog.)
 _win0, _ed0, _sb0, _d0 = _dock("right")
-_popped = []
-_d0._show_add_menu = lambda: _popped.append(True)
 K._on_library_button(_ed0)
 _app.processEvents()
-check("no tabs → showing the panel pops the stored-PDF picker, the only "
-      "route into the library from the editor",
-      _d0.isVisible() and _popped == [True])
+check("no tabs → showing the panel pops the reader's stored-PDF picker, "
+      "the only route into the library from the editor",
+      _d0.isVisible() and _sb0.picker_shown == 1, f"{_sb0.picker_shown}")
 
 d.panel_show()
 sb.load_pdf("a.pdf")
 sb.load_pdf("b.pdf")
 _app.processEvents()
-check("a loaded PDF gets a tab, selected, persisted",
-      d._tabs.count() == 2 and d._tabs.tabText(d._tabs.currentIndex()) == "b.pdf"
-      and K.pdf_handler.load_open_tabs(_scratch) == ["a.pdf", "b.pdf"],
-      f"{[d._tabs.tabText(i) for i in range(d._tabs.count())]} "
-      f"{K.pdf_handler.load_open_tabs(_scratch)}")
-d.close_tab("b.pdf")
-d.close_tab("a.pdf")
+check("a loaded PDF gets a tab in the reader, selected",
+      sb.tabs.names() == ["a.pdf", "b.pdf"] and sb.tabs.current() == "b.pdf",
+      str(sb.tabs.names()))
+sb.tabs.close("b.pdf")
+_app.processEvents()
+check("closing a tab while others remain keeps the panel up", d.isVisible())
+sb.tabs.close("a.pdf")
 _app.processEvents()
 check("closing the last tab hides the panel",
-      d._tabs.count() == 0 and not d.isVisible())
+      sb.tabs.names() == [] and not d.isVisible())
 
 section("a host that takes no docks gets no panel, not a broken one")
 # Edit Current is a QDialog: addDockWidget does not exist on it, and a
@@ -484,7 +439,9 @@ _src = open(_os.path.join(
 for name in ("NOTES_PLACEMENTS", "_ZONE_CAPTIONS", "_defer_placement",
              "startSystemMove", "_tear_off", "_make_floating", "_ensure_vsplit",
              "_ensure_notes_split", "_wrap_pane", "_dock_into", "_drag_tick",
-             "_load_browse_placement", "_PdfTabContainer"):
+             "_load_browse_placement", "_PdfTabContainer",
+             # PDF reader 3/5: the tabs moved into the reader.
+             "_decorate_tab", "_on_tab_changed", "load_open_tabs"):
     check(f"{name} no longer appears in __init__.py", name not in _src)
 
 section("cleanup: every dock/window this file opened is torn down before "
