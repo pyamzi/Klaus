@@ -2741,4 +2741,17 @@ with open(pv.__file__, encoding="utf-8") as _fh:
 check("no 'switch off the pdf.js viewer' copy (PDF reader 5/5 deleted the switch)",
       "switch off the pdf.js" not in _PY_SRC and "The PDF viewer could not start." in _PY_SRC)
 
+section("Round 4: the first-page timing bridge never raises in its slot")
+_fp = pv.PdfJsViewer.__new__(pv.PdfJsViewer)
+_fp._name = "Doc"
+_fp_errors = []
+for _payload in ("812", "abc", "", "9" * 400, "1e999", "-5"):
+    try:
+        _fp._bridge_firstpage(_payload)
+    except Exception as _exc:  # noqa: BLE001
+        _fp_errors.append((_payload[:12], type(_exc).__name__))
+check("malformed or huge payloads are ignored, not raised", _fp_errors == [], str(_fp_errors))
+check("it goes through the shared number guard",
+      "_finite(" in __import__("inspect").getsource(pv.PdfJsViewer._bridge_firstpage))
+
 raise SystemExit(report())

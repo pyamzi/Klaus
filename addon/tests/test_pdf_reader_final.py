@@ -303,4 +303,68 @@ check("...with no pristine re-capture", captures == [], str(captures))
 check("...the Klaus mark once, every page kept", counts(AGAIN) == (1, 0, 3), str(counts(AGAIN)))
 ph._capture_pristine_stripped = _real_cap
 
+section("Round 4 (R56): an unreadable marks file is never baked or written over")
+BAD = setup("Unreadable")
+_bad_json = ph.annotations_path_for(UF, "Unreadable")
+with open(_bad_json, "w") as _f:
+    _f.write('{"highlights": [half a sync')
+with open(BAD, "rb") as _f:
+    _pdf_before = _f.read()
+check("the bake skips it", ph.bake_annotations(UF, "Unreadable") is False)
+with open(BAD, "rb") as _f:
+    check("...and leaves the PDF unchanged (no un-bake)", _f.read() == _pdf_before)
+
+
+def _json_bytes():
+    with open(_bad_json, "rb") as _f:
+        return _f.read()
+
+
+_json_before = _json_bytes()
+check("save_annotations refuses to write over it", ph.save_annotations(UF, "Unreadable", []) is False
+      and _json_bytes() == _json_before)
+ph._update_doc_keys(UF, "Unreadable", {"baked_native_ids": []})
+ph.add_suppressed(UF, "Unreadable", {"id": "x", "page": 0, "rects": [[1, 1, 1, 1]]})
+check("a doc-key update (ledger, tombstone) leaves it alone", _json_bytes() == _json_before)
+_scan = {"foreign": [{"kind": "highlight", "page": 0, "rects": [[10.0, 10.0, 50.0, 12.0]],
+                      "note": "", "color": "#00ff00"}], "marked_ids": set(), "stat": None}
+check("the outside-mark mirror writes nothing over it",
+      ph.mirror_foreign_annotations(UF, "Unreadable", _scan) == 0 and _json_bytes() == _json_before)
+check("doc-key updates write through a tmp file and a rename",
+      "_atomic_write_json(" in __import__("inspect").getsource(ph._update_doc_keys))
+
+section("Round 4: a stored number too big for a float skips its one record, nothing more")
+import json as _json  # noqa: E402
+
+_good = {"id": "g", "page": 0, "rects": [[1.0, 2.0, 3.0, 4.0]], "color": "#fadc50", "note": ""}
+_oj = ph.annotations_path_for(UF, "Overflow")
+# A bad rect makes the record unusable: it alone is skipped. A bad text
+# size is dropped from its record (the existing rule for NaN/negative
+# sizes), so that record keeps its text and falls back to the default size.
+for _label, _bad, _want in (
+        ("a rect", dict(_good, id="b", rects=[[10**400, 2, 3, 4]]), [("g", None)]),
+        ("a text size", dict(_good, id="b", kind="text", text="t", size=10**400), [("g", None), ("b", None)])):
+    with open(_oj, "w") as _f:
+        _f.write(_json.dumps({"highlights": [_good, _bad]}))
+    for _fn in ("load_annotations", "load_annotations_strict"):
+        try:
+            _got = [(h.get("id"), h.get("size")) for h in getattr(ph, _fn)(UF, "Overflow")]
+        except Exception as _exc:  # noqa: BLE001
+            _got = type(_exc).__name__
+        check(f"{_fn}: 10**400 in {_label} costs only that value, never the whole load", _got == _want, str(_got))
+_tabs = os.path.join(UF, "pdf_tabs.json")
+with open(_tabs, "w") as _f:
+    _f.write(_json.dumps({"last_used": {"a": 1.0, "b": 10**400}}))
+try:
+    _lu = ph.load_last_used(UF)
+except Exception as _exc:  # noqa: BLE001
+    _lu = type(_exc).__name__
+check("load_last_used skips the one huge stamp", _lu == {"a": 1.0}, str(_lu))
+os.remove(_tabs)
+try:
+    _pt = ph.text_point_size(10**400)
+except Exception as _exc:  # noqa: BLE001
+    _pt = type(_exc).__name__
+check("text_point_size falls back for a huge int", _pt == float(ph.TEXT_SIZE_FALLBACK), str(_pt))
+
 raise SystemExit(report())

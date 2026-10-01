@@ -609,6 +609,7 @@ with open(_lj, "w") as _f:
     _f.write("{not json")
 check("load_annotations_strict: unreadable is None", _strict(UF, "Lock") is None)
 check("...a missing file is empty", _strict(UF, "NoSuchDoc") == [])
+os.remove(_lj)  # save_annotations never writes over an unreadable file (R56)
 ph.save_annotations(UF, "Lock", [])
 check("...a good file is its marks", _strict(UF, "Lock") == [])
 rl = reader_of("Lock")
@@ -647,6 +648,39 @@ mark(rf, 0)
 os.rmdir(_fj)
 pj.tooltip = lambda *a, **k: None
 check("the failure toasts the kept-and-will-retry copy", asv.SAVE_FAILED_COPY in _tips4, str(_tips4))
+
+section("a PDF whose marks file is unreadable at open never has it written over (R56)")
+_tips5 = []
+pj.tooltip = lambda text, *a, **k: _tips5.append(text)
+_cj = ph.annotations_path_for(UF, "Corrupt")
+os.makedirs(os.path.dirname(_cj), exist_ok=True)
+with open(_cj, "w") as _f:
+    _f.write('{"highlights": [half')
+with open(_cj, "rb") as _f:
+    _cbytes = _f.read()
+ro = REAL_JS.__new__(REAL_JS)
+ro._web, ro._page_loaded, ro._unsub_save = Web(), True, None
+ro._start_foreign_mirror = lambda name: None
+REAL_JS.load_annotations(ro, "Corrupt")
+check("the reader opens with nothing to show", ro._highlights == [], str(ro._highlights))
+check("...and says so once", _tips5 == [asv.SAVE_FAILED_COPY], str(_tips5))
+PIPE.requests.clear()
+mark(ro, 0)
+mark(ro, 1)
+with open(_cj, "rb") as _f:
+    check("marks made meanwhile never overwrite the unreadable file", _f.read() == _cbytes)
+check("...they stay in memory", sorted(h.get("page") for h in ro._highlights) == [0, 1], str(ro._highlights))
+check("...no bake is requested and no further toast", PIPE.requests == []
+      and _tips5.count(asv.SAVE_FAILED_COPY) == 1, f"{PIPE.requests} {_tips5}")
+_old = dict(MARK, id="old1", page=5, note="")
+with open(_cj, "w") as _f:  # the sync client finishes: the file is whole again
+    json.dump({"version": 1, "highlights": [_old]}, _f)
+mark(ro, 2)
+check("once it reads again, its marks and the ones made meanwhile are all kept",
+      sorted(h.get("page") for h in ph.load_annotations(UF, "Corrupt")) == [0, 1, 2, 5],
+      str(ph.load_annotations(UF, "Corrupt")))
+check("...and the bake is requested", PIPE.requests == ["Corrupt"], str(PIPE.requests))
+pj.tooltip = lambda *a, **k: None
 
 section("two readers in one host keep their own registration (R36)")
 e1, e2 = rp.PdfSidebar(None), rp.PdfSidebar(None)

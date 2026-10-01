@@ -377,4 +377,24 @@ timers.fire_all()
 pipe.flush("A")
 check("unsubscribed callback not called", seen == [])
 
+section("Round 4 (R56): the worker pins its own write before anything else sees it")
+SEQ = []
+bake = Bake()
+_q = []
+pipe = asv.SavePipeline(tempfile.mkdtemp(), _q.append, Timers(), lambda n, st: SEQ.append(("pin", n, st)))
+_real_rs = ph.record_stat
+ph.record_stat = lambda d, n, s: SEQ.append(("record_stat", n, s))
+ph.bake_annotations = bake
+pipe.request("A")
+pipe._fire("A", pipe._gen["A"])
+check("the bake finished", wait_for(lambda: "A" not in pipe._running))
+check("pinned on the worker, before the main-thread post-step runs", ("pin", "A", STAT) in SEQ and _q != [],
+      f"{SEQ} {len(_q)}")
+check("...and before the stat is recorded",
+      SEQ[:2] == [("pin", "A", STAT), ("record_stat", "A", STAT)], str(SEQ))
+for cb in list(_q):
+    cb()
+check("the post-step does not pin a second time", SEQ.count(("pin", "A", STAT)) == 1, str(SEQ))
+ph.record_stat = _real_rs
+
 raise SystemExit(report())

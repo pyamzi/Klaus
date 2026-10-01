@@ -388,11 +388,21 @@ def load_last_used(user_files_dir: str) -> dict:
     return {
         k: float(v)
         for k, v in data.items()
-        if isinstance(k, str)
-        and isinstance(v, (int, float))
-        and not isinstance(v, bool)
-        and math.isfinite(v)
+        if isinstance(k, str) and _finite_number(v)
     }
+
+
+def _finite_number(v) -> bool:
+    """A real, finite int or float from stored JSON (bools rejected). A
+    hand-edited int too big for a float (``10**400``) is not one:
+    ``math.isfinite`` raises OverflowError on it, which used to fail the
+    whole load instead of the one value."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return False
+    try:
+        return math.isfinite(v)
+    except OverflowError:
+        return False
 
 
 def touch_last_used(user_files_dir: str, name: str) -> None:
@@ -1512,12 +1522,7 @@ def _validate_highlight(entry) -> dict | None:
         if (
             isinstance(r, (list, tuple))
             and len(r) == 4
-            and all(
-                isinstance(v, (int, float))
-                and not isinstance(v, bool)
-                and math.isfinite(v)
-                for v in r
-            )
+            and all(_finite_number(v) for v in r)
             and float(r[2]) >= 0.0
             and float(r[3]) >= 0.0
         ):
@@ -1545,12 +1550,7 @@ def _validate_highlight(entry) -> dict | None:
         out["kind"] = "text"
         out["text"] = text if isinstance(text, str) else ""
         size = entry.get("size")
-        if (
-            isinstance(size, (int, float))
-            and not isinstance(size, bool)
-            and math.isfinite(size)
-            and size > 0
-        ):
+        if _finite_number(size) and size > 0:
             out["size"] = float(size)
     origin = entry.get("origin")
     if isinstance(origin, str) and origin:
@@ -1604,16 +1604,26 @@ def load_annotations_strict(user_files_dir: str, name: str) -> list[dict] | None
 
 def _load_annotation_doc(user_files_dir: str, name: str) -> dict:
     """The whole annotations json as a dict (K-081) — highlights plus
-    any other top-level keys (suppressed_external tombstones)."""
+    any other top-level keys (suppressed_external tombstones). For
+    reads; an unreadable file reads as an empty doc."""
+    doc = _load_annotation_doc_strict(user_files_dir, name)
+    return {"version": 1, "highlights": []} if doc is None else doc
+
+
+def _load_annotation_doc_strict(user_files_dir: str, name: str) -> dict | None:
+    """The annotations doc for a read-modify-write: a fresh doc when the
+    file is missing, None when it exists but cannot be read or is not a
+    dict — every writer then leaves it alone rather than replace the
+    marks it holds with an empty or partial set."""
     path = annotations_path_for(user_files_dir, name)
+    if not os.path.isfile(path):
+        return {"version": 1, "highlights": []}
     try:
         with open(path, encoding="utf-8") as f:
             doc = json.load(f)
-        if isinstance(doc, dict):
-            return doc
     except (OSError, ValueError):
-        pass
-    return {"version": 1, "highlights": []}
+        return None
+    return doc if isinstance(doc, dict) else None
 
 
 def save_annotations(
@@ -1630,7 +1640,10 @@ def save_annotations(
     """
     path = annotations_path_for(user_files_dir, name)
     try:
-        doc = _load_annotation_doc(user_files_dir, name)
+        doc = _load_annotation_doc_strict(user_files_dir, name)
+        if doc is None:
+            print(f"[klausmate] annotations unreadable, not written over: {path}")
+            return False
         doc["version"] = 1
         doc["highlights"] = list(highlights or [])
         _atomic_write_json(path, doc)  # a failed write never truncates the marks
@@ -1653,13 +1666,15 @@ def load_suppressed(user_files_dir: str, name: str) -> list[dict]:
 
 def _update_doc_keys(user_files_dir: str, name: str, updates: dict) -> None:
     """Read-modify-write of top-level annotation-doc keys. Main-thread
-    only, like every other json write here."""
-    doc = _load_annotation_doc(user_files_dir, name)
-    doc.update(updates)
+    only, like every other json write here. An unreadable doc is left
+    alone; the write is atomic."""
+    doc = _load_annotation_doc_strict(user_files_dir, name)
     path = annotations_path_for(user_files_dir, name)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(doc, f)
+    if doc is None:
+        print(f"[klausmate] annotations unreadable, keys not written: {path}")
+        return
+    doc.update(updates)
+    _atomic_write_json(path, doc)
 
 
 def add_suppressed(user_files_dir: str, name: str, record: dict) -> None:
@@ -1907,7 +1922,7 @@ def text_point_size(size) -> float:
     """
     try:
         pt = float(size)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # 10**400 is valid JSON
         return float(TEXT_SIZE_FALLBACK)
     if not math.isfinite(pt) or pt <= 0:
         return float(TEXT_SIZE_FALLBACK)
@@ -1951,7 +1966,12 @@ def bake_annotations(
         working = _working_pdf_path(user_files_dir, name)
         had_working = os.path.isfile(working)
         pristine = os.path.join(_originals_dir(user_files_dir), base + ".pdf")
-        highlights = load_annotations(user_files_dir, name)
+        highlights = load_annotations_strict(user_files_dir, name)
+        if highlights is None:
+            # Unreadable marks are not "no marks": an un-bake now would
+            # strip every Klaus mark from the file. Leave it; retried.
+            print(f"[klausmate] bake skipped: {base}'s marks file is unreadable")
+            return False
 
         # An outside save doc_sync has not reported yet, or one that landed
         # mid-bake (the _MovedIn pass): the working file is neither what
@@ -2709,7 +2729,9 @@ def _mirror_core(
     are dropped (Preview-side deletes propagate, K-082) — unless their
     id is in ``marked_ids`` (legacy K-077 adopted copies live in the
     file Klaus-marked)."""
-    records = load_annotations(user_files_dir, name)
+    records = load_annotations_strict(user_files_dir, name)
+    if records is None:  # unreadable: never write the outside marks over it
+        return 0
     changes = 0
     # Self-heal (K-081): overlapping EXTERNAL records of the same kind
     # on the same page are generations of one outside annotation —

@@ -620,8 +620,16 @@ same reason.
   (an outside save doc_sync has not reported yet, or one landing
   mid-bake) drops the stale pristine first; the same stat is the carry
   scan's baseline, so a save landing after the check re-bakes. The
-  worker records each bake's stat itself, so the next bake in its
-  "again" loop sees Klaus's own write. `forget(name)` (`pdf_drive.delete_pdf`, before the readers let
+  worker pins (`doc_sync`) and then records each bake's stat itself, so
+  doc_sync never reads Klaus's own write as `changed` and the next bake
+  in its "again" loop sees it as Klaus's. An UNREADABLE marks file is
+  never written over: `save_annotations`, `_update_doc_keys` (atomic
+  too) and the outside-mark mirror leave it alone, the bake skips it
+  (no un-bake), and a viewer that opens one shows no marks, toasts
+  `SAVE_FAILED_COPY` once, keeps new marks in memory and merges them in
+  when the file reads again. A stored number too big for a float
+  (`10**400`) costs only its own value (`_finite_number`), never the
+  whole load. `forget(name)` (`pdf_drive.delete_pdf`, before the readers let
   go) drops a deleted PDF's pending save and failed flag.
 - `reader_tabs.py`: `ReaderTabs`, the reader's tab strip (`[＋] [tabs]
   … [page n/m]`), one per `PdfSidebar` (its `tabs` attribute). It only

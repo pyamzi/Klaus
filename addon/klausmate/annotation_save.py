@@ -169,9 +169,15 @@ class SavePipeline:
         if ok:
             stat = rep.get("stat")
             if stat is not None:
-                # Recorded here, not in the main-thread post-step: a bake
-                # the worker runs next ("again") must see Klaus's own write
-                # as its own, or it drops a good pristine.
+                # Pinned and recorded here, not in the main-thread
+                # post-step: doc_sync must classify Klaus's own write as
+                # "own" from the moment it lands, and a bake the worker
+                # runs next ("again") must see it as its own, or it drops
+                # a good pristine. Pin first: recording can be slow.
+                try:
+                    self._pin(name, stat)
+                except Exception as exc:
+                    print(f"[klausmate] pin failed for {name}: {exc}")
                 try:
                     pdf_handler.record_stat(self._ufd, name, stat)
                 except Exception as exc:
@@ -199,18 +205,14 @@ class SavePipeline:
                 self._emit("failed", name)
 
     def _post(self, name: str, rep: dict) -> None:
-        """Main thread, per successful bake: pin the fingerprint of the file
-        WE wrote (so the watcher never reads it as external), record it,
-        drop records for marks the bake omitted as externally deleted (K-085
-        resurrection race), then the native-baked ledger."""
+        """Main thread, per successful bake (the worker already pinned and
+        recorded the fingerprint of the file WE wrote): drop records for
+        marks the bake omitted as externally deleted (K-085 resurrection
+        race), then the native-baked ledger."""
         from . import pdf_handler as ph
 
-        stat = rep.get("stat")
-        if stat is not None:  # no stat: never overwrite a good fingerprint
-            try:
-                self._pin(name, stat)  # library_stats was recorded on the worker
-            except Exception as exc:
-                print(f"[klausmate] pin failed for {name}: {exc}")
+        # The fingerprint was pinned and recorded on the worker (no stat:
+        # nothing pinned, so a good fingerprint is never overwritten).
         omitted = rep.get("omitted_native") or []
         removed = 0
         if omitted:

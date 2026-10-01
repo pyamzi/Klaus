@@ -134,6 +134,7 @@ section(f"{label}: a save is one JSON write + one pipeline request")
 
 
 class Fake:
+    _save_failed = _unreadable = False  # the viewer's class defaults
     _save_annotations = cls._save_annotations
     _schedule_bake = cls._schedule_bake
 

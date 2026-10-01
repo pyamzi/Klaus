@@ -1304,7 +1304,14 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             src.close()
 
     def _bridge_firstpage(self, payload: str) -> None:
-        print(f"[klausmate] pdfjs first page {self._name} {int(payload)} ms")
+        # Untrusted page text: a malformed or huge number is ignored, never
+        # raised inside this slot (an unhandled slot exception aborts Anki).
+        try:
+            ms = _finite(int(payload))
+        except (TypeError, ValueError):
+            ms = None
+        if ms is not None:
+            print(f"[klausmate] pdfjs first page {self._name} {int(ms)} ms")
 
     def _bridge_log(self, payload: str) -> None:
         print(f"[klausmate] pdfjs: {payload}")
@@ -1648,12 +1655,17 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
     # True while the last JSON write failed: memory holds marks the JSON
     # lacks, so _sync_marks must not replace them (the next save retries).
     _save_failed = False
+    # True while the marks file has been unreadable since this document
+    # opened: memory holds only the marks made since, so nothing is
+    # written until the file reads again, and then the two are merged.
+    _unreadable = False
 
     def _sync_marks(self) -> None:
         """Before a mutation: take the marks JSON as it is now, so a mark
         another reader of this PDF saved since is kept, not overwritten
-        by this viewer's older list."""
-        if self._annotations_name is None or self._save_failed:
+        by this viewer's older list. A file that was unreadable at open
+        and reads again is merged with the marks made meanwhile."""
+        if self._annotations_name is None or (self._save_failed and not self._unreadable):
             return
         try:
             from . import pdf_handler, settings
@@ -1661,16 +1673,26 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             fresh = pdf_handler.load_annotations_strict(
                 settings.user_files(), self._annotations_name
             )
-            if fresh is not None:  # unreadable is not "no marks": keep ours
-                self._highlights = fresh
+            if fresh is None:  # unreadable is not "no marks": keep ours
+                return
+            if self._unreadable:
+                have = {str(h.get("id")) for h in fresh}
+                fresh = fresh + [h for h in self._highlights if str(h.get("id")) not in have]
+                self._unreadable = False
+            self._highlights = fresh
         except Exception as exc:
             print(f"[klausmate] pdfjs marks re-read failed: {exc}")
 
     def _save_annotations(self) -> None:
         """Synchronous write-through, then the shared save pipeline. A
-        failed write keeps the marks in memory and requests no bake."""
+        failed write keeps the marks in memory and requests no bake. An
+        unreadable marks file is never written over (said once, at open)."""
         if self._annotations_name is None:
             return
+        if self._unreadable:
+            self._sync_marks()
+            if self._unreadable:
+                return
         try:
             from . import settings
             from . import pdf_handler
@@ -1817,12 +1839,23 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
     def load_annotations(self, name: str) -> None:
         """Load the shared annotations JSON and push it to the page."""
         self._annotations_name = name
-        self._save_failed = False
+        self._save_failed = self._unreadable = False
         try:
             from . import settings
             from . import pdf_handler
 
-            self._highlights = pdf_handler.load_annotations(settings.user_files(), name)
+            recs = pdf_handler.load_annotations_strict(settings.user_files(), name)
+            if recs is None:
+                # Unreadable (a sync client mid-write, a corrupt file): open
+                # with nothing shown, write nothing over it, say so once.
+                self._highlights = []
+                self._unreadable = self._save_failed = True
+                if tooltip is not None:
+                    from . import annotation_save
+
+                    tooltip(annotation_save.SAVE_FAILED_COPY)
+            else:
+                self._highlights = recs
         except Exception as exc:
             print(f"[klausmate] pdfjs annotations load failed: {exc}")
             self._highlights = []
@@ -1850,9 +1883,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             if not changed:
                 return
             if self._annotations_name == name:
-                self._highlights = pdf_handler.load_annotations(
-                    settings.user_files(), name
-                )
+                self._sync_marks()  # strict: unsaved or unreadable marks stay
                 self._push_annotations()
                 if tooltip is not None:
                     tooltip(f"Klaus: synced {changed} outside change(s)")
