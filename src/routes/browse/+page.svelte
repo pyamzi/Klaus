@@ -63,7 +63,8 @@
   let scrollTop = $state(0);
   let viewHeight = $state(600);
   let tableBox: HTMLDivElement;
-  const first = $derived(Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 10));
+  // Clamped: a scroll offset from a longer, earlier result set must not leave the window past the end.
+  const first = $derived(Math.max(0, Math.min(ids.length, Math.floor(scrollTop / ROW_HEIGHT) - 10)));
   const last = $derived(Math.min(ids.length, Math.ceil((scrollTop + viewHeight) / ROW_HEIGHT) + 10));
   const visible = $derived(ids.slice(first, last));
 
@@ -96,7 +97,12 @@
     return notesMode ? column.sortingNotes : column.sortingCards;
   }
 
+  // Only the latest search may apply its results: an earlier one (other query, sort
+  // or mode) can finish last, and its ids could be cards where notes are expected.
+  let searchSeq = 0;
+
   async function runSearch(text = search) {
+    const seq = ++searchSeq;
     try {
       // Normalised the way Anki shows it, and validated before searching.
       const normalized = (await buildSearchString({ filter: { case: "parsableText", value: text } })).val;
@@ -107,9 +113,11 @@
           ? { value: { case: "none" as const, value: {} } }
           : { value: { case: "builtin" as const, value: { column: sortColumn, reverse: sortBackwards } } };
       const found = await (notesMode ? searchNotes : searchCards)({ search: normalized, order });
+      if (seq !== searchSeq) return;
       ids = found.ids;
       clearRows();
       if (selected === undefined || !ids.includes(selected)) select(ids[0]);
+      scrollToSelected(true);
     } catch {
       // Invalid search: the bridge's error was shown.
     }
@@ -190,6 +198,10 @@
     await editorReady;
     if (selected !== id) return;
     const editor = editorFrame.contentWindow as any;
+    // As Anki's browser (editor.call_after_note_saved): save the current note's
+    // pending edits before loading another, or they'd be lost.
+    await editor.saveNow?.();
+    if (selected !== id) return;
     editor.require("anki/ui").loaded.then(() =>
       editor.loadNote({
         nid: Number(nid),
@@ -209,10 +221,21 @@
     const index = selected === undefined ? -1 : ids.indexOf(selected);
     const next = Math.min(ids.length - 1, Math.max(0, index + delta));
     select(ids[next]);
-    const top = next * ROW_HEIGHT;
-    // Header row sits above the first data row.
+    scrollToSelected(false);
+  }
+
+  /** Keeps the selected row in view; after a new search, otherwise starts at the top. */
+  function scrollToSelected(newResults: boolean) {
+    const index = selected === undefined ? -1 : ids.indexOf(selected);
+    if (index < 0) {
+      if (newResults) tableBox.scrollTop = scrollTop = 0;
+      return;
+    }
+    const top = index * ROW_HEIGHT;
+    // The header row sits above the first data row.
     if (top < tableBox.scrollTop) tableBox.scrollTop = top;
     else if (top + 2 * ROW_HEIGHT > tableBox.scrollTop + viewHeight) tableBox.scrollTop = top + 2 * ROW_HEIGHT - viewHeight;
+    scrollTop = tableBox.scrollTop;
   }
 
   function onTableKey(event: KeyboardEvent) {
@@ -232,9 +255,12 @@
   let preview: { rendered: RenderCardResponse; bodyClass: string } | undefined;
 
   async function showPreview() {
-    if (selected === undefined) return;
-    const cid = await cardIdOf(selected);
+    const id = selected;
+    if (id === undefined) return;
+    const cid = await cardIdOf(id);
     const [card, rendered] = await Promise.all([getCard({ cid }), renderCard(cid)]);
+    // Previous/Next may have moved on while this rendered.
+    if (id !== selected || !previewOpen) return;
     preview = { rendered, bodyClass: cardBodyClass(card.templateIdx) };
     previewSide = "question";
     await previewReady;
@@ -371,20 +397,24 @@
   <Sidebar onsearch={sidebarSearch} current={search} />
 
   <div
-    class="overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+    class="overflow-auto"
     bind:this={tableBox}
     bind:clientHeight={viewHeight}
     onscroll={() => (scrollTop = tableBox.scrollTop)}
-    tabindex="0"
-    role="grid"
-    aria-label="Search results"
-    aria-rowcount={ids.length}
-    onkeydown={onTableKey}
   >
-    <!-- A plain table: Table.Root's own scroll box would unstick the header. -->
-    <table class="w-full table-fixed caption-bottom text-sm">
+    <!-- A plain table: Table.Root's own scroll box would unstick the header. Only the
+         visible rows exist, so each carries its absolute aria-rowindex (the header is
+         row 1) and the grid states the full count. -->
+    <table
+      role="grid"
+      tabindex="0"
+      aria-label="Search results"
+      aria-rowcount={ids.length + 1}
+      onkeydown={onTableKey}
+      class="w-full table-fixed caption-bottom text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+    >
       <Table.Header class="sticky top-0 bg-background">
-        <Table.Row>
+        <Table.Row aria-rowindex={1}>
           {#each active as key (key)}
             {@const column = columns.find((c) => c.key === key)}
             <Table.Head
@@ -408,9 +438,10 @@
       </Table.Header>
       <Table.Body>
         <tr style:height="{first * ROW_HEIGHT}px" aria-hidden="true"></tr>
-        {#each visible as id (id)}
+        {#each visible as id, i (id)}
           {@const row = rowFor(id)}
           <Table.Row
+            aria-rowindex={first + i + 2}
             class={["h-7 cursor-default", id !== selected && row && colorClass[row.color]]}
             data-state={id === selected ? "selected" : undefined}
             aria-selected={id === selected}
