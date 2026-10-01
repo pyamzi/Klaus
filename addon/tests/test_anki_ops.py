@@ -286,6 +286,6 @@ check("the /tmp debug log is gone", "klausmate-debug" not in _pd and "_dbg(" not
 check("context menus and the threshold dialog are freed",
       "dlg.finished.connect(dlg.deleteLater)" in _la
       # The ＋ menu moved from __init__ into the reader (PDF reader 3/5).
-      and "menu.deleteLater()" in open("klausmate/pdf_viewer.py", encoding="utf-8").read())
+      and "menu.deleteLater()" in open("klausmate/reader_panel.py", encoding="utf-8").read())
 
 raise SystemExit(report())

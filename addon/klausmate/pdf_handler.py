@@ -808,7 +808,7 @@ def _live_library_root() -> str | None:
     """Best-effort read of the configured Library folder via aqt's live
     addon config.
 
-    ``pdf_path_for``'s two production call sites (pdf_viewer.py,
+    ``pdf_path_for``'s two production call sites (reader_panel.py,
     __init__.py) only ever pass ``(user_files_dir, name)`` — this is the
     one spot in this otherwise aqt-free module that reaches for the
     config, and only as a fallback when no ``root`` was passed in

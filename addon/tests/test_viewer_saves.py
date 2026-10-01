@@ -1,10 +1,10 @@
-"""PDF reader 1/5: both viewers save through SavePipeline.
+"""PDF reader 1/5: the viewer saves through SavePipeline.
 
-The native viewer and the pdf.js viewer keep their synchronous JSON write,
-then hand the bake to ``annotation_save.pipeline().request(name)`` — no
-private timer left in either. Each viewer reacts to the pipeline's
-"records" (reload its marks) and "failed" (toast) for its own document;
-the profile-close hook flushes pending saves.
+The pdf.js viewer keeps its synchronous JSON write, then hands the bake to
+``annotation_save.pipeline().request(name)`` — no private timer. It reacts
+to the pipeline's "records" (reload its marks) and "failed" (toast) for its
+own document; the profile-close hook flushes pending saves. (The native
+viewer this file also covered was deleted in PDF reader 5/5.)
 
 Run: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_viewer_saves.py
 """
@@ -52,7 +52,7 @@ except Exception:
 ph = importlib.import_module("klausmate.pdf_handler")
 asv = importlib.import_module("klausmate.annotation_save")
 src = importlib.import_module("klausmate.pdf_source")
-pv = importlib.import_module("klausmate.pdf_viewer")
+rp = importlib.import_module("klausmate.reader_panel")
 pj = importlib.import_module("klausmate.pdfjs_viewer")
 COPY = "Marks couldn't be saved into the file yet; they're kept and will retry."
 
@@ -116,68 +116,56 @@ ph.load_annotations = lambda ufd, name: loaded.append((ufd, name)) or [{"id": "r
 section("copy constant")
 check("exact failure copy, defined once", asv.SAVE_FAILED_COPY == COPY)
 
-for label, cls in (("native", pv.PdfViewer), ("pdf.js", pj.PdfJsViewer)):
-    section(f"{label}: no private bake timer")
-    body = inspect.getsource(cls)
-    for gone in ("_on_bake_timer", "_bake_timer", "_bake_pending",
-                 "_bake_running", "_bake_lock"):
-        check(f"{gone} is gone", gone not in body and not hasattr(cls, gone))
-    check("never bakes by itself", "bake_annotations" not in body)
-    # _schedule_bake survives only as a forwarder: its call sites are lines
-    # another session has uncommitted edits on (R26).
-    shim_src = inspect.getsource(cls._schedule_bake)
-    check("_schedule_bake only forwards to the pipeline",
-          "pipeline().request(name)" in shim_src and "QTimer" not in shim_src)
+label, cls = "pdf.js", pj.PdfJsViewer
+section(f"{label}: no private bake timer")
+body = inspect.getsource(cls)
+for gone in ("_on_bake_timer", "_bake_timer", "_bake_pending",
+             "_bake_running", "_bake_lock"):
+    check(f"{gone} is gone", gone not in body and not hasattr(cls, gone))
+check("never bakes by itself", "bake_annotations" not in body)
+# _schedule_bake survives only as a forwarder: its call sites are lines
+# another session has uncommitted edits on (R26).
+shim_src = inspect.getsource(cls._schedule_bake)
+check("_schedule_bake only forwards to the pipeline",
+      "pipeline().request(name)" in shim_src and "QTimer" not in shim_src)
 
-    section(f"{label}: a save is one JSON write + one pipeline request")
+section(f"{label}: a save is one JSON write + one pipeline request")
 
-    class Fake:
-        _save_annotations = cls._save_annotations
-        _schedule_bake = cls._schedule_bake
 
-    f = Fake()
-    f._annotations_name, f._highlights = "A", [{"id": "h1"}]
-    PIPE.requests.clear()
-    saved_json.clear()
-    f._save_annotations()
-    check("JSON written synchronously", saved_json == [("A", [{"id": "h1"}])])
-    check("pipeline().request(name) called once", PIPE.requests == ["A"])
-    f._annotations_name = None
-    f._save_annotations()
-    check("no document: no request", PIPE.requests == ["A"])
+class Fake:
+    _save_annotations = cls._save_annotations
+    _schedule_bake = cls._schedule_bake
 
-    section(f"{label}: pipeline events for its own document")
-    tips = []
-    mod = pv if cls is pv.PdfViewer else pj
-    mod.tooltip = lambda text, *a, **k: tips.append(text)
-    g = types.SimpleNamespace(_annotations_name="A", _highlights=[], redraws=0)
-    g._refresh_highlight_overlay = lambda: setattr(g, "redraws", g.redraws + 1)
-    loaded.clear()
-    cls._on_save_event(g, "failed", "A")
-    check("'failed' shows the exact copy", tips == [COPY])
-    cls._on_save_event(g, "failed", "B")
-    cls._on_save_event(g, "records", "B")
-    check("another document's events are ignored",
-          tips == [COPY] and loaded == [] and g.redraws == 0)
-    cls._on_save_event(g, "records", "A")
-    check("'records' reloads this viewer's marks",
-          loaded == [(UFD, "A")] and g._highlights == [{"id": "r"}]
-          and g.redraws == 1)
-    cls._on_save_event(g, "saved", "A")
-    check("'saved' needs nothing from the viewer", tips == [COPY] and g.redraws == 1)
 
-section("native: one subscription per viewer, dropped on cleanup")
-PIPE.subs.clear()
-viewer = pv.PdfViewer(lambda _p: None)
-check("viewer subscribed once", len(PIPE.subs) == 1)
-viewer.cleanup()
-check("cleanup unsubscribes", PIPE.subs == [])
-viewer.cleanup()
-check("cleanup twice is safe", PIPE.subs == [])
-viewer.load_annotations("A")
-viewer.load_annotations("A")
-check("a reused viewer (profile switch) subscribes again, once", len(PIPE.subs) == 1)
-viewer.cleanup()
+f = Fake()
+f._annotations_name, f._highlights = "A", [{"id": "h1"}]
+PIPE.requests.clear()
+saved_json.clear()
+f._save_annotations()
+check("JSON written synchronously", saved_json == [("A", [{"id": "h1"}])])
+check("pipeline().request(name) called once", PIPE.requests == ["A"])
+f._annotations_name = None
+f._save_annotations()
+check("no document: no request", PIPE.requests == ["A"])
+
+section(f"{label}: pipeline events for its own document")
+tips = []
+pj.tooltip = lambda text, *a, **k: tips.append(text)
+g = types.SimpleNamespace(_annotations_name="A", _highlights=[], redraws=0)
+g._refresh_highlight_overlay = lambda: setattr(g, "redraws", g.redraws + 1)
+loaded.clear()
+cls._on_save_event(g, "failed", "A")
+check("'failed' shows the exact copy", tips == [COPY])
+cls._on_save_event(g, "failed", "B")
+cls._on_save_event(g, "records", "B")
+check("another document's events are ignored",
+      tips == [COPY] and loaded == [] and g.redraws == 0)
+cls._on_save_event(g, "records", "A")
+check("'records' reloads this viewer's marks",
+      loaded == [(UFD, "A")] and g._highlights == [{"id": "r"}]
+      and g.redraws == 1)
+cls._on_save_event(g, "saved", "A")
+check("'saved' needs nothing from the viewer", tips == [COPY] and g.redraws == 1)
 
 section("pdf.js: subscribes in __init__, unsubscribes in cleanup")
 init_src = inspect.getsource(pj.PdfJsViewer.__init__)
@@ -187,10 +175,10 @@ check("cleanup unsubscribes", "_unsub_save" in inspect.getsource(pj.PdfJsViewer.
 
 section("no module-wide 'saved' hook: doc_sync's exact pin replaced it (R28)")
 check("PdfSidebar.__init__ subscribes nothing to the pipeline",
-      "pipeline()" not in inspect.getsource(pv.PdfSidebar.__init__))
+      "pipeline()" not in inspect.getsource(rp.PdfSidebar.__init__))
 
 section("profile close flushes pending saves first")
-init_path = os.path.join(os.path.dirname(pv.__file__), "__init__.py")
+init_path = os.path.join(os.path.dirname(rp.__file__), "__init__.py")
 with open(init_path, encoding="utf-8") as fh:
     init_text = fh.read()
 fn = next(n for n in ast.parse(init_text).body
@@ -214,7 +202,7 @@ ns["_flush_annotation_saves"]()
 check("a failing flush is logged, not raised",
       len(logs) == 1 and logs[0].startswith("[klausmate]"))
 reg = init_text.find("profile_will_close.append(_flush_annotation_saves)")
-sweep = init_text.find("profile_will_close.append(\n        _pdf_viewer_cleanup.cleanup_all_sidebars")
+sweep = init_text.find("profile_will_close.append(\n        _reader_panel_cleanup.cleanup_all_sidebars")
 check("registered before the sidebar sweep", 0 <= reg < sweep)
 
 raise SystemExit(report())

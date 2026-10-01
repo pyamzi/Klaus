@@ -1,15 +1,15 @@
 """PDF reader 1/5 (Task 6): open readers follow doc_sync.
 
-A real offscreen ``PdfSidebar(None, host_key="lecture")`` on the native
-renderer, driven by doc_sync events: "changed" flushes, reloads in place
-(keeping the scroll position), mirrors and toasts "Updated from disk";
-"moved" re-points without a reload; "missing" closes the document with the
-exact copy and leaves every mark and file alone (R33: a bulk Finder rename
-reports "missing" and then "moved"). ``clear``/``cleanup`` flush before
+A real offscreen ``PdfSidebar(None, host_key="lecture")`` built around a
+stand-in pdf.js viewer (PdfJsViewer cannot be built headless: no
+QtWebEngine), driven by doc_sync events: "changed" flushes, waits for an
+open text box, reloads in place keeping page and zoom (the viewer re-reads
+and mirrors the marks) and toasts "Updated from disk"; "moved" re-points
+without a reload; "missing" closes the document with the exact copy and
+leaves every mark and file alone (R33: a bulk Finder rename reports
+"missing" and then "moved"). ``clear``/``cleanup`` flush before
 ``close_doc``. A load whose annotations JSON is newer than the PDF requests
-one save. The old pollers are gone. The pdf.js-only paths (keep-view
-reload, waiting for an open text box, ``on_stale``) run against a stand-in
-viewer, since PdfJsViewer cannot be built headless.
+one save. ``on_stale`` reloads silently. The old pollers are gone.
 
 Run: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_reader_sync.py
 """
@@ -69,8 +69,7 @@ ds = importlib.import_module("klausmate.doc_sync")
 ds._sync = lambda: None  # no real watcher: events are driven by hand
 asv = importlib.import_module("klausmate.annotation_save")
 pj = importlib.import_module("klausmate.pdfjs_viewer")
-pj.PDFJS_AVAILABLE = False  # the native fallback: no QtWebEngine headless (PDF reader 3/5)
-pv = importlib.import_module("klausmate.pdf_viewer")
+rp = importlib.import_module("klausmate.reader_panel")
 pdrive = importlib.import_module("klausmate.pdf_drive")
 
 LOG: list = []
@@ -106,9 +105,49 @@ def _logged_close(host, safe):
 
 ds.close_doc = _logged_close
 TIPS: list = []
-pv.tooltip = lambda text, *a, **k: TIPS.append(text)
-MIRRORS: list = []
-pv.PdfViewer._start_foreign_mirror = lambda self, name: MIRRORS.append(name)
+rp.tooltip = lambda text, *a, **k: TIPS.append(text)
+
+
+class FakeJs(QtWidgets.QWidget):
+    """The pdf.js viewer's surface as PdfSidebar uses it. An open text box
+    holds a reload until the page replies (``waiting``)."""
+
+    def __init__(self, on_page_changed=None, parent=None):
+        super().__init__(parent)
+        self.calls = []
+        self.waiting = None
+        self.on_count = None
+        self.on_stale = None
+
+    def set_page_texts(self, pages):
+        pass
+
+    def load_path(self, path, name, keep_view=False):
+        self.calls.append(("load_path", path, name, keep_view))
+        LOG.append(("load_path", keep_view))
+
+    def load_annotations(self, name):
+        self.calls.append(("load_annotations", name))
+
+    def commit_open_edit(self, then):
+        self.calls.append(("commit",))
+        self.waiting = then
+
+    def repoint(self, path):
+        self.calls.append(("repoint", path))
+
+    def go_to_page(self, page):
+        pass
+
+    def clear_document(self):
+        pass
+
+    def cleanup(self):
+        pass
+
+
+REAL_JS = pj.PdfJsViewer
+pj.PdfJsViewer, pj.PDFJS_AVAILABLE = FakeJs, True  # every reader builds the stand-in
 
 
 def spin(n=5):
@@ -157,14 +196,15 @@ with open(os.path.join(UF, "contexts", "Doc.txt"), "w", encoding="utf-8") as f:
 age(JSON, 100)  # an up-to-date bake: the PDF is newer than the JSON
 
 section("host_key")
-plain = pv.PdfSidebar(None)
+plain = rp.PdfSidebar(None)
 check("the default host is the editor dock", plain.host_key == "editor")
 plain.cleanup()
-sb = pv.PdfSidebar(None, host_key="lecture")
+sb = rp.PdfSidebar(None, host_key="lecture")
 check("the Lecture dock's key is kept", sb.host_key == "lecture")
 KEY = f"lecture:{id(sb)}"  # doc_sync registers each reader on its own (R36)
-check("native renderer under test", sb._renderer == "native" and sb._viewer is not None)
-lv_src = open(os.path.join(os.path.dirname(pv.__file__), "lecture_view.py"), encoding="utf-8").read()
+v = sb._viewer
+check("the reader built the (stand-in) pdf.js viewer", isinstance(v, FakeJs))
+lv_src = open(os.path.join(os.path.dirname(rp.__file__), "lecture_view.py"), encoding="utf-8").read()
 check("the Lecture dock passes host_key=\"lecture\"",
       'PdfSidebar(None, parent=body, host_key="lecture")' in lv_src)
 sb.resize(520, 420)
@@ -180,12 +220,7 @@ check("...for this reader", ds._hosts.get("Doc") == {KEY}, str(ds._hosts))
 check("the sidebar follows doc_sync events", sb._on_doc_event in ds._subs)
 check("an up-to-date bake requests no save", PIPE.requests == [], str(PIPE.requests))
 
-section('"changed": flush, reload in place, mirror, toast')
-v = sb._viewer
-v._pdf_view.verticalScrollBar().setValue(600)
-spin()
-pos = v.scroll_position()
-check("scrolled down before the change", pos is not None and pos[0] > 0, str(pos))
+section('"changed": flush, wait for the open text box, reload in place, toast')
 loads: list = []
 _real_load = sb.load_pdf
 
@@ -198,20 +233,26 @@ def _counting_load(name):
 
 sb.load_pdf = _counting_load
 LOG.clear()
-MIRRORS.clear()
+v.calls.clear()
 sb._on_doc_event("changed", "Doc", None)
-spin(10)
-check("reloads exactly once", loads == ["Doc"], str(loads))
-check("flushes pending saves before reloading", LOG[:2] == [("flush", "Doc", False), ("load", "Doc")], str(LOG))
-check("keeps the reader's place", v.scroll_position() == pos, f"{v.scroll_position()} != {pos}")
-check("runs the outside-mark mirror", MIRRORS == ["Doc"], str(MIRRORS))
+check("flushes pending saves, then asks the page to commit its text box",
+      LOG[:1] == [("flush", "Doc", False)] and v.calls == [("commit",)], f"{LOG} {v.calls}")
+check("nothing reloads before the commit is done", TIPS == [] and v.waiting is not None)
+v.waiting()
+spin()
+check("reloads the same file exactly once, in place, keeping page and zoom",
+      [c for c in v.calls if c[0] == "load_path"] == [("load_path", DOC, "Doc", True)]
+      and loads == [], f"{v.calls} {loads}")
+check("...and re-reads the marks, which runs the outside-mark mirror",
+      v.calls[-1] == ("load_annotations", "Doc"), str(v.calls))
 check('toasts exactly "Updated from disk"', TIPS == ["Updated from disk"], str(TIPS))
 check("no save is requested", PIPE.requests == [], str(PIPE.requests))
 loads.clear()
+v.calls.clear()
 del TIPS[:]
 sb._on_doc_event("changed", "Other", None)
 spin()
-check("another document's change is ignored", loads == [] and TIPS == [])
+check("another document's change is ignored", loads == [] and TIPS == [] and v.calls == [])
 
 section('"moved": re-point, no reload')
 MOVED = os.path.join(ROOT, "Moved", "Doc.pdf")
@@ -222,7 +263,8 @@ ds.repoint("Doc", MOVED)  # the rescan's call; reaches the sidebar as "moved"
 spin()
 check("doc_sync follows the move", ds.open_paths().get("Doc") == MOVED)
 check("the sidebar's path follows it", sb._path == MOVED, str(sb._path))
-check("no reload", loads == [], str(loads))
+check("no reload", loads == [] and ("load_path", MOVED, "Doc", True) not in v.calls, str(v.calls))
+check("the viewer is re-pointed instead", v.calls[-1:] == [("repoint", MOVED)], str(v.calls))
 check("no toast", TIPS == [], str(TIPS))
 check("still showing the document", sb.is_loaded("Doc"))
 
@@ -255,11 +297,14 @@ after = tree(UF)
 after.pop("library_map.json", None)
 before.pop("library_map.json", None)
 check("...and still touches nothing but the map", after == before)
+v.calls.clear()
 sb.load_pdf("Doc")
 spin()
 check("re-opening finds the document", sb.is_loaded("Doc") and sb._path == FINAL)
-check("...with every mark intact", [h.get("id") for h in v._highlights] == ["m1"]
-      and v._highlights[0].get("note") == "keep me", str(v._highlights))
+_marks = ph.load_annotations(UF, "Doc")
+check("...with every mark intact, read back by the viewer",
+      [h.get("id") for h in _marks] == ["m1"] and _marks[0].get("note") == "keep me"
+      and ("load_annotations", "Doc") in v.calls, f"{_marks} {v.calls}")
 check("...and doc_sync follows the new path", ds.open_paths().get("Doc") == FINAL)
 DOC = FINAL
 
@@ -304,52 +349,12 @@ os.utime(JSON, None)
 PIPE.requests.clear()
 sb.load_pdf("Doc")
 spin()
-check("native: one request", PIPE.requests == ["Doc"], str(PIPE.requests))
-
-
-class FakeJs:
-    """The pdf.js viewer's surface as PdfSidebar uses it."""
-
-    def __init__(self):
-        self.calls = []
-        self.waiting = None
-        self.on_count = None
-        self.on_stale = None
-
-    def set_page_texts(self, pages):
-        pass
-
-    def load_path(self, path, name, keep_view=False):
-        self.calls.append(("load_path", path, name, keep_view))
-        LOG.append(("load_path", keep_view))
-
-    def load_annotations(self, name):
-        self.calls.append(("load_annotations", name))
-
-    def commit_open_edit(self, then):
-        self.calls.append(("commit",))
-        self.waiting = then
-
-    def repoint(self, path):
-        self.calls.append(("repoint", path))
-
-    def scroll_position(self):
-        return 0
-
-    def clear_document(self):
-        pass
-
-    def cleanup(self):
-        pass
-
-
-js = pv.PdfSidebar(None, host_key="lecture")
-js._renderer = "pdfjs"
-js._doc = None
-js._viewer = fake = FakeJs()
+check("one request", PIPE.requests == ["Doc"], str(PIPE.requests))
+js = rp.PdfSidebar(None, host_key="lecture")
+fake = js._viewer
 PIPE.requests.clear()
 js.load_pdf("Doc")
-check("pdf.js: one request", PIPE.requests == ["Doc"], str(PIPE.requests))
+check("a second reader: one request", PIPE.requests == ["Doc"], str(PIPE.requests))
 age(JSON, 400)
 PIPE.requests.clear()
 js.load_pdf("Doc")
@@ -357,7 +362,7 @@ sb.load_pdf("Doc")
 spin()
 check("JSON older than the PDF: no request", PIPE.requests == [], str(PIPE.requests))
 
-section('pdf.js "changed": wait for the open text box, reload keeping the view')
+section('a second reader: "changed" waits for its own text box, reloads keeping the view')
 fake.calls.clear()
 LOG.clear()
 del TIPS[:]
@@ -370,7 +375,7 @@ check("then reloads the same file keeping page and zoom",
       fake.calls[1:] == [("load_path", DOC, "Doc", True), ("load_annotations", "Doc")], str(fake.calls))
 check('...and toasts "Updated from disk"', TIPS == ["Updated from disk"], str(TIPS))
 
-section("pdf.js on_stale: the same reload, silently (R21)")
+section("on_stale: the same reload, silently (R21)")
 fake.calls.clear()
 LOG.clear()
 del TIPS[:]
@@ -381,9 +386,10 @@ check("flush, commit, keep-view reload",
                                               ("load_annotations", "Doc")], f"{LOG} {fake.calls}")
 check("no toast", TIPS == [], str(TIPS))
 check("PdfSidebar points the pdf.js viewer's on_stale at it",
-      "on_stale = self._on_viewer_stale" in inspect.getsource(pv.PdfSidebar.__init__))
+      fake.on_stale == js._on_viewer_stale
+      and "on_stale = self._on_viewer_stale" in inspect.getsource(rp.PdfSidebar.__init__))
 
-section('pdf.js "moved" re-points the viewer')
+section('"moved" re-points the viewer')
 fake.calls.clear()
 js._on_doc_event("moved", "Doc", "/elsewhere/Doc.pdf")
 check("viewer re-pointed, no reload", fake.calls == [("repoint", "/elsewhere/Doc.pdf")], str(fake.calls))
@@ -403,7 +409,7 @@ check("no reload, no mirror, no toast for a closed panel", fake.calls == [] and 
 section("a deleted sidebar lets go of doc_sync")
 from PyQt6 import sip  # noqa: E402
 
-dead = pv.PdfSidebar(None, host_key="lecture")
+dead = rp.PdfSidebar(None, host_key="lecture")
 dead.load_pdf("Doc")
 dead_key = dead._sync_key
 check("subscribed while alive", dead._on_doc_event in ds._subs)
@@ -413,7 +419,7 @@ check("the first event after deletion unsubscribes it", dead._on_doc_event not i
 check("...and drops its registration", dead_key not in ds._hosts.get("Doc", set()), str(ds._hosts))
 
 section("PdfJsViewer.repoint and commit_open_edit")
-stand = pj.PdfJsViewer.__new__(pj.PdfJsViewer)
+stand = REAL_JS.__new__(REAL_JS)
 A = os.path.join(TMP, "a.pdf")
 B = os.path.join(TMP, "b.pdf")
 make_pdf(A, pages=1)
@@ -479,7 +485,7 @@ check("the page commits an open box, then replies on the same channel",
       "};" in html)
 
 section("two readers in one host keep their own registration (R36)")
-e1, e2 = pv.PdfSidebar(None), pv.PdfSidebar(None)
+e1, e2 = rp.PdfSidebar(None), rp.PdfSidebar(None)
 e1.load_pdf("Doc")
 e2.load_pdf("Doc")
 spin()
@@ -510,9 +516,9 @@ section("the old pollers are gone")
 # The deleted names are pinned by the task's grep over klausmate and tests,
 # which must come back empty, so they are not spelled out here.
 check("the Library watcher tick no longer polls open readers",
-      "pdf_viewer" not in inspect.getsource(pdrive._on_fs_tick))
+      "reader_panel" not in inspect.getsource(pdrive._on_fs_tick))
 check("the sidebar keeps no file fingerprint of its own",
-      "os.stat" not in inspect.getsource(pv.PdfSidebar))
+      "os.stat" not in inspect.getsource(rp.PdfSidebar))
 
 sb.cleanup()
 raise SystemExit(report())

@@ -600,10 +600,10 @@ auto_on[0] = False
 check("none of these were reader events", events == [], str(events))
 
 section("the watcher tick skips the rescan when it saw only Klaus's own files")
-pvs = types.ModuleType("klausmate.pdf_viewer")  # the tick must not need the real one
-_had_pv = sys.modules.get("klausmate.pdf_viewer"), getattr(sys.modules["klausmate"], "pdf_viewer", None)
-sys.modules["klausmate.pdf_viewer"] = pvs
-sys.modules["klausmate"].pdf_viewer = pvs
+pvs = types.ModuleType("klausmate.reader_panel")  # the tick must not need the real one
+_had_pv = sys.modules.get("klausmate.reader_panel"), getattr(sys.modules["klausmate"], "reader_panel", None)
+sys.modules["klausmate.reader_panel"] = pvs
+sys.modules["klausmate"].reader_panel = pvs
 starts = []
 _real_start = pdg.start_library_rescan
 pdg.start_library_rescan = lambda *a, **k: starts.append(1)
@@ -680,13 +680,13 @@ _real_start()
 
 pdg.start_library_rescan = _real_start
 if _had_pv[0] is not None:
-    sys.modules["klausmate.pdf_viewer"] = _had_pv[0]
+    sys.modules["klausmate.reader_panel"] = _had_pv[0]
 else:
-    sys.modules.pop("klausmate.pdf_viewer", None)
+    sys.modules.pop("klausmate.reader_panel", None)
 if _had_pv[1] is not None:
-    sys.modules["klausmate"].pdf_viewer = _had_pv[1]
+    sys.modules["klausmate"].reader_panel = _had_pv[1]
 else:
-    delattr(sys.modules["klausmate"], "pdf_viewer")
+    delattr(sys.modules["klausmate"], "reader_panel")
 _unsub()
 ds5.resync = _real_resync
 iq.request_pdf = _real_request_pdf

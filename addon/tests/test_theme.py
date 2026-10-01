@@ -336,7 +336,7 @@ section("one PDF viewer everywhere (K-153): pdf_panel_qss, self-applied")
 # every gap. Measured offscreen, the worst of it was a ~4px NEAR-WHITE
 # vertical seam (rgb 239) where the thumb-strip splitter handle sat on
 # the #191919 dark panel, in every host but the Library.
-_pdf_panel_src = open("klausmate/pdf_viewer.py").read()
+_pdf_panel_src = open("klausmate/reader_panel.py").read()
 
 for night in (False, True):
     c = theme.palette(night)
@@ -399,7 +399,7 @@ for night in (False, True):
 
 # The consumer half of the contract. A design token nobody applies is
 # not a design; these pin that PdfSidebar — the ONE widget every host
-# wraps, and the parent of BOTH renderers — wears the sheet itself, the
+# wraps, and the parent of the viewer — wears the sheet itself, the
 # way the find bar and the strip already do.
 check("PdfSidebar names itself KlausPdfPanel",
       'self.setObjectName("KlausPdfPanel")' in _pdf_panel_src)
@@ -410,51 +410,6 @@ check("PdfSidebar sets WA_StyledBackground — a plain QWidget paints "
       "NOTHING however styled, which is what let the host bleed through",
       "self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)"
       in _pdf_panel_src)
-
-# K-153's other half: the `n / m` page indicator is built in every host
-# but stays hidden unless a host ADOPTS it into its own header, and only
-# the editor panel's tab container does. So the Library — the host Pouya
-# singled out as the good one — showed no page number at all, which also
-# made click-to-go-to-page unreachable there (Cmd+Opt+G still worked, so
-# this was affordance, not capability).
-# Read through the AST, not the raw text: `"_page_bar" in src` passes on
-# a comment, and on any ONE surviving mention elsewhere in a 4,500-line
-# file — both of which it did when these pins were falsified.
-import ast as _ast  # noqa: E402
-
-_pv_tree = _ast.parse(_pdf_panel_src)
-
-
-def _method_src(cls_name: str, fn_name: str) -> str:
-    """That method's own source, comments stripped by unparse()."""
-    for node in _ast.walk(_pv_tree):
-        if isinstance(node, _ast.ClassDef) and node.name == cls_name:
-            for sub in node.body:
-                if (isinstance(sub, _ast.FunctionDef)
-                        and sub.name == fn_name):
-                    return _ast.unparse(sub)
-    return ""
-
-
-_pv_init = _method_src("PdfViewer", "__init__")
-_pv_show = _method_src("PdfViewer", "showEvent")
-_pv_place = _method_src("PdfViewer", "_show_page_label_in_place")
-
-check("the viewer builds a fallback slot for the page indicator into "
-      "its OWN layout — a footer, so it duplicates no host's header",
-      "self._page_bar = bar" in _pv_init
-      and "outer.addWidget(bar)" in _pv_init)
-check("the slot starts empty and hidden — the label is only moved in "
-      "later, so an adopting host never has to fight us for the widget",
-      "bar.setVisible(False)" in _pv_init
-      and "self._page_label" not in _pv_init.split("bar = QWidget(self)")[-1])
-check("PdfViewer.showEvent fills the slot, by which time every host "
-      "that wants the label has taken it during its own construction",
-      "self._show_page_label_in_place()" in _pv_show)
-check("adoption is detected by PARENTAGE inside that method, needing no "
-      "cooperation from any host (adopting IS a reparent into a header)",
-      "self._page_label.parentWidget()" in _pv_place
-      and "bar.setVisible(False)" in _pv_place)
 
 section("design scale (K-110): every builder stays on-scale")
 # Sanctioned sets — must match the "Design scale" comment block above
@@ -512,9 +467,9 @@ section("design-tokens.json sync (shared cross-repo with KlausBook)")
 # The highlight inks are meant to match KlausBook's copy byte-for-byte today
 # (see docs/reference/design-tokens.json's "source_of_truth" note) — unlike
 # the rest of the palette, they deliberately never theme-fork, because they
-# bake into the PDF's own annotation color. The paint alpha (110/255) lives
-# as a literal in pdf_viewer.py's _record_color call, not a theme.py
-# constant, so it isn't asserted here.
+# bake into the PDF's own annotation color. The paint alpha is the
+# renderer's (pdf.js CSS), not a theme.py constant, so it isn't asserted
+# here.
 try:
     with open("docs/reference/design-tokens.json", encoding="utf-8") as _f:
         _tokens = json.load(_f)

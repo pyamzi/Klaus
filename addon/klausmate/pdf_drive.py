@@ -483,9 +483,9 @@ def refresh_open_library() -> None:
 def _close_in_panels(safe: str) -> None:
     """A deleted PDF leaves every Browse PDF panel showing it."""
     try:
-        from . import pdf_viewer
+        from . import reader_panel
 
-        for sidebar in list(pdf_viewer._open_sidebars):
+        for sidebar in list(reader_panel._open_sidebars):
             if sidebar.is_loaded(safe):
                 sidebar.clear()
     except Exception as e:  # noqa: BLE001

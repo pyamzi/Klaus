@@ -446,7 +446,7 @@ check("malformed input degrades to empty",
 
 section("duck-typed viewer surface")
 # Shared PdfSidebar/poller code calls these on WHICHEVER renderer is
-# active (grep pdf_viewer.py for `self._viewer.` and `v._`). A missing
+# active (grep reader_panel.py for `self._viewer.` and `v._`). A missing
 # one is a live AttributeError — _apply_mirror crashed exactly that way
 # on 2026-08-25 (external-change poll against the pdfjs renderer).
 for attr in ("load_path", "set_page_texts", "load_annotations",
@@ -519,11 +519,11 @@ check("the guard is real: a webview destroyed WITHOUT cleanup crashes",
 leaked.cleanup()
 
 section("cleanup is wired into every teardown path")
-pdf_viewer = importlib.import_module("klausmate.pdf_viewer")
+reader_panel = importlib.import_module("klausmate.reader_panel")
 check("PdfSidebar forwards cleanup to the renderer",
-      hasattr(pdf_viewer.PdfSidebar, "cleanup"))
+      hasattr(reader_panel.PdfSidebar, "cleanup"))
 check("a profile/quit sweep exists as backstop",
-      hasattr(pdf_viewer, "cleanup_all_sidebars"))
+      hasattr(reader_panel, "cleanup_all_sidebars"))
 _here = os.path.dirname(os.path.abspath(__file__))
 _src = lambda n: open(os.path.join(_here, "..", "klausmate", n)).read()
 check("editor panel close tears the sidebar down",
@@ -2040,185 +2040,41 @@ def _ctor_sites164():
 _sites164 = _ctor_sites164()
 check("exactly one module builds a PdfJsViewer — a second one would need "
       "its own copy of the gate: %s" % (_sites164,),
-      len(_sites164) == 1 and _sites164[0].startswith("klausmate/pdf_viewer.py:"))
+      len(_sites164) == 1 and _sites164[0].startswith("klausmate/reader_panel.py:"))
 
-_PV164 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                      "..", "klausmate", "pdf_viewer.py")
-with open(_PV164, encoding="utf-8") as _fh164:
-    _pvtree164 = _ast164.parse(_fh164.read())
+_RP164 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "..", "klausmate", "reader_panel.py")
+with open(_RP164, encoding="utf-8") as _fh164:
+    _rptree164 = _ast164.parse(_fh164.read())
 
 
-def _renderer_assigns164(node, guarded=False, out=None):
-    """(lineno, source of the value, guarded-by-PDFJS_AVAILABLE?) for every
-    ``self._renderer = ...`` in pdf_viewer.py.
-
-    Checks the node itself BEFORE recursing: an earlier draft only walked
-    children, so an assignment sitting directly in an ``if`` body — which
-    is the only interesting one here — was never looked at, and the whole
-    check went quietly vacuous. The ``len(...) >= 2`` guard below is what
-    caught that.
-    """
+def _guarded_builds164(node, guarded=False, out=None):
+    """(lineno, guarded-by-PDFJS_AVAILABLE?) for every ``PdfJsViewer(...)``
+    call in reader_panel.py. Only an ``if`` BODY is guarded by its test;
+    the else leg is not."""
     out = [] if out is None else out
     if isinstance(node, _ast164.If):
         inner = "PDFJS_AVAILABLE" in _ast164.unparse(node.test) or guarded
         for sub in node.body:
-            _renderer_assigns164(sub, inner, out)
-        for sub in node.orelse:           # the else leg is NOT guarded
-            _renderer_assigns164(sub, guarded, out)
+            _guarded_builds164(sub, inner, out)
+        for sub in node.orelse:
+            _guarded_builds164(sub, guarded, out)
         return out
-    if isinstance(node, _ast164.Assign):
-        for tgt in node.targets:
-            if isinstance(tgt, _ast164.Attribute) and tgt.attr == "_renderer":
-                out.append((node.lineno,
-                            _ast164.unparse(node.value), guarded))
+    if (isinstance(node, _ast164.Call)
+            and _ast164.unparse(node.func).split(".")[-1] == "PdfJsViewer"):
+        out.append((node.lineno, guarded))
     for child in _ast164.iter_child_nodes(node):
-        _renderer_assigns164(child, guarded, out)
+        _guarded_builds164(child, guarded, out)
     return out
 
 
-_assigns164 = _renderer_assigns164(_pvtree164)
-check("the renderer flag's assignments were actually found — none would "
-      "make the gate check below vacuous", len(_assigns164) >= 2)
-check("nothing sets the renderer to anything but 'native' outside an "
-      "``if ... PDFJS_AVAILABLE`` — that is the whole gate, and the "
-      "build site downstream tests only the flag it sets: %s"
-      % ([(ln, v) for ln, v, g in _assigns164 if v != "'native'" and not g],),
-      not [1 for _ln, _v, _g in _assigns164 if _v != "'native'" and not _g])
-
-section("K-154: native renderer — a keyboard binding reaches "
-        "toggle_thumbnails, the same way Ctrl+F reaches the find bar")
-# The pdfjs half of K-154 lives above (the annobar button); the native
-# renderer's own affordance is a keyboard shortcut, claimed the same
-# way every other viewer combo already is (_match_shortcut_combo /
-# _dispatch_shortcut_combo, pdf_viewer.py) rather than a new mechanism.
-# This needs REAL Qt.Key/KeyboardModifier enums — the plain aqt stub's
-# Qt is a permissive _Dummy whose attribute lookups all collapse to the
-# same object (see anki_stubs.py), so Key_T and Key_F would compare
-# equal and the test would prove nothing. klausmate.pdf_viewer is
-# therefore imported here with REAL PyQt6 behind aqt.qt (test_drive.py's
-# K-117 pattern) — the module is not needed anywhere else in this
-# pdfjs-focused file, so swapping the stub this late costs nothing.
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-try:
-    from PyQt6 import QtCore as _QtC154
-    from PyQt6 import QtGui as _QtG154
-    from PyQt6 import QtWidgets as _QtW154
-
-    _HAVE_QT154 = True
-except Exception as _qt_e154:  # noqa: BLE001
-    _HAVE_QT154 = False
-    print(f"  SKIP: PyQt6 unavailable under this python ({_qt_e154}) — "
-          "the native shortcut binding needs real Qt enums")
-
-if _HAVE_QT154:
-    import types as _types154
-
-    _qt_shim154 = _types154.ModuleType("aqt.qt")
-
-    def _qt_getattr154(name, _mods=(_QtW154, _QtC154, _QtG154)):
-        for _m in _mods:
-            if hasattr(_m, name):
-                return getattr(_m, name)
-        if name == "qconnect":
-            return lambda sig, fn: sig.connect(fn)
-        raise AttributeError(name)
-
-    _qt_shim154.__getattr__ = _qt_getattr154
-    sys.modules["aqt.qt"] = _qt_shim154
-    # Line 244 already imported klausmate.pdf_viewer once, under the
-    # plain permissive aqt.qt stub — its cached module (with Qt bound to
-    # that stub's dummy) would otherwise win over this fresh shim, since
-    # Python does not re-execute an already-imported module. Popping it
-    # is safe here (unlike the partial-Qt probe above, which needs a
-    # subprocess instead): nothing after this section reads
-    # klausmate.pdf_viewer again, and the earlier ``pdf_viewer`` name at
-    # line 244 keeps pointing at its own already-bound module object.
-    sys.modules.pop("klausmate.pdf_viewer", None)
-    pv_native154 = importlib.import_module("klausmate.pdf_viewer")
-
-    class _FakeKeyEvent154:
-        """Just enough of a QKeyEvent for _match_shortcut_combo, which
-        only calls .key()/.modifiers() on whatever it's handed."""
-
-        def __init__(self, key, mods):
-            self._key, self._mods = key, mods
-
-        def key(self):
-            return self._key
-
-        def modifiers(self):
-            return self._mods
-
-    class _ShortcutStand154:
-        """Duck-typed self, the _SelStand pattern from above (K-196):
-        _match_shortcut_combo only reads self._find_bar, and
-        _dispatch_shortcut_combo only calls named self methods — no
-        real QWidget construction needed to prove the wiring."""
-
-        def __init__(self):
-            self._find_bar = object()  # non-None -> find combos in play
-            self.calls: list[str] = []
-
-        def toggle_thumbnails(self):
-            self.calls.append("toggle_thumbnails")
-
-        def _show_find_bar(self):
-            self.calls.append("find")
-
-        def _find_next_shortcut(self):
-            self.calls.append("find_next")
-
-        def _find_prev_shortcut(self):
-            self.calls.append("find_prev")
-
-        def _prompt_go_to_page(self):
-            self.calls.append("goto")
-
-        def _add_highlight_from_selection(self):
-            self.calls.append("highlight")
-
-    _Qt154 = _QtC154.Qt
-    _stand154 = _ShortcutStand154()
-    _ev_thumbs154 = _FakeKeyEvent154(
-        _Qt154.Key.Key_T,
-        _Qt154.KeyboardModifier.ControlModifier
-        | _Qt154.KeyboardModifier.ShiftModifier,
-    )
-    _combo154 = pv_native154.PdfViewer._match_shortcut_combo(
-        _stand154, _ev_thumbs154
-    )
-    check("Ctrl+Shift+T resolves to a thumbs combo",
-          _combo154 == "thumbs", repr(_combo154))
-    check("dispatching that combo reaches toggle_thumbnails — exactly "
-          "as dispatching \"find\" reaches _show_find_bar below",
-          pv_native154.PdfViewer._dispatch_shortcut_combo(
-              _stand154, _combo154
-          ) is True
-          and _stand154.calls == ["toggle_thumbnails"])
-
-    _ev_find154 = _FakeKeyEvent154(
-        _Qt154.Key.Key_F, _Qt154.KeyboardModifier.ControlModifier
-    )
-    _stand154.calls.clear()
-    check("...proven against the existing Ctrl+F -> find_bar wiring, "
-          "same mechanism",
-          pv_native154.PdfViewer._match_shortcut_combo(
-              _stand154, _ev_find154
-          ) == "find"
-          and pv_native154.PdfViewer._dispatch_shortcut_combo(
-              _stand154, "find"
-          ) is True
-          and _stand154.calls == ["find"])
-
-    _ev_hl154 = _FakeKeyEvent154(
-        _Qt154.Key.Key_A,
-        _Qt154.KeyboardModifier.ControlModifier
-        | _Qt154.KeyboardModifier.ShiftModifier,
-    )
-    check("Ctrl+Shift+A (highlight) is untouched by the new binding",
-          pv_native154.PdfViewer._match_shortcut_combo(
-              _stand154, _ev_hl154
-          ) == "highlight")
+_builds164 = _guarded_builds164(_rptree164)
+check("the PdfJsViewer build in reader_panel.py was actually found — none "
+      "would make the gate check below vacuous", len(_builds164) == 1)
+check("...and it sits inside an ``if ... PDFJS_AVAILABLE`` body: that is "
+      "the whole gate (PDF reader 5/5: no native fallback, the else leg "
+      "is the unavailable label): %s" % (_builds164,),
+      all(g for _ln, g in _builds164))
 
 
 section("PDF reader 2/5: trackpad pinch and smart zoom go to the PDF, "

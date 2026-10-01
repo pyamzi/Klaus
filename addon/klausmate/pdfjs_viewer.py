@@ -8,8 +8,9 @@ separate pass from the viewport. This module hosts ``web/pdfjs_viewer.html``
 canvases are GPU-composited by Chromium, scrolling translates
 already-rendered layers, and the text layer gives native browser selection.
 
-Every reader runs on it (PDF reader 3/5); ``PdfSidebar`` falls back to the
-native ``PdfViewer`` only when QtWebEngine is missing (``PDFJS_AVAILABLE``).
+Every reader runs on it (PDF reader 3/5); the native ``PdfViewer`` was
+deleted in PDF reader 5/5, so without QtWebEngine (``PDFJS_AVAILABLE``)
+``PdfSidebar`` shows an "unavailable" label instead.
 
 Division of labour (K-097..K-099): the page owns rendering and gestures;
 THIS MODULE OWNS THE ANNOTATIONS JSON. JS sends mutations over the bridge
@@ -83,7 +84,7 @@ except Exception:  # pragma: no cover — only in stripped test stubs
 # names used as VALUES; it is a trap for names used as BASE CLASSES. Only
 # the widget needs Qt, so only the widget degrades: the base falls back to
 # ``object`` and PDFJS_AVAILABLE keeps the real gate — at PdfSidebar's
-# renderer branch (pdf_viewer.py), which is the only place one is built,
+# viewer branch (reader_panel.py), which is the only place one is built,
 # and again in __init__ below for any caller that skips it. Same shape as
 # ``index_queue._DockBase`` (K-152) and ``lecture_view._DockBase``
 # (K-161); this is the third and last instance (K-164).
@@ -893,7 +894,7 @@ def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
 
 
 class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
-    """Drop-in for ``PdfViewer``: every reader's viewer (PDF reader 3/5).
+    """Every reader's viewer (PDF reader 3/5; the only one since 5/5).
 
     Matches the surface PdfSidebar and the tab container actually use:
     ``load_path`` (the pdf.js entry — the sidebar calls it instead of

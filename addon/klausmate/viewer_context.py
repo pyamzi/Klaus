@@ -61,7 +61,7 @@ def report_page_count(viewer_id: int, page_count: int) -> None:
 
     pdf.js reports a provisional count from the text layer at document-
     report time and refines it once the real document object parses
-    (klausmate/pdf_viewer.py's ``_on_pdfjs_count``). Unlike calling
+    (klausmate/reader_panel.py's ``_on_pdfjs_count``). Unlike calling
     report_document again, this touches ONLY page_count: it does not
     reset page_index/selection to 0/"" and does not activate — a late
     count is a data correction, not new activity, and the caller must

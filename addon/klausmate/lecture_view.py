@@ -3,7 +3,7 @@ current card belongs to.
 
 A "Library" button on the reviewer's bottom bar (next to More) toggles a
 right-docked side panel on the main window hosting a standalone
-:class:`~.pdf_viewer.PdfSidebar`. Once open it follows every card:
+:class:`~.reader_panel.PdfSidebar`. Once open it follows every card:
 note tags → `!Library::*` candidates (inverted from pdf_index/prefs.json
 — the tag IS the membership verdict, so there is deliberately NO
 threshold re-gating here; only MATCH_FLOOR rejects absurd tag/vector
@@ -376,7 +376,7 @@ class LectureDock(_DockBase):  # type: ignore[misc]
     def __init__(self) -> None:
         super().__init__(mw)
         from . import theme
-        from .pdf_viewer import PdfSidebar
+        from .reader_panel import PdfSidebar
 
         self.setObjectName("KlausLectureDock")
         try:

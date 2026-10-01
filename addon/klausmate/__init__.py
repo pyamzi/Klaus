@@ -1128,7 +1128,7 @@ def on_editor_did_init(editor: Editor) -> None:
             try:
                 if getattr(editor, "_klausmate_pdf_tabs", None) is not None:
                     return
-                from . import pdf_viewer as _pdf_viewer
+                from . import reader_panel as _reader_panel
 
                 # Reuse a panel this window already has (editor re-init).
                 existing = getattr(
@@ -1147,7 +1147,7 @@ def on_editor_did_init(editor: Editor) -> None:
                         sidebar.load_pdf(active)
                     return
 
-                sidebar = _pdf_viewer.PdfSidebar(editor, parent=None)
+                sidebar = _reader_panel.PdfSidebar(editor, parent=None)
                 try:
                     container = PdfDock(editor, sidebar, parent_window)
                 except Exception:
@@ -1213,16 +1213,16 @@ def _flush_annotation_saves() -> None:
 
 try:
     # Backstop against dangling AnkiWebViews in Anki's global hooks
-    # (see pdf_viewer.PdfSidebar.cleanup): sweep every live sidebar on
+    # (see reader_panel.PdfSidebar.cleanup): sweep every live sidebar on
     # profile switch and on quit. Pending saves flush FIRST, while the
     # viewers that hear their events still exist.
-    from . import pdf_viewer as _pdf_viewer_cleanup
+    from . import reader_panel as _reader_panel_cleanup
 
     gui_hooks.profile_will_close.append(_flush_annotation_saves)
     gui_hooks.profile_will_close.append(
-        _pdf_viewer_cleanup.cleanup_all_sidebars
+        _reader_panel_cleanup.cleanup_all_sidebars
     )
-    mw.app.aboutToQuit.connect(_pdf_viewer_cleanup.cleanup_all_sidebars)
+    mw.app.aboutToQuit.connect(_reader_panel_cleanup.cleanup_all_sidebars)
 except Exception as _e:
     print(f"[klausmate] sidebar cleanup hooks failed: {type(_e).__name__}: {_e}")
 

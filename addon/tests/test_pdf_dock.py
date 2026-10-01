@@ -451,7 +451,7 @@ _lw.show()
 _app.processEvents()
 _lazy_ed = types.SimpleNamespace(widget=_lw.centralWidget(), parentWindow=_lw)
 _lazy_sb = _FakeSidebar()
-_pv_mod = importlib.import_module("klausmate.pdf_viewer")
+_pv_mod = importlib.import_module("klausmate.reader_panel")
 _real_sidebar_cls = _pv_mod.PdfSidebar
 _pv_mod.PdfSidebar = lambda editor, parent=None: _lazy_sb
 try:

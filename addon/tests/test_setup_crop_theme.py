@@ -149,12 +149,10 @@ section("K-115: paintEvent guards its QPainter (md3_switch's rule)")
 # A QPainter constructed and .end()ed with no try/finally between them
 # is the proven-fatal md3_switch pattern: any exception in the body
 # leaves a live painter on the widget, corrupts the backing store, and
-# segfaults Qt on the next flush (nine crashes, 2026-08-26). Pin BOTH
-# custom-painted widgets: crop_dialog's canvas and pdf_viewer's
-# selection overlay.
+# segfaults Qt on the next flush (nine crashes, 2026-08-26). Pin the
+# custom-painted crop_dialog canvas (pdf_viewer's selection overlay, the
+# other one, went with the native renderer in PDF reader 5/5).
 import ast as _ast
-
-_PDFV_SRC = open("klausmate/pdf_viewer.py").read()
 
 
 def _paint_event_guarded(src: str) -> tuple:
@@ -178,11 +176,10 @@ def _paint_event_guarded(src: str) -> tuple:
     return (False, False, False)
 
 
-for _label, _s in (("crop_dialog", _CROP_SRC), ("pdf_viewer", _PDFV_SRC)):
-    _tf, _fe, _el = _paint_event_guarded(_s)
-    check(f"{_label}.paintEvent wraps its body in try/finally", _tf)
-    check(f"{_label}.paintEvent's finally closes the painter", _fe)
-    check(f"{_label}.paintEvent's except logs, never re-raises", _el)
+_tf, _fe, _el = _paint_event_guarded(_CROP_SRC)
+check("crop_dialog.paintEvent wraps its body in try/finally", _tf)
+check("crop_dialog.paintEvent's finally closes the painter", _fe)
+check("crop_dialog.paintEvent's except logs, never re-raises", _el)
 
 section("crop_dialog.py: crop behaviour untouched (style only)")
 check("rubber-band selection state machine intact",

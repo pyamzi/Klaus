@@ -52,11 +52,27 @@ ph = importlib.import_module("klausmate.pdf_handler")
 src = importlib.import_module("klausmate.pdf_source")
 src.user_files_dir = lambda: UF
 pj = importlib.import_module("klausmate.pdfjs_viewer")
-# Every reader runs on pdf.js; headless there is no QtWebEngine to build it,
-# so these readers take the native fallback (PDF reader 3/5).
-pj.PDFJS_AVAILABLE = False
-pv = importlib.import_module("klausmate.pdf_viewer")
+rp = importlib.import_module("klausmate.reader_panel")
 rt = importlib.import_module("klausmate.reader_tabs")
+
+
+class FakeJsViewer(QtWidgets.QWidget):
+    """Stands in for PdfJsViewer (headless there is no QtWebEngine to build
+    it): just the surface PdfSidebar touches, with its page label."""
+
+    def __init__(self, on_page_changed=None, parent=None):
+        super().__init__(parent)
+        self._page_label = QtWidgets.QLabel("", self)
+
+    def clear_document(self):
+        pass
+
+    def cleanup(self):
+        pass
+
+
+# Every reader runs on pdf.js; these readers build the stand-in.
+pj.PdfJsViewer, pj.PDFJS_AVAILABLE = FakeJsViewer, True
 
 # load_open_tabs keeps only names whose context exists in the store.
 os.makedirs(os.path.join(UF, "contexts"), exist_ok=True)
@@ -170,7 +186,7 @@ import io  # noqa: E402
 
 _out = io.StringIO()
 with contextlib.redirect_stdout(_out):
-    lec = pv.PdfSidebar(None, host_key="lecture")
+    lec = rp.PdfSidebar(None, host_key="lecture")
 check("building the reader logs no failure (the strip's restore must not "
       "shadow the module's settings and break the renderer read)",
       "failed" not in _out.getvalue(), _out.getvalue())
@@ -183,9 +199,9 @@ check("...shown at the top of the reader",
       lec.layout().itemAt(0).widget() is lec.tabs and lec.tabs.isVisible())
 check("...restored from its own host's set, as labels only",
       lec.tabs.names() == ["c"] and lec._name is None, f"{lec.tabs.names()} {lec._name}")
-ed = pv.PdfSidebar(None)
+ed = rp.PdfSidebar(None)
 check("the editor reader restores the editor's set", ed.tabs.names() == ["a", "b"])
-check("the native viewer's page label moved into the strip (click → Go to Page travels with it)",
+check("the viewer's page label moved into the strip (click → Go to Page travels with it)",
       ed.tabs.page_label is ed._viewer._page_label
       and ed._viewer._page_label.parentWidget() is ed.tabs)
 
@@ -286,7 +302,7 @@ for _n in ("a", "b", "c", "d"):
         f.write(b"%PDF-1.4\n")
 ph._live_library_root = lambda: None
 importlib.import_module("klausmate.drive_store").record_import(UF, "b", "Bee Lecture")
-real_menu, pv.QMenu = pv.QMenu, FakeMenu
+real_menu, rp.QMenu = rp.QMenu, FakeMenu
 real_hook = sys.excepthook
 sys.excepthook = lambda *a: print("[test] slot raised:", a[1])
 try:
@@ -295,7 +311,7 @@ try:
     spin()
 finally:
     sys.excepthook = real_hook
-    pv.QMenu = real_menu
+    rp.QMenu = real_menu
 check("＋ opens the stored-PDF menu", len(FakeMenu.shown) == 1, str(FakeMenu.shown))
 items = FakeMenu.shown[-1] if FakeMenu.shown else []
 texts = [i.text for i in items]
@@ -307,37 +323,29 @@ if pick is not None:
 check("choosing one opens it in this reader", ed.tabs.names() == ["a", "b"]
       and ed.tabs.current() == "b" and ed_loads[-1] == "b", f"{ed.tabs.names()} {ed_loads}")
 
-section("every reader runs on pdf.js; without QtWebEngine, the native fallback")
-
-
-class FakeJsViewer(QtWidgets.QWidget):
-    """Stands in for PdfJsViewer (its AnkiWebView is a stub here)."""
-
-    def __init__(self, on_page_changed=None, parent=None):
-        super().__init__(parent)
-
-    def clear_document(self):
-        pass
-
-    def cleanup(self):
-        pass
-
-
-real_js = pj.PdfJsViewer
-pj.PdfJsViewer, pj.PDFJS_AVAILABLE = FakeJsViewer, True
-try:
-    js_sb = pv.PdfSidebar(None, host_key="lecture")
-finally:
-    pj.PdfJsViewer, pj.PDFJS_AVAILABLE = real_js, False
-check("with QtWebEngine every reader builds the pdf.js viewer", js_sb._renderer == "pdfjs"
-      and isinstance(js_sb._viewer, FakeJsViewer), js_sb._renderer)
+section("every reader runs on pdf.js; without QtWebEngine, an unavailable label (R45)")
+js_sb = rp.PdfSidebar(None, host_key="lecture")
+check("with QtWebEngine every reader builds the pdf.js viewer",
+      isinstance(js_sb._viewer, FakeJsViewer) and js_sb._fallback_label is None,
+      repr(js_sb._viewer))
 js_sb.cleanup()
 js_sb.close()
+pj.PDFJS_AVAILABLE = False
 _out = io.StringIO()
-with contextlib.redirect_stdout(_out):
-    nat = pv.PdfSidebar(None, host_key="lecture")
-check("without QtWebEngine the native viewer stays (never a blank panel)",
-      nat._renderer == "native" and isinstance(nat._viewer, pv.PdfViewer))
+try:
+    with contextlib.redirect_stdout(_out):
+        nat = rp.PdfSidebar(None, host_key="lecture")
+finally:
+    pj.PDFJS_AVAILABLE = True
+nat.resize(400, 300)
+nat.show()
+spin()
+check("without QtWebEngine there is no viewer, no native fallback",
+      nat._viewer is None and not hasattr(rp, "PdfViewer"))
+check("...and the panel shows the unavailable label, never a blank panel",
+      nat._fallback_label is not None and nat._fallback_label.isVisible()
+      and "PDF viewer is unavailable" in nat._fallback_label.text(),
+      nat._fallback_label.text() if nat._fallback_label is not None else "no label")
 check("...and says so in one log line",
       _out.getvalue().count("pdf.js unavailable") == 1, _out.getvalue())
 
