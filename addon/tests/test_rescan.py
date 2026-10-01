@@ -599,9 +599,7 @@ auto_on[0] = False
 check("none of these were reader events", events == [], str(events))
 
 section("the watcher tick skips the rescan when it saw only Klaus's own files")
-pvs = types.ModuleType("klausmate.pdf_viewer")
-polls = []
-pvs.poll_external_changes = lambda: polls.append(1)
+pvs = types.ModuleType("klausmate.pdf_viewer")  # the tick must not need the real one
 _had_pv = sys.modules.get("klausmate.pdf_viewer"), getattr(sys.modules["klausmate"], "pdf_viewer", None)
 sys.modules["klausmate.pdf_viewer"] = pvs
 sys.modules["klausmate"].pdf_viewer = pvs
@@ -616,7 +614,7 @@ def tick(*dirs):
     for d in dirs or (rootg,):
         pdg._fs_watcher.directoryChanged.emit(d)
     pdg._fs_debounce.active = False
-    del starts[:], polls[:]
+    del starts[:]
     pdg._on_fs_tick()
     return bool(starts)
 
@@ -625,7 +623,6 @@ check("the watcher holds the root", rootg in pdg._fs_watcher.directories())
 _tmp = os.path.join(rootg, ".Lecture (final) & notes.pdf.4f2a9c.tmp")
 write_text(_tmp, "half a bake")
 check("a tick that only created .x.pdf.uuid.tmp does not start a rescan", tick() is False)
-check("...and the open-viewer poll still runs (R29)", polls == [1], str(polls))
 write_text(_tmp, "baked|pages")
 os.replace(_tmp, _lect)
 ph.record_stat(ufg, "Lecture", ph.file_stat(_lect))

@@ -327,6 +327,9 @@ def gesture_action(gesture_type: Any, value: float) -> tuple | None:
 # A vv-scale report this soon after the last vv-scale reload is not
 # reloaded again: if a reload ever kept the scale, that would loop.
 VV_RELOAD_GAP_S = 10.0
+# How long a reload from disk waits for the page to commit an open text box
+# before it goes ahead anyway.
+EDIT_COMMIT_WAIT_MS = 1000
 
 
 def validate_hex_color(value: Any, default: str = HIGHLIGHT_COLOR) -> str:
@@ -937,7 +940,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         # scroll-to-top report must not overwrite the position to restore.
         self._hold_scroll = False
         # Called when the page reports the open file changed under it.
-        # A later task repoints this at doc_sync.
+        # PdfSidebar points it at its doc_sync reload.
         self.on_stale: Callable[[], None] = self._reload_current
         self._annotations_name: str | None = None
         self._highlights: list[dict] = []
@@ -1160,6 +1163,44 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
     def _reload_current(self) -> None:
         if self._path is not None and self._name is not None:
             self.load_path(self._path, self._name, keep_view=True)
+
+    _edit_seq = 0
+    _after_edit: Optional[Callable[[], None]] = None
+
+    def commit_open_edit(self, then: Callable[[], None]) -> None:
+        """Commit the page's open text box, then call ``then`` once. The
+        page answers on the bridge after the commit's own message, so its
+        mark is saved first; with no page, or no answer in time, ``then``
+        runs anyway."""
+        if self._web is None or not self._page_loaded:
+            then()
+            return
+        self._edit_seq += 1
+        seq, self._after_edit = self._edit_seq, then
+        self._eval(f"window.klausCommitEdit && window.klausCommitEdit({seq});")
+        QTimer.singleShot(EDIT_COMMIT_WAIT_MS, lambda: self._edit_done(seq))
+
+    def _bridge_edit_done(self, payload: str) -> None:
+        try:
+            seq = int(payload)
+        except ValueError:
+            return
+        # Deferred: the reload evals into the page this bridge call came from.
+        QTimer.singleShot(0, lambda: self._edit_done(seq))
+
+    def _edit_done(self, seq: int) -> None:
+        if seq != self._edit_seq or self._after_edit is None:
+            return
+        then, self._after_edit = self._after_edit, None
+        then()
+
+    def repoint(self, path: str) -> None:
+        """The open file moved (same file, new path): later reloads use the
+        new path, and a source reading the live file follows it."""
+        self._path = path
+        src = self._source
+        if src is not None and src.read_path == src.path:
+            src.path = src.read_path = path
 
     # Class defaults, so __new__-built test stand-ins carry them too.
     _user_zoom = 0.0  # the page's committed user zoom; 0 = fit width

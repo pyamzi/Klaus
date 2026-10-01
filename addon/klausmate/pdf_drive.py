@@ -227,7 +227,8 @@ def _on_fs_tick() -> None:
     (``_refresh_rows`` rescans first, then rebuilds); otherwise a bare
     rescan keeps mapping/tree/tags in step while nothing is showing, and
     any hidden screen is marked to refresh on its next show. A tick that
-    saw only Klaus's own writes skips the rescan (``_tick_needs_rescan``)."""
+    saw only Klaus's own writes skips the rescan (``_tick_needs_rescan``).
+    Open readers follow their files through doc_sync, not this tick."""
     dirs = set(_fs_changed)
     _fs_changed.clear()
     try:
@@ -235,15 +236,6 @@ def _on_fs_tick() -> None:
             start_library_rescan()
     except Exception as e:  # noqa: BLE001
         print(f"[klausmate] library watcher rescan failed: {e}")
-    # After the rescan settled the mapping: any open viewer showing a
-    # file that changed on disk reloads it (K-078 — Preview saves swap
-    # the inode, so the open QPdfDocument goes stale otherwise).
-    try:
-        from . import pdf_viewer
-
-        pdf_viewer.poll_external_changes()
-    except Exception as e:  # noqa: BLE001
-        print(f"[klausmate] viewer external-change poll failed: {e}")
 
 
 def _rearm_watcher(root: str | None, names: dict | None = None) -> None:

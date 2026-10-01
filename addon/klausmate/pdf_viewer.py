@@ -4102,9 +4102,9 @@ class PdfViewer(QWidget):
         self._arm_thumb_render()
 
 
-# Every live PdfSidebar, weakly held (K-078): the library watcher asks
-# them all to reload when their working PDF changed on disk. Weak so a
-# closed Library window's sidebar can be collected.
+# Every live PdfSidebar, weakly held (K-078): the profile-close sweep and
+# a Library delete reach them all. Weak so a closed Library window's
+# sidebar can be collected.
 _open_sidebars: "weakref.WeakSet" = weakref.WeakSet()
 
 
@@ -4123,100 +4123,15 @@ def cleanup_all_sidebars() -> None:
             print(f"[klausmate] sidebar cleanup sweep failed: {exc}")
 
 
-def _stat_of(path: str) -> tuple | None:
-    """(inode, mtime_ns, size) — the external-change fingerprint. The
-    inode is what actually flips on a Preview save (atomic replace) and
-    on a Finder move; mtime/size catch in-place rewrites."""
-    try:
-        st = os.stat(path)
-        return (st.st_ino, st.st_mtime_ns, st.st_size)
-    except OSError:
-        return None
-
-
-def poll_external_changes() -> None:
-    """Called from pdf_drive's watcher tick (K-078). Each open sidebar
-    checks its own file fingerprint and reloads if it changed — always
-    one tick deferred, never inside the caller's event delivery
-    (K-072 lesson). Never raises."""
-    for sb in list(_open_sidebars):
-        try:
-            QTimer.singleShot(0, sb.reload_if_externally_changed)
-        except Exception:
-            pass
-
-
-def _refresh_stats_for(name: str, stat: tuple | None = None) -> None:
-    """Re-fingerprint every sidebar showing ``name`` — called after a
-    successful bake so Klaus's OWN write to the working file never
-    reads as an external change (without this, every highlight edit
-    would reload the viewer ~2s later via the watcher).
-
-    ``stat`` is the fingerprint of the file the bake actually wrote
-    (K-085): stat'ing the path here instead could swallow a Preview
-    save that landed between the bake's os.replace and this callback —
-    it would be recorded as "current" and never mirrored."""
-    for sb in list(_open_sidebars):
-        try:
-            if getattr(sb, "_name", None) != name:
-                continue
-            if stat is not None:
-                sb._file_stat = tuple(stat)
-                continue
-            from . import pdf_handler
-            from . import USER_FILES  # type: ignore
-
-            path = pdf_handler.pdf_path_for(USER_FILES, name)
-            if path:
-                sb._file_stat = _stat_of(path)
-        except Exception:
-            pass
-
-
-_SAVED_HOOKED = False
-
-
-def _hook_saved_stats() -> None:
-    """ONE pipeline subscription for the module: after every successful
-    save, re-fingerprint the sidebars showing that PDF so the external-
-    change poll never reads Klaus's own write as outside (until doc_sync
-    replaces that poll)."""
-    global _SAVED_HOOKED
-    if _SAVED_HOOKED:
-        return
-    try:
-        from . import annotation_save
-
-        annotation_save.pipeline().subscribe(
-            lambda event, name: _refresh_stats_for(name) if event == "saved" else None
-        )
-        _SAVED_HOOKED = True
-    except Exception as exc:
-        print(f"[klausmate] save pipeline hook failed: {exc}")
-
-
-def _reload_records_for(name: str) -> None:
-    """Refresh the overlay of every viewer showing ``name`` from the
-    records on disk (K-085: after the post-bake callback removed marks
-    that were deleted externally)."""
-    for sb in list(_open_sidebars):
-        try:
-            v = getattr(sb, "_viewer", None)
-            if v is None or getattr(v, "_annotations_name", None) != name:
-                continue
-            from . import pdf_handler
-            from . import USER_FILES  # type: ignore
-
-            v._highlights = pdf_handler.load_annotations(USER_FILES, name)
-            v._refresh_highlight_overlay()
-        except Exception:
-            pass
-
-
 class PdfSidebar(QWidget):
     """Right-side sidebar: one scrollable PDF document."""
 
-    def __init__(self, editor: Editor, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        editor: Editor,
+        parent: Optional[QWidget] = None,
+        host_key: str = "editor",
+    ) -> None:
         super().__init__(parent)
         # The panel styles ITSELF (K-153), exactly as the find bar and
         # the thumb strip already do — those two are the only parts of
@@ -4238,13 +4153,17 @@ class PdfSidebar(QWidget):
             print(f"[klausmate] pdf panel theme failed: {exc}")
         self._editor = editor
         self._name: Optional[str] = None
-        # External-change fingerprint of the loaded working PDF (K-078).
-        self._file_stat: tuple | None = None
+        # Which host this panel is in doc_sync's open registry ("editor",
+        # "lecture"); _path is where the shown PDF is now. Open readers
+        # follow the folder through doc_sync's events (PDF reader 1/5).
+        self.host_key = host_key
+        self._path: Optional[str] = None
+        self._held: Optional[str] = None  # the name open in doc_sync
+        self._unsub_doc: Optional[Callable[[], None]] = None
         try:
             _open_sidebars.add(self)
         except Exception:
             pass
-        _hook_saved_stats()
         self._doc: Optional[QPdfDocument] = None
         self._page_count = 0
         self._current_page = 0
@@ -4291,6 +4210,7 @@ class PdfSidebar(QWidget):
                 parent=self,
             )
             self._viewer.on_selection = self._report_selection
+            self._viewer.on_stale = self._on_viewer_stale
             outer.addWidget(self._viewer, 1)
             self._fallback_label = None
         elif PDF_VIEWER_AVAILABLE and QPdfDocument is not None:
@@ -4351,11 +4271,14 @@ class PdfSidebar(QWidget):
                     "Re-add it via the editor's PDF panel or the Library to enable the viewer."
                 )
             viewer_context.forget(id(self))
+            self._release(flush=False)
             self._name = None
-            self._file_stat = None
             self._set_active(None)
             return
-        self._file_stat = _stat_of(path)
+        self._follow(name, path)
+        if not isinstance(self._viewer, PdfViewer):
+            # The native viewer's load_annotations checks this itself.
+            self._request_save_if_stale(name, path)
 
         if self._renderer == "pdfjs" and self._viewer is not None:
             # pdf.js path: the webview loads from bytes; page count
@@ -4401,8 +4324,8 @@ class PdfSidebar(QWidget):
                 # named the PDF that loaded FINE a moment ago (PR #4 fifth
                 # re-review). Same shape as the no-path branch above.
                 viewer_context.forget(id(self))
+                self._release(flush=False)
                 self._name = None
-                self._file_stat = None
                 self._set_active(None)
                 return
 
@@ -4480,110 +4403,143 @@ class PdfSidebar(QWidget):
         except Exception:
             pass
 
-    def reload_if_externally_changed(self) -> None:
-        """React to the shown PDF changing on disk (K-078/K-082).
+    # ---- following the folder (doc_sync) ---------------------------------
 
-        An annotation-only edit (page count unchanged — the common
-        Preview case) mirrors the records WITHOUT reloading the
-        document: the viewer never renders the annotation layer, so the
-        page pixels are identical and a reload would only flicker. A
-        page-count change means real content editing and does the full
-        reload. Cheap no-op when nothing changed. Never raises."""
+    def _follow(self, name: str, path: str) -> None:
+        """Hold ``name`` open in doc_sync for this host, releasing the
+        document shown before, and hear its events. Never raises."""
         try:
-            try:
-                self.isVisible()
-            except RuntimeError:
-                return  # C++ side already deleted
-            name = self._name
-            if name is None or self._file_stat is None:
-                return
-            from . import pdf_handler
-            from . import USER_FILES  # type: ignore
+            from . import doc_sync
 
-            path = pdf_handler.pdf_path_for(USER_FILES, name)
-            if not path:
-                return
-            st = _stat_of(path)
-            if st is None or st == self._file_stat:
-                return
-            self._file_stat = st
-            v = self._viewer
-            if v is None or not getattr(
-                pdf_handler, "BAKE_AVAILABLE", False
-            ):
-                self._full_external_reload(name)
-                return
-
-            def _worker() -> None:
-                try:
-                    res = pdf_handler.scan_working_annotations(
-                        USER_FILES, name
-                    )
-                    if res is None:
-                        return
-                    if int(res.get("page_count") or 0) != int(
-                        self._page_count or 0
-                    ):
-                        _run_on_main(
-                            lambda: self._full_external_reload(name)
-                        )
-                        return
-                    if res.get("foreign"):
-                        working = pdf_handler._working_pdf_path(
-                            USER_FILES, name
-                        )
-                        if not pdf_handler._capture_pristine_stripped(
-                            USER_FILES, name, working
-                        ):
-                            return
-                    _run_on_main(lambda: v._apply_mirror(name, res))
-                except Exception as exc:
-                    print(f"[klausmate] external mirror failed: {exc}")
-
-            threading.Thread(
-                target=_worker, name="klausmate-extmirror", daemon=True
-            ).start()
+            if self._unsub_doc is None:
+                self._unsub_doc = doc_sync.subscribe(self._on_doc_event)
+            if self._held is not None and self._held != name:
+                self._release(flush=False)
+            self._held, self._path = name, path
+            doc_sync.open_doc(self.host_key, name, path)
         except Exception as exc:
-            print(f"[klausmate] external reload failed: {exc}")
+            print(f"[klausmate] doc_sync open failed: {exc}")
 
-    def _full_external_reload(self, name: str) -> None:
-        """Content actually changed: reload the document, keeping the
-        reader's scroll position."""
+    def _release(self, flush: bool = True) -> None:
+        """Stop holding the document in doc_sync; with ``flush``, bake its
+        pending marks first. Idempotent. Never raises."""
+        name, self._held = self._held, None
+        if name is None:
+            return
+        if flush:
+            try:
+                from . import annotation_save
+
+                annotation_save.pipeline().flush(name)
+            except Exception as exc:
+                print(f"[klausmate] save flush failed for {name}: {exc}")
         try:
+            from . import doc_sync
+
+            doc_sync.close_doc(self.host_key, name)
+        except Exception as exc:
+            print(f"[klausmate] doc_sync close failed: {exc}")
+
+    def _request_save_if_stale(self, name: str, path: str) -> None:
+        """Marks in the JSON newer than the PDF (a quit mid-debounce, a save
+        that failed before a restart) are baked now. Never raises."""
+        try:
+            from . import annotation_save, pdf_handler, pdf_source
+
+            jpath = pdf_handler.annotations_path_for(pdf_source.user_files_dir(), name)
+            if os.path.isfile(jpath) and os.path.getmtime(jpath) > os.path.getmtime(path) + 1.0:
+                print(f"[klausmate] marks newer than {name}'s file; saving")
+                annotation_save.pipeline().request(name)
+        except Exception as exc:
+            print(f"[klausmate] stale-save check failed for {name}: {exc}")
+
+    def _on_doc_event(self, event: str, safe: str, path: Optional[str]) -> None:
+        """doc_sync: the shown PDF changed outside Klaus, moved, or left the
+        Library folder. Other documents' events are ignored."""
+        if safe != self._name:
+            return
+        try:
+            self.isVisible()
+        except RuntimeError:
+            return  # C++ side already deleted
+        if event == "changed":
+            self._reload_from_disk(safe, toast=True)
+        elif event == "moved" and path:
+            self._path = path
+            repoint = getattr(self._viewer, "repoint", None)
+            if repoint is not None:
+                repoint(path)
+        elif event == "missing":
+            # Close only. Marks, the JSON, context and prefs stay: in a bulk
+            # Finder rename the next scan reports the same file "moved" (R33).
+            # No flush: a bake now would recreate the file at its old path.
             try:
-                self.isVisible()
-            except RuntimeError:
-                return
-            if self._name != name:
-                return
-            print(
-                f"[klausmate] {name} changed on disk — reloading viewer"
-            )
-            pos = None
-            try:
-                if self._viewer is not None:
-                    pos = self._viewer.scroll_position()
+                from . import drive_store, pdf_source
+
+                display = drive_store.display_name(pdf_source.user_files_dir(), safe) or safe
             except Exception:
-                pos = None
-            self.load_pdf(name)
-            if pos is not None and self._viewer is not None:
-                v = self._viewer
-                gen = getattr(v, "_doc_generation", None)
-                saved = pos
+                display = safe
+            self._release(flush=False)
+            self.clear()
+            tooltip(f"{display} was removed from your Library folder.")
 
-                def _restore() -> None:
-                    try:
-                        if getattr(v, "_doc_generation", None) == gen:
-                            v.restore_scroll_position(saved)
-                    except Exception:
-                        pass
+    def _on_viewer_stale(self) -> None:
+        """pdf.js read a range of a file that changed under it: the same
+        reload as "changed", silently (R21)."""
+        self._reload_from_disk(self._name, toast=False)
 
-                try:
-                    QTimer.singleShot(0, _restore)
-                except Exception:
-                    pass
+    def _reload_from_disk(self, name: Optional[str], toast: bool) -> None:
+        """Bake pending marks, let an open text box commit, then reload in
+        place keeping page and zoom; the reload re-reads the marks and
+        mirrors outside ones."""
+        if name is None or name != self._name:
+            return
+        try:
+            from . import annotation_save
+
+            annotation_save.pipeline().flush(name)
         except Exception as exc:
-            print(f"[klausmate] external reload failed: {exc}")
+            print(f"[klausmate] save flush failed for {name}: {exc}")
+
+        def _reload() -> None:
+            try:
+                if self._name != name:
+                    return
+                self.isVisible()
+                print(f"[klausmate] {name} changed on disk — reloading viewer")
+                self._reload_in_place(name)
+                if toast:
+                    tooltip("Updated from disk")
+            except Exception as exc:
+                print(f"[klausmate] reload from disk failed: {exc}")
+
+        commit = getattr(self._viewer, "commit_open_edit", None)
+        if commit is None:
+            _reload()
+        else:
+            commit(_reload)
+
+    def _reload_in_place(self, name: str) -> None:
+        v = self._viewer
+        if self._renderer == "pdfjs" and v is not None:
+            v.load_path(self._path, name, keep_view=True)
+            v.load_annotations(name)
+            return
+        pos = v.scroll_position() if v is not None else None
+        self.load_pdf(name)
+        v = self._viewer
+        if pos is None or v is None:
+            return
+        gen = getattr(v, "_doc_generation", None)
+
+        def _restore() -> None:
+            try:
+                if getattr(v, "_doc_generation", None) == gen:
+                    v.restore_scroll_position(pos)
+            except Exception:
+                pass
+
+        QTimer.singleShot(0, _restore)
 
     def jump_to_page(self, page: int) -> None:
         if self._viewer is None or self._page_count <= 0:
@@ -4596,7 +4552,12 @@ class PdfSidebar(QWidget):
         destroyed. Duck-typed: the pdf.js renderer owns an AnkiWebView,
         which must be unregistered from Anki's global hooks (see
         PdfJsViewer.cleanup); both renderers drop their save-pipeline
-        subscription. Call from every path that tears a sidebar down."""
+        subscription. Bakes pending marks and releases the document in
+        doc_sync first. Call from every path that tears a sidebar down."""
+        self._release()
+        unsub, self._unsub_doc = self._unsub_doc, None
+        if unsub is not None:
+            unsub()
         v = self._viewer
         fn = getattr(v, "cleanup", None) if v is not None else None
         if fn is not None:
@@ -4612,6 +4573,7 @@ class PdfSidebar(QWidget):
             print(f"[klausmate] viewer_context: {exc}")
 
     def clear(self) -> None:
+        self._release()
         self._name = None
         self._page_count = 0
         self._current_page = 0

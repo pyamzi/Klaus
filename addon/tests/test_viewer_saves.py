@@ -185,24 +185,9 @@ check("__init__ subscribes",
       "subscribe(self._on_save_event)" in "".join(init_src.split()))
 check("cleanup unsubscribes", "_unsub_save" in inspect.getsource(pj.PdfJsViewer.cleanup))
 
-section("native module glue: 'saved' re-fingerprints sidebars, once")
-refreshed = []
-real_refresh = pv._refresh_stats_for
-pv._refresh_stats_for = lambda name, stat=None: refreshed.append((name, stat))
-PIPE.subs.clear()
-pv._SAVED_HOOKED = False
-pv._hook_saved_stats()
-pv._hook_saved_stats()
-check("one subscription however often it is called", len(PIPE.subs) == 1)
-for cb in PIPE.subs:
-    cb("saved", "A")
-    cb("failed", "B")
-    cb("records", "C")
-check("only 'saved' refreshes, and stats the path itself",
-      refreshed == [("A", None)])
-pv._refresh_stats_for = real_refresh
-check("every sidebar wires it",
-      "_hook_saved_stats()" in inspect.getsource(pv.PdfSidebar.__init__))
+section("no module-wide 'saved' hook: doc_sync's exact pin replaced it (R28)")
+check("PdfSidebar.__init__ subscribes nothing to the pipeline",
+      "pipeline()" not in inspect.getsource(pv.PdfSidebar.__init__))
 
 section("profile close flushes pending saves first")
 init_path = os.path.join(os.path.dirname(pv.__file__), "__init__.py")

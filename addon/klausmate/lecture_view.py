@@ -412,7 +412,7 @@ class LectureDock(_DockBase):  # type: ignore[misc]
             self.empty_label.setMargin(24)
         except Exception:
             pass
-        self.sidebar = PdfSidebar(None, parent=body)
+        self.sidebar = PdfSidebar(None, parent=body, host_key="lecture")
         self.stack.addWidget(self.empty_label)
         self.stack.addWidget(self.sidebar)
         lay.addWidget(self.stack, 1)

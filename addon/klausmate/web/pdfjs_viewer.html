@@ -2015,6 +2015,14 @@ function commitTextEdit() {
   });
 }
 
+/* A reload from disk tears the page down, which would drop an open box:
+   Python asks for the commit first and reloads on the reply, which this
+   posts after the commit's own message on the same channel. */
+window.klausCommitEdit = function (seq) {
+  if (state.textEdit) commitTextEdit();
+  post("edit-done:" + seq);
+};
+
 /* Drag by the grip only: the interior is a text field, so a press
    there places the caret (Preview moves an annotation by its frame
    too). preventDefault keeps focus — and therefore the caret and the
