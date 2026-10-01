@@ -1,3 +1,5 @@
 [env]
 # anki_proto writes the descriptor set here; klaus-bridge's build script reads it back.
 DESCRIPTORS_BIN = { value = "target/anki_descriptors.bin", relative = true }
+# anki_i18n writes Anki's TS string table here (as Anki's own build does).
+STRINGS_TS = { value = "vendor/anki/out/ts/lib/generated/ftl.ts", relative = true }

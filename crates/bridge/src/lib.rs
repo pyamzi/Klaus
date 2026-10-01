@@ -86,6 +86,34 @@ const ALLOWED: &[&str] = &[
     "getCard",
 ];
 
+/// Calls the webview makes that Klaus's shell answers instead of the backend:
+/// Anki pages' requests to their Qt host (mediasrv post_handler_list), plus
+/// Klaus's own. Each is acknowledged with 204 and handed to the shell's hook.
+const HOOKS: &[&str] = &[
+    "importDone",
+    "importDialogRequireClose",
+    "searchInBrowser",
+    "klausImportPackage",
+];
+
+/// Anki SvelteKit routes, served from Anki's build (its client router takes over).
+const ANKI_PAGES: &[&str] = &[
+    "card-info",
+    "change-notetype",
+    "congrats",
+    "deck-options",
+    "editor",
+    "graphs",
+    "image-occlusion",
+    "import-anki-package",
+    "import-csv",
+    "import-page",
+    "preferences",
+];
+
+/// What the shell does when the webview fires a [`HOOKS`] call.
+pub type Hook = Arc<dyn Fn(&str, &[u8]) + Send + Sync>;
+
 #[derive(Debug, PartialEq)]
 pub enum CallError {
     UnknownMethod,
@@ -121,6 +149,12 @@ impl Bridge {
     pub fn close_collection(&self) -> Result<(), CallError> {
         let req = CloseCollectionRequest { downgrade_to_schema11: false };
         self.run("closeCollection", &req.encode_to_vec()).map(drop)
+    }
+
+    /// For calls the shell itself decides to make (and tests); not reachable
+    /// from the webview.
+    pub fn call_trusted(&self, method: &str, input: &[u8]) -> Result<Vec<u8>, CallError> {
+        self.run(method, input)
     }
 
     /// What the webview reaches: allowlisted methods only.
@@ -179,23 +213,40 @@ struct AppState {
     /// `klaus_<port>=<token>`. Cookies aren't scoped by port, so the name carries it:
     /// two running instances must not overwrite each other's cookie.
     cookie: Arc<str>,
+    hook: Hook,
+}
+
+/// Where the two frontends live on disk.
+pub struct WebDirs {
+    /// Klaus's SvelteKit build (SPA fallback to its index.html).
+    pub klaus: PathBuf,
+    /// Anki's SvelteKit build (`vendor/anki/out/sveltekit`).
+    pub anki: PathBuf,
 }
 
 /// Binds 127.0.0.1 on a free port and returns the address plus the server future.
-/// `static_dir` holds the built frontend (SPA fallback to its index.html).
 pub async fn serve(
     bridge: Arc<Bridge>,
-    static_dir: PathBuf,
+    web: WebDirs,
     token: String,
+    hook: Hook,
 ) -> std::io::Result<(SocketAddr, impl std::future::Future<Output = std::io::Result<()>>)> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let addr = listener.local_addr()?;
     let cookie = format!("klaus_{}={token}", addr.port()).into();
-    let state = AppState { bridge, token: token.into(), cookie };
-    let spa = ServeDir::new(&static_dir).fallback(ServeFile::new(static_dir.join("index.html")));
-    let app = Router::new()
+    let state = AppState { bridge, token: token.into(), cookie, hook };
+    let klaus = ServeDir::new(&web.klaus).fallback(ServeFile::new(web.klaus.join("index.html")));
+    let mut app = Router::new()
         .route("/_anki/{method}", post(anki_method))
-        .fallback_service(spa)
+        .nest_service("/_app", ServeDir::new(web.anki.join("_app")));
+    let anki_index = ServeFile::new(web.anki.join("index.html"));
+    for page in ANKI_PAGES {
+        app = app
+            .route_service(&format!("/{page}"), anki_index.clone())
+            .route_service(&format!("/{page}/{{*rest}}"), anki_index.clone());
+    }
+    let app = app
+        .fallback_service(klaus)
         .layer(middleware::from_fn_with_state(state.clone(), grant_cookie))
         .with_state(state);
     Ok((addr, async move { axum::serve(listener, app).await }))
@@ -230,6 +281,11 @@ async fn anki_method(
     let binary = headers.get(header::CONTENT_TYPE).is_some_and(|v| v == "application/binary");
     if !has_token || !binary {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    if HOOKS.contains(&method.as_str()) {
+        let hook = state.hook.clone();
+        tokio::task::spawn_blocking(move || hook(&method, &body));
+        return StatusCode::NO_CONTENT.into_response();
     }
     let bridge = state.bridge.clone();
     let result = tokio::task::spawn_blocking(move || bridge.call(&method, &body)).await;
