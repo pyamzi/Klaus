@@ -123,6 +123,7 @@ class _FakeSidebar(_QtW.QWidget):
     def __init__(self):
         super().__init__(None)
         self.tabs = _rt.ReaderTabs(self)
+        _QtW.QVBoxLayout(self).addWidget(self.tabs)  # as PdfSidebar: strip on top
         self.tabs.closed.connect(
             lambda _n: None if self.tabs.names() else self.clear())
         self.picker_shown = 0
@@ -208,10 +209,12 @@ check("movable, floatable, closable — Qt's own drag, float and hide",
                        | F.DockWidgetClosable))
 check("the bar is the title-bar widget and the sidebar is the dock's widget",
       d.titleBarWidget() is d._bar and d.widget() is sb)
-check("the tabs live in the reader, not the title bar (PDF reader 3/5): "
-      "the bar keeps thumbnails, float and hide only",
-      not hasattr(d._bar, "tabs") and not hasattr(d._bar, "add_btn")
-      and sb.tabs.parent() is sb)
+check("one row of chrome: the reader's strip (＋, tabs, page) sits in the "
+      "title bar between ◫ and ⧉, and no longer in the sidebar's layout",
+      sb.tabs.parent() is d._bar
+      and d._bar.layout().indexOf(sb.tabs) == 1
+      and sb.layout().indexOf(sb.tabs) == -1
+      and sb.tabs is getattr(sb, "tabs"))
 check("hidden until panel_show — a hidden dock takes no space",
       not d.isVisible())
 check("dock nesting is enabled on the host so the panel can sit beside "
@@ -318,23 +321,26 @@ _app.sendEvent(d, _QtG.QMouseEvent(  # end the move Qt just started
     _QtC.Qt.MouseButton.LeftButton, _QtC.Qt.MouseButton.NoButton,
     _QtC.Qt.KeyboardModifier.NoModifier))
 # F1 (review round 1) pinned a >= 60px drag strip beside a saturated tab
-# bar. The tabs left the bar (PDF reader 3/5), so the strip is now the bar
-# between ◫ and ⧉, however many PDFs are open.
+# bar. The strip is back in the bar (one row of chrome), so the drag strip
+# is the empty middle between the tab bar's end and the page label.
 for _name in ("Lecture 12 - Introduction to Quantum Field Theory.pdf",
               "Week 03 - Cardiovascular Physiology Overview.pdf",
               "CS 6820 Advanced Algorithms - Network Flow.pdf",
               "Organic Chemistry II - Reaction Mechanisms Review.pdf"):
     sb.load_pdf(_name)
 _app.processEvents()
-_strip = bar.float_btn.x() - (bar.thumbs_btn.x() + bar.thumbs_btn.width())
+_tabs_end = sb.tabs.mapTo(bar, sb.tabs.bar.geometry().topRight()).x()
+_label_x = sb.tabs.mapTo(bar, sb.tabs.page_label.geometry().topLeft()).x()
+_strip = _label_x - _tabs_end
 check("with four PDFs open the bar keeps a wide drag strip (>= 60px)",
       sb.tabs.names() and _strip >= 60, f"strip={_strip}")
 _spy.hits = 0
-_mid = _QtC.QPointF(bar.thumbs_btn.x() + bar.thumbs_btn.width() + _strip / 2,
-                    bar.height() / 2)
-_app.sendEvent(bar, _press(bar, _mid))
+_mid = _QtC.QPointF(_tabs_end + _strip / 2, bar.height() / 2)
+_target = bar.childAt(_mid.toPoint()) or bar
+_app.sendEvent(_target, _press(_target, _QtC.QPointF(
+    _target.mapFrom(bar, _mid.toPoint()))))
 check("...and a press in the middle of that strip reaches the QDockWidget",
-      _spy.hits == 1, f"hits={_spy.hits}")
+      _spy.hits == 1, f"hits={_spy.hits} target={type(_target).__name__}")
 _app.sendEvent(d, _QtG.QMouseEvent(  # end the move Qt just started
     _QtC.QEvent.Type.MouseButtonRelease, _mid,
     _QtC.Qt.MouseButton.LeftButton, _QtC.Qt.MouseButton.NoButton,

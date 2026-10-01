@@ -644,13 +644,13 @@ AREA_NAMES = {area: name for name, area in PANEL_AREAS.items()}
 
 
 class _PanelBar(QWidget):
-    """The dock's title bar: ``[◫]  …  [⧉] [✕]``. The tabs, ＋ and the
-    page label live inside the reader (``PdfSidebar.tabs``, PDF reader
-    3/5).
+    """The dock's title bar, one row: ``[◫] [＋] [tabs] … [page n/m] [⧉]
+    [✕]``. The middle is the reader's own strip (``PdfSidebar.tabs``),
+    moved up here so the editor dock spends one row on chrome, not two.
 
     Presses the bar does not handle are IGNORED so they reach the
     QDockWidget, which moves, docks and floats from them — Qt's
-    setTitleBarWidget contract; the whole empty bar is the drag strip.
+    setTitleBarWidget contract; the strip's empty middle is the drag strip.
     With a custom title bar Qt draws no float or close button, hence
     the two at the right end. Colours only through theme tokens.
     """
@@ -691,7 +691,20 @@ class _PanelBar(QWidget):
 
         self.thumbs_btn.clicked.connect(_toggle_thumbs)
         row.addWidget(self.thumbs_btn)
-        row.addStretch(1)
+        # The reader's strip joins this row. Its own trailing stretch
+        # stays empty, and a plain QWidget ignores presses, so that empty
+        # middle still drags the dock.
+        self._strip = getattr(sidebar, "tabs", None)
+        if self._strip is not None:
+            try:
+                sidebar.layout().removeWidget(self._strip)
+            except Exception:  # noqa: BLE001
+                pass
+            self._strip.layout().setContentsMargins(0, 0, 0, 0)
+            self._strip.setFixedHeight(28)
+            row.addWidget(self._strip, 1)
+        else:
+            row.addStretch(1)
 
         self.float_btn = QToolButton(self)
         self.float_btn.setText("⧉")
@@ -704,6 +717,20 @@ class _PanelBar(QWidget):
         self.hide_btn.setAutoRaise(True)
         self.hide_btn.setToolTip("Hide the PDF panel (Library… shows it again)")
         row.addWidget(self.hide_btn)
+        self._cap_tabs()
+
+    def _cap_tabs(self) -> None:
+        # Cap the tab bar so a drag strip always survives beside it,
+        # however many tabs are open: without the cap a few long names
+        # collapse the empty middle to a few px (F1, review round 1), and
+        # dragging this bar is the only way to move the panel. 250 covers
+        # ◫, ＋, the page label, ⧉ and ✕ and still leaves >= 60px.
+        if self._strip is not None:
+            self._strip.bar.setMaximumWidth(max(80, self.width() - 250))
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        super().resizeEvent(ev)
+        self._cap_tabs()
 
     # Ignore, never accept: the dock handles these (drag, double-click).
     def mousePressEvent(self, ev) -> None:  # noqa: N802
@@ -739,8 +766,9 @@ class PdfDock(QDockWidget):
 
     - **⧉** floats the panel or docks it back; **✕** at the bar's end
       hides it (the toolbar's Library… button shows it again).
-    - The tabs live in the reader (``PdfSidebar.tabs``): closing the last
-      one hides the panel.
+    - The tabs belong to the reader (``PdfSidebar.tabs``) but sit in this
+      dock's title bar, one row of chrome: closing the last one hides
+      the panel.
 
     Placement persists here; the tab set persists in the reader.
     """

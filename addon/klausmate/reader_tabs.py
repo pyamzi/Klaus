@@ -3,7 +3,9 @@
 One strip per ``PdfSidebar`` (its ``tabs`` attribute), so every host — the
 editor dock, the Lecture panel — has its own tab set. Moved out of
 ``__init__.PdfDock`` / ``_PanelBar`` in PDF reader 3/5; the dock keeps
-placement, float and hide.
+placement, float and hide, and puts this strip in its own title bar so
+the editor dock has one row of chrome. The Lecture panel shows it above
+the reader.
 
 The strip only shows names and reports what the user did; the reader
 (``PdfSidebar``) loads documents and persists the set:
