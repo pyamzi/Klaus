@@ -6,7 +6,8 @@ PNG and starts on a third tab, "&Draw": an Excalidraw webview with a Qt
 excal_tab.prepare_occlusion writes the PNG and the label-mask SVG
 (excal_masks), ImgOccAdd.use_drawing swaps svg-edit onto them and enables
 Add, and after IOE adds the notes the scene is saved beside the image as
-``<returned media name>.excalidraw``.
+``_<returned media name>.excalidraw`` (the underscore keeps Check Media
+from listing it as unused).
 
 Run: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_excal_flow.py
 """
@@ -408,6 +409,13 @@ if et is not None and ok:
     web._onBridgeCmd("klausexcal:occlude:" + b64json(RESULT))
     check("a good result reaches on_use as a dict", USED == [RESULT])
     check("...and stays dirty when on_use did not take it (returned falsy)", getattr(tab, "dirty", None) is True)
+    tab.load(SCENE)
+    check("load() makes the drawing clean again (it was dirty just before)",
+          getattr(tab, "dirty", None) is False)
+    web._onBridgeCmd("klausexcal:dirty:" + b64json({}))
+    check("...and a change after the load is dirty again", getattr(tab, "dirty", None) is True)
+    tab.load(None)
+    check("load(None) is clean too", getattr(tab, "dirty", None) is False)
     TIPS.clear()
     ok2, _ = attempt(web._onBridgeCmd, "klausexcal:occlude:@@@not-base64")
     check("a garbled message is logged, never raised", ok2 and len(USED) == 1)
@@ -437,6 +445,36 @@ check("entry.jsx reports changes: onChange sends a dirty message",
       "onChange=" in src and 'send("dirty"' in src)
 check("the bundle carries aiEnabled:false and the dirty message",
       re.search(r"aiEnabled:(!1|false)", js) is not None and '"dirty"' in js)
+NODE = shutil.which("node")
+parts = [re.search(pat, src, re.S) for pat in (
+    r"function sceneVersion\(.*?\n\}\n", r"function markClean\(.*?\n\}\n",
+    r"async function occlude\(\) \{.*?\n\}\n")]
+check("sceneVersion, markClean and occlude are extractable", all(parts))
+if all(parts) and NODE:
+    import subprocess
+
+    def race(edit_during_export):
+        prog = (
+            "let cleanVersion = 0, reported = false;\n"
+            "const api = {els: [{version: 1}], getSceneElementsIncludingDeleted() { return this.els; }};\n"
+            "const sent = [];\nfunction send(a) { sent.push(a); }\n"
+            + "".join(m.group(0) for m in parts) +
+            "async function exportForOcclusion() {\n"
+            "  await null;\n"
+            + ("  api.els = [{version: 1}, {version: 3}];\n" if edit_during_export else "") +
+            "  return JSON.stringify({png: 'x'});\n}\n"
+            "occlude().then(() => console.log(JSON.stringify({sent, reported})));\n")
+        run = subprocess.run([NODE, "-e", prog], capture_output=True, text=True)
+        return json.loads(run.stdout) if run.returncode == 0 else {"err": run.stderr[-300:]}
+
+    got = race(True)
+    check("an edit during the export is reported after the result (occlude, then dirty)",
+          got.get("sent") == ["occlude", "dirty"], str(got))
+    got = race(False)
+    check("no edit during the export: only occlude, nothing pending",
+          got.get("sent") == ["occlude"] and got.get("reported") is False, str(got))
+elif all(parts):
+    print("SKIP  the export race (no node)")
 check("the bundle exposes it too", "exportForOcclusion" in js and "klausexcal:" in js
       and re.search(r"klausExcalidraw=\{[^}]*occlude", js) is not None)
 for cls in (".main-menu-trigger", ".sidebar-trigger", ".help-icon"):
@@ -590,6 +628,8 @@ if dlg is not None:
           dlg.tab_widget.currentIndex() == 2 and not dlg.ao_btn.isEnabled())
 
     section("use_drawing: the change-image path, masks, Add, tab 0")
+    tab.web._onBridgeCmd("klausexcal:dirty:" + b64json({}))
+    check("before Use drawing the drawing is dirty", getattr(tab, "dirty", None) is True)
     TIPS.clear()
     dlg.svg_edit.evals.clear()
     tab.web._onBridgeCmd("klausexcal:occlude:" + b64json(RESULT))  # through the button path
@@ -716,11 +756,13 @@ class TitleBarClose:
 GATE = "svgCanvas.undoMgr.getUndoStackSize() == 0"
 
 
-def draw_session():
+def draw_session(loaded=True):
     e = new_editor()
     e.parentWindow.show()
     attempt(io.occlude, e, draw=True)
     d = getattr(getattr(e, "imgoccadd", None), "imgoccedit", None)
+    if d is not None and loaded:
+        d.svg_edit._onBridgeCmd("svgEditDone")  # svg-edit finished loading
     if d is not None:
         d.draw_tab.web._onBridgeCmd("klausexcal:ready:" + b64json({}))
     return e, d
@@ -782,12 +824,68 @@ try:
             QtCore.Qt.KeyboardModifier.NoModifier))
         check("...but not from the Draw tab (the canvas never closes the window)",
               d6.svg_edit.evals == [] and d6.isVisible())
+        d6.draw_tab.web._onBridgeCmd("klausexcal:dirty:" + b64json({}))
+        check("a changed drawing is dirty", getattr(d6.draw_tab, "dirty", None) is True)
         d6.draw_tab.web._onBridgeCmd("klausexcal:occlude:" + b64json(RESULT))
         check("after Use drawing the drawing is clean", getattr(d6.draw_tab, "dirty", None) is False)
         del asks[:]
         d6.close()
         check("a programmatic close (after Add, profile close) never asks",
               not d6.isVisible() and asks == [])
+finally:
+    ed_mod.io_ask = _io_ask
+
+
+section("svg-edit never loaded: Close and the X still work; one ask at a time")
+ed_mod.io_ask = asks
+try:
+    del asks[:]
+    e9, d9 = draw_session(loaded=False)
+    if d9 is not None:
+        d9.svg_edit.evals.clear()
+        btn = [b for b in d9.findChildren(QtWidgets.QPushButton) if b.text() == "&Close"]
+        attempt(btn[0].click)
+        check("Close with svg-edit not loaded and a clean drawing: closes at once",
+              not d9.isVisible() and asks == [] and GATE not in d9.svg_edit.evals if d9.svg_edit
+              else not d9.isVisible() and asks == [], f"{asks}")
+    del asks[:]
+    e9, d9 = draw_session(loaded=False)
+    if d9 is not None:
+        d9.draw_tab.web._onBridgeCmd("klausexcal:dirty:" + b64json({}))
+        d9.svg_edit.evals.clear()
+        ev = TitleBarClose()
+        attempt(d9.closeEvent, ev)
+        check("the X with svg-edit not loaded and a dirty drawing: asks, without svg-edit",
+              len(asks) == 1 and d9.isVisible() and GATE not in d9.svg_edit.evals,
+              f"{asks} {d9.svg_edit.evals}")
+        attempt(d9.reject)
+        check("...a second close (Escape) while asking stacks no second ask",
+              len(asks) == 1, str(asks))
+        if asks:
+            asks[0].on_answer(True)
+        check("...Yes closes it", not d9.isVisible())
+    del asks[:]
+    e9, d9 = draw_session()
+    if d9 is not None:
+        d9.draw_tab.web._onBridgeCmd("klausexcal:dirty:" + b64json({}))
+        d9.svg_edit.evals.clear()
+        attempt(d9.closeEvent, TitleBarClose())
+        attempt(d9.reject)
+        check("loaded: a fast X then Escape asks svg-edit at most twice",
+              d9.svg_edit.evals.count(GATE) <= 2, str(d9.svg_edit.evals))
+        attempt(d9._on_reject_callback, True)
+        attempt(d9._on_reject_callback, True)
+        check("...but both answers raise only one ask", len(asks) == 1, str(asks))
+        if asks:
+            asks[0].on_answer(False)
+        check("...No keeps it open", d9.isVisible())
+        d9.svg_edit.evals.clear()
+        attempt(d9.reject)
+        attempt(d9._on_reject_callback, True)
+        check("...and after the answer a later close asks again", len(asks) == 2, str(asks))
+        if len(asks) == 2:
+            asks[1].on_answer(True)
+        check("...Yes closes it", not d9.isVisible())
 finally:
     ed_mod.io_ask = _io_ask
 

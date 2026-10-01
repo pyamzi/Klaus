@@ -121,14 +121,22 @@ async function exportForOcclusion() {
 
 async function occlude() {
   let out;
+  let version = null;
   try {
-    const version = api ? sceneVersion(api.getSceneElementsIncludingDeleted()) : 0;
+    version = api ? sceneVersion(api.getSceneElementsIncludingDeleted()) : 0;
     out = JSON.parse(await exportForOcclusion());
     markClean(version); // Python keeps its own dirty flag until it takes the result
   } catch (e) {
+    version = null;
     out = { error: String((e && e.message) || e) };
   }
   send("occlude", out);
+  // An edit made while the export ran is not in the result: report it after
+  // the result, so Python's "clean" on taking the result doesn't swallow it.
+  if (version !== null && api && sceneVersion(api.getSceneElementsIncludingDeleted()) !== version) {
+    reported = true;
+    send("dirty", {});
+  }
 }
 
 window.klausExcalidraw = { load, exportForOcclusion, occlude };

@@ -124,6 +124,10 @@ class ImgOccWebView(webview.AnkiWebView):
 class ImgOccEdit(QDialog):
     """Main Image Occlusion Editor dialog"""
 
+    # Klaus: True while the discard ask is open, so a fast X then Escape
+    # never stacks a second one.
+    _asking = False
+
     def __init__(self, imgoccadd, parent):
         QDialog.__init__(self)
         mw.setupDialogGC(self)
@@ -205,16 +209,23 @@ class ImgOccEdit(QDialog):
     def reject(self):
         if not self.svg_edit:
             return super().reject()
+        if self._asking:
+            return
+        if not self.svg_edit._domDone:
+            # Klaus: svg-edit never finished loading, so it has no masks to
+            # lose and would never answer: decide on the fields and drawing.
+            return self._on_reject_callback(True)
         self.svg_edit.evalWithCallback(
             "svgCanvas.undoMgr.getUndoStackSize() == 0", self._on_reject_callback
         )
 
     def _on_reject_callback(self, undo_stack_empty: bool):
-        if self.svg_edit is None:  # closed meanwhile
+        if self.svg_edit is None or self._asking:  # closed meanwhile, or asking
             return
         drawing = self.draw_tab is not None and self.draw_tab.dirty
         if undo_stack_empty and not self._input_modified() and not drawing:
             return self.close()
+        self._asking = True
         io_ask(
             self,
             "Are you sure you want to close the window? This will discard any unsaved"
@@ -226,6 +237,7 @@ class ImgOccEdit(QDialog):
     def _on_reject_answer(self, yes: bool):
         # Klaus: close() rather than QDialog.reject, so closeEvent's cleanup
         # (Draw tab, geometry, hooks) runs on Escape and Close too.
+        self._asking = False
         if yes and self.svg_edit is not None:
             self.close()
 
