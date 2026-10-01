@@ -296,7 +296,11 @@ async fn http_contract_matches_ankis_post_ts() {
     std::fs::write(klaus_dir.path().join("anki-host.js"), "// klaus host").unwrap();
     std::fs::write(col_dir.path().join("collection.media/anki-host.js"), "// from a deck").unwrap();
     let anki_dir = tempfile::tempdir().unwrap();
-    std::fs::write(anki_dir.path().join("index.html"), "<html><head></head><p>anki</p></html>").unwrap();
+    std::fs::write(
+        anki_dir.path().join("index.html"),
+        r#"<html><head><meta http-equiv="content-security-policy" content="script-src 'self' 'sha256-abc='"></head><p>anki</p></html>"#,
+    )
+    .unwrap();
     std::fs::create_dir(anki_dir.path().join("_app")).unwrap();
     std::fs::write(anki_dir.path().join("_app/start.mjs"), "// anki").unwrap();
     let hooked = Arc::new(Mutex::new(Vec::new()));
@@ -410,8 +414,25 @@ async fn http_contract_matches_ankis_post_ts() {
     // Media (e.g. a deck's SVG/HTML) must never run as a same-origin document.
     for path in ["/evil.svg", "/editor/evil.svg"] {
         let res = client.get(format!("{base}{path}")).send().await.unwrap();
-        assert_eq!(res.headers()["content-security-policy"], "default-src 'none'; style-src 'unsafe-inline'", "{path}");
+        let csp = res.headers()["content-security-policy"].to_str().unwrap();
+        for d in ["script-src 'none'", "form-action 'none'", "base-uri 'none'", "img-src 'self'", "sandbox allow-same-origin"] {
+            assert!(csp.contains(d), "{path}: {csp}");
+        }
     }
+    // Anki's response CSP replaces the build's meta tag: pages showing note HTML only
+    // run Anki's and Klaus's scripts (path-scoped, so not a deck's media) and can't post forms.
+    let csp = |path: &str| {
+        let url = format!("{base}{path}");
+        let client = client.clone();
+        async move { client.get(url).send().await.unwrap().headers()["content-security-policy"].to_str().unwrap().to_owned() }
+    };
+    let o = &base;
+    let untrusted = format!(
+        "script-src {o}/_anki/ {o}/_app/ {o}/anki-host.js 'sha256-abc='; form-action 'none'; frame-ancestors 'none'"
+    );
+    assert_eq!(csp("/editor/?mode=add").await, untrusted);
+    assert_eq!(csp("/image-occlusion/Users/me/a.png").await, untrusted);
+    assert_eq!(csp("/deck-options/1").await, "frame-ancestors 'none'");
 
     // Reviewer assets are served for the card frame, readable cross-origin (fonts)…
     let js = client.get(format!("{base}/_anki/js/reviewer.js")).send().await.unwrap();

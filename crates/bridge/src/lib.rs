@@ -14,7 +14,7 @@ use anki_proto::collection::{CloseCollectionRequest, OpenCollectionRequest};
 use anki_proto::generic;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path as UrlPath, Request, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -551,6 +551,8 @@ struct AppState {
     cookie: Arc<str>,
     hook: Hook,
     anki_dir: Arc<PathBuf>,
+    /// `http://127.0.0.1:<port>`, for path-scoped CSP sources.
+    origin: Arc<str>,
 }
 
 /// Where the two frontends live on disk.
@@ -574,7 +576,8 @@ pub async fn serve(
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let addr = listener.local_addr()?;
     let cookie = format!("klaus_{}={token}", addr.port()).into();
-    let state = AppState { bridge, token: token.into(), cookie, hook, anki_dir: web.anki.clone().into() };
+    let origin = format!("http://127.0.0.1:{}", addr.port()).into();
+    let state = AppState { bridge, token: token.into(), cookie, hook, anki_dir: web.anki.clone().into(), origin };
     let klaus = ServeDir::new(&web.klaus).fallback(ServeFile::new(web.klaus.join("index.html")));
     let klaus_dir: Arc<PathBuf> = web.klaus.clone().into();
     let mut app = Router::new()
@@ -584,10 +587,16 @@ pub async fn serve(
         .nest_service("/_app", ServeDir::new(web.anki.join("_app")))
         .merge(anki_static(&web.anki_static));
     for page in ANKI_PAGES {
+        let page_route = get(move |state: State<AppState>| anki_page(state, page));
         app = app
-            .route(&format!("/{page}"), get(anki_page))
-            .route(&format!("/{page}/"), get(anki_page))
-            .route(&format!("/{page}/{{*rest}}"), get(anki_page_or_media));
+            .route(&format!("/{page}"), page_route.clone())
+            .route(&format!("/{page}/"), page_route)
+            .route(
+                &format!("/{page}/{{*rest}}"),
+                get(move |state: State<AppState>, rest: UrlPath<(String,)>, req: Request| {
+                    anki_page_or_media(state, rest, req, page)
+                }),
+            );
     }
     let app = app
         .fallback(move |state: State<AppState>, req: Request| root_or_media(state, req, klaus.clone(), klaus_dir.clone()))
@@ -609,18 +618,44 @@ fn anki_static(dir: &Path) -> Router<AppState> {
         }))
 }
 
+/// aqt/mediasrv.py UNTRUSTED_MEDIA_CSP, verbatim.
+const UNTRUSTED_MEDIA_CSP: &str = "default-src 'none'; script-src 'none'; connect-src 'none'; \
+    object-src 'none'; frame-src 'none'; child-src 'none'; base-uri 'none'; form-action 'none'; \
+    style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; media-src 'self'; \
+    sandbox allow-same-origin";
+
 /// Anki's SvelteKit shell, with what Anki's Qt webview would provide: the host
-/// script (`bridgeCommand`) before any page script runs, and base styling.
-async fn anki_page(State(state): State<AppState>) -> Response {
-    match tokio::fs::read_to_string(state.anki_dir.join("index.html")).await {
-        Ok(html) => Html(html.replacen(
-            "<head>",
-            r#"<head><link rel="stylesheet" href="/anki-host.css"><script src="/anki-host.js"></script>"#,
-            1,
-        ))
-        .into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
+/// script (`bridgeCommand`) before any page script runs, and base styling. Sent with
+/// the response CSP Anki's
+/// mediasrv sends in place of the build's meta tag: pages are never framed, and the
+/// pages that show note HTML (editor, image-occlusion) only run Anki's and Klaus's
+/// own scripts and can't submit forms.
+async fn anki_page(State(state): State<AppState>, page: &'static str) -> Response {
+    let Ok(html) = tokio::fs::read_to_string(state.anki_dir.join("index.html")).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    // SvelteKit's `<meta http-equiv="content-security-policy" content="script-src 'self' 'sha256-…'">`.
+    const META: &str = r#"<meta http-equiv="content-security-policy" content="script-src 'self' "#;
+    let mut hash = String::new();
+    let mut html = html;
+    if let Some(start) = html.find(META) {
+        if let Some(len) = html[start..].find('>') {
+            hash = html[start + META.len()..start + len].trim_end_matches('"').to_owned();
+            html.replace_range(start..=start + len, "");
+        }
     }
+    let html = html.replacen(
+        "<head>",
+        r#"<head><link rel="stylesheet" href="/anki-host.css"><script src="/anki-host.js"></script>"#,
+        1,
+    );
+    let csp = if matches!(page, "editor" | "image-occlusion") {
+        let o = &state.origin;
+        format!("script-src {o}/_anki/ {o}/_app/ {o}/anki-host.js {hash}; form-action 'none'; frame-ancestors 'none'")
+    } else {
+        "frame-ancestors 'none'".to_owned()
+    };
+    ([(header::CONTENT_SECURITY_POLICY, csp)], Html(html)).into_response()
 }
 
 /// Anki pages load media by relative URL (`<img src="foo.png">`), which resolves to
@@ -637,7 +672,7 @@ async fn media(state: &AppState, name: &str, req: Request) -> Result<Response, R
     let mut res = ServeFile::new(file).oneshot(req).await.into_response();
     // As Anki does for media: never run user-provided HTML/SVG as a document.
     res.headers_mut()
-        .insert(header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'unsafe-inline'".parse().unwrap());
+        .insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(UNTRUSTED_MEDIA_CSP));
     Ok(res)
 }
 
@@ -645,10 +680,11 @@ async fn anki_page_or_media(
     State(state): State<AppState>,
     UrlPath((rest,)): UrlPath<(String,)>,
     req: Request,
+    page: &'static str,
 ) -> Response {
     match media(&state, &rest, req).await {
         Ok(res) => res,
-        Err(_) => anki_page(State(state)).await,
+        Err(_) => anki_page(State(state), page).await,
     }
 }
 
