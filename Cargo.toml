@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/bridge", "src-tauri"]
+# Anki is a pinned git submodule (ADR-0001); its crates are path dependencies, not members.
+exclude = ["vendor/anki"]
+
+[workspace.package]
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+# Same as Anki: optimise dependencies in dev, or collection operations crawl.
+[profile.dev.package."*"]
+opt-level = 1
+debug = 0

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Anki translation submodules
+        run: git -C vendor/anki submodule update --init --depth 1 ftl/core-repo ftl/qt-repo
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tauri system libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust toolchain
+        run: rustup show
+      - run: npm ci
+      - name: Frontend (generates Anki's TS client)
+        shell: bash
+        run: npm config set script-shell bash && npm run check && npm run build
+      - name: Bridge tests
+        if: runner.os == 'macOS'
+        run: cargo test -p klaus-bridge
+      - name: Build app
+        if: runner.os == 'macOS'
+        run: cargo build -p klaus
+      - name: Compile check
+        if: runner.os != 'macOS'
+        run: cargo check --workspace --all-targets
