@@ -643,6 +643,16 @@ def heatmap_css() -> str:
         " .klaus-hm-scroll {"
         " overflow-x: auto; overflow-y: hidden; padding-bottom: 3px;"
         " }"
+        # NEWEST WEEKS FIRST when the box is narrower than the range (a
+        # 3-column dashboard grid, a large widget size): a scroller opens
+        # at its inline START, which was the oldest week, so today and
+        # the forecast were the part cut off. The scroller runs opposite
+        # to the plot, so it opens at the plot's END; the plot itself
+        # keeps the page's direction. Mirrored for RTL pages.
+        " .klaus-hm-scroll { direction: rtl; }"
+        " .klaus-hm-scroll > .klaus-hm-plot { direction: ltr; }"
+        " [dir=rtl] .klaus-hm-scroll { direction: ltr; }"
+        " [dir=rtl] .klaus-hm-scroll > .klaus-hm-plot { direction: rtl; }"
         # Two rows: month strip beside a spacer, then the weekday
         # column beside the cells. Both inner grids use the same column
         # and row sizes as the cells, so labels line up by construction

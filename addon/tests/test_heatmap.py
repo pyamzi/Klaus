@@ -383,6 +383,12 @@ check("the bar under the grid is gone in BOTH engines (Pouya, "
       and "::-webkit-scrollbar { display: none; }" in _css
       and "overflow-x: auto" in _css
       and "scrollbar { height" not in _css)
+check("a range wider than its box opens on the NEWEST weeks (the scroller runs "
+      "opposite to the plot, so it starts at the plot's end), mirrored for RTL pages",
+      " .klaus-hm-scroll { direction: rtl; }" in _css
+      and " .klaus-hm-scroll > .klaus-hm-plot { direction: ltr; }" in _css
+      and " [dir=rtl] .klaus-hm-scroll { direction: ltr; }" in _css
+      and " [dir=rtl] .klaus-hm-scroll > .klaus-hm-plot { direction: rtl; }" in _css)
 check("both palettes ship, keyed on Anki's own night-mode class — Anki "
       "flips that class with JS and never re-runs the hook that "
       "injected this, so baking one palette would freeze the heatmap "
