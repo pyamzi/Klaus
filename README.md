@@ -17,12 +17,12 @@ Klaus is a desktop app (Tauri + SvelteKit) that runs on [Anki](https://apps.anki
 - **Adding notes** with Anki's own editor, including pasted images.
 - **Importing `.apkg`** decks.
 - **Deck options and FSRS** with Anki's deck-options page: daily limits, learning steps, desired retention and parameter optimisation.
+- **Deck management**: create, rename and nest (`Parent::Child`), delete with undo, collapse and expand, plus filtered decks (build, rebuild and empty).
 
 ## Roadmap
 
 Milestone 1 is tracked in [issue #4](../../issues/4). Still to come:
 
-- Deck management and filtered decks
 - Browser: search, table, sidebar and bulk edits
 - Review actions: bury, suspend, flag and edit; card info; audio
 - AnkiWeb sync, including the full-sync choice
@@ -57,8 +57,8 @@ The design decisions are in [`docs/adr`](docs/adr), and the vocabulary (Collecti
 Prerequisites: Rust (toolchain pinned in `rust-toolchain.toml`), Node 22, and `protoc` (`brew install protobuf` on macOS).
 
 ```sh
-git clone --recurse-submodules https://github.com/pyamzi/klaus.git
-cd klaus
+git clone --recurse-submodules https://github.com/pyamzi/Klaus.git
+cd Klaus
 git -C vendor/anki submodule update --init --depth 1 ftl/core-repo ftl/qt-repo
 npm install
 npm run tauri dev
