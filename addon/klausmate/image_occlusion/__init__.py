@@ -15,9 +15,13 @@ CONFLICT_TOOLTIP = (
     "Occlusion Enhanced add-on and restart Anki."
 )
 
+# True once setup() has registered IOE; entry points elsewhere read it.
+_active = False
+
 
 def setup() -> bool:
     """Register IOE's hooks and menus. False when the separate add-on is on."""
+    global _active
     mgr = mw.addonManager
     # allAddons() first: isEnabled() is True for a folder that isn't there.
     if CONFLICT_ADDON in mgr.allAddons() and mgr.isEnabled(CONFLICT_ADDON):
@@ -31,12 +35,16 @@ def setup() -> bool:
     from .main import setup_main
 
     setup_main(mw)
+    _active = True
     return True
 
 
 def occlude(editor, image_path: str, initial_svg: str | None = None) -> bool:
     """Open the mask editor on image_path for editor's note; initial_svg, if
-    given, is loaded as the starting masks."""
+    given, is loaded as the starting masks. False, doing nothing, while the
+    conflict guard is tripped."""
+    if not _active:
+        return False
     from .main import on_image_occlusion_button
 
     origin = "addcards" if editor.addMode else "editcurrent"

@@ -62,6 +62,22 @@ svg_edit_queryitems = [
 ]
 
 
+def _current_deck_id(editor) -> int:
+    """Klaus (R7): the deck of the editor's Add window. Anki 26.09's
+    NewAddCards has no deck chooser, so fall back to Anki's defaults."""
+    window = editor.parentWindow
+    chooser = getattr(window, "deckChooser", None)
+    if chooser is not None:
+        return chooser.selectedId()
+    chooser = getattr(window, "deck_chooser", None)
+    if chooser is not None:
+        return chooser.selected_deck_id
+    try:
+        return mw.col.defaults_for_adding(current_review_card=None).deck_id
+    except Exception:
+        return mw.col.decks.get_current_id()
+
+
 class ImgOccAdd(object):
     def __init__(self, editor, origin, oldimg=None):
         self.ed = editor
@@ -129,7 +145,7 @@ class ImgOccAdd(object):
         # FIXME: Not necessarily up-to-date with new tag edit contents
         self.opref["tags"] = note.tags
         if self.origin == "addcards":
-            self.opref["did"] = self.ed.parentWindow.deckChooser.selectedId()
+            self.opref["did"] = _current_deck_id(self.ed)
         else:
             self.opref["did"] = mw.col.db.scalar(
                 "select did from cards where id = ?", note.cards()[0].id

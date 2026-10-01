@@ -14,7 +14,7 @@ not `.py`) must still match.
 
 Modified by Task 2 (Klaus rules: window-modal asks, gui_hooks, no `parent` shadow, `col.get_config`/`set_config`, web path): `add.py`, `config.py`, `consts.py`, `dialogs.py`, `editor.py`, `main.py`, `nconvert.py`, `ngen.py`, `options.py`, `web.py`.
 
-Also modified by Task 3 (wiring): `add.py` (`occlude(image_path, initial_svg)` returns True; add mode loads `initial_svg` through svg-edit's `url` item), `main.py` (no `setConfigAction`; menu labels "Image Occlusion Options…" and "Image Occlusion Help…").
+Also modified by Task 3 (wiring): `add.py` (`occlude(image_path, initial_svg)` returns True; add mode loads `initial_svg` through svg-edit's `url` item), `main.py` (no `setConfigAction`; menu labels "Image Occlusion Options…" and "Image Occlusion Help…"; origin from `editor.addMode`; `on_profile_loaded` logs instead of raising), `add.py` again (`_current_deck_id`: Anki 26.09's NewAddCards has no deck chooser).
 
 ```
 3b530b4274f7458b02fa4cfdb8f876aa1befb208641ffa47d1f493dfa02e05e6  LICENSE.txt

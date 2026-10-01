@@ -111,6 +111,11 @@ check("no menu action is added",
 check("exactly the conflict tooltip is shown", tips == [CONFLICT_TIP], str(tips))
 check("the guard runs before IOE's modules load",
       "klausmate.image_occlusion.main" not in sys.modules)
+check("setup() leaves the guard flag off", io._active is False)
+check("occlude() does nothing while the guard is tripped",
+      io.occlude(types.SimpleNamespace(addMode=True), "/nonexistent.png") is False
+      and "klausmate.image_occlusion.main" not in sys.modules
+      and "klausmate.image_occlusion.add" not in sys.modules)
 
 main = importlib.import_module("klausmate.image_occlusion.main")
 main.QAction = Action
@@ -130,6 +135,7 @@ for label, mgr in (("disabled", Mgr(installed=["1374772155"], disabled=["1374772
                   ("state_shortcuts_will_change", main.on_mw_state_shortcuts)):
         check("registers %s once" % h, getattr(gh, h) == [fn], str(getattr(gh, h)))
     check("no tooltip", tips == [])
+    check("setup() sets the guard flag", io._active is True)
     check("R3: setConfigAction is never called (Klaus keeps its own Config button)",
           mgr.config_actions == [], str(mgr.config_actions))
     check("Tools gets 'Image Occlusion Options…'",
@@ -369,5 +375,55 @@ editor = types.SimpleNamespace(
 io.occlude(editor, PNG)
 check("without initial_svg there is no url= item",
       len(urls) == 1 and not QUrlQuery(urls[0]).hasQueryItem("url"))
+
+
+section("R7: Anki 26.09's NewAddCards (no deck chooser at all)")
+import contextlib  # noqa: E402
+import io as _stdio  # noqa: E402
+
+
+class NewAddCards:
+    """Like aqt.addcards.NewAddCards: no deckChooser, no deck_chooser, no AddCards base."""
+
+
+urls.clear()
+col = Col(tempfile.mkdtemp(prefix="io-media-"), model=io_model())
+col.defaults_for_adding = lambda current_review_card=None: types.SimpleNamespace(deck_id=77)
+col.decks = types.SimpleNamespace(get_current_id=lambda: 99)
+use_col(col)
+editor = types.SimpleNamespace(addMode=True, note=Note(), parentWindow=NewAddCards())
+check("the editor-button origin comes from addMode, not isinstance(AddCards)",
+      main.get_editor_parent_instance(editor) == "addcards")
+check("a non-add editor is not addcards",
+      main.get_editor_parent_instance(types.SimpleNamespace(
+          addMode=False, parentWindow=NewAddCards())) != "addcards")
+check("occlude works in a NewAddCards-like window", io.occlude(editor, PNG) is True
+      and editor.imgoccadd.origin == "addcards")
+check("...and takes the deck from col.defaults_for_adding",
+      editor.imgoccadd.opref.get("did") == 77, str(editor.imgoccadd.opref.get("did")))
+del col.defaults_for_adding
+check("without defaults_for_adding the deck is the current deck",
+      add._current_deck_id(editor) == 99)
+legacy = types.SimpleNamespace(deckChooser=types.SimpleNamespace(selectedId=lambda: 5))
+check("legacy AddCards: deckChooser.selectedId() first",
+      add._current_deck_id(types.SimpleNamespace(parentWindow=legacy)) == 5)
+newer = types.SimpleNamespace(deck_chooser=types.SimpleNamespace(selected_deck_id=6))
+check("then deck_chooser.selected_deck_id",
+      add._current_deck_id(types.SimpleNamespace(parentWindow=newer)) == 6)
+
+section("on_profile_loaded logs a malformed imgocc config instead of raising")
+col = Col(tempfile.mkdtemp(prefix="io-media-"), model=io_model())
+col._conf["imgocc"] = {"ofill": "FFEBA2"}  # no "version"
+use_col(col)
+out = _stdio.StringIO()
+try:
+    with contextlib.redirect_stdout(out):
+        main.on_profile_loaded()
+    raised = None
+except Exception as e:  # noqa: BLE001
+    raised = e
+check("it does not raise", raised is None, repr(raised))
+check("it logs '[klausmate] image occlusion profile setup failed: …'",
+      "[klausmate] image occlusion profile setup failed:" in out.getvalue(), out.getvalue())
 
 raise SystemExit(report())

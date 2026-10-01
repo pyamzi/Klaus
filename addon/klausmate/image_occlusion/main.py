@@ -39,7 +39,6 @@ import sys
 from typing import TYPE_CHECKING, Optional
 
 from aqt import mw
-from aqt.addcards import AddCards
 from aqt.editcurrent import EditCurrent
 from aqt.editor import Editor
 from aqt.qt import QAction, QDesktopServices, QMenu, Qt, QUrl
@@ -80,7 +79,7 @@ def on_io_help():
 
 def on_image_occlusion_button(self, origin=None, image_path=None, initial_svg=None):
     """Launch Image Occlusion Enhanced"""
-    origin = origin or get_editor_parent_instance(self.parentWindow)
+    origin = origin or get_editor_parent_instance(self)
     io_model = getOrCreateModel()
     if io_model:
         io_model_fields = mw.col.models.fieldNames(io_model)
@@ -113,7 +112,7 @@ def on_setup_editor_buttons(buttons, editor):
     else:
         hotkey = conf.get("hotkey", IO_HOTKEY)
 
-    origin = get_editor_parent_instance(editor.parentWindow)
+    origin = get_editor_parent_instance(editor)
 
     if origin == "addcards":
         tt = _("Add Image Occlusion")
@@ -137,11 +136,13 @@ def on_setup_editor_buttons(buttons, editor):
     return buttons
 
 
-def get_editor_parent_instance(parent):
+def get_editor_parent_instance(editor):
     """Determine parent instance of editor widget"""
-    if isinstance(parent, AddCards):
+    # Klaus (R7): from editor.addMode. Anki 26.09's NewAddCards is not an
+    # AddCards, so isinstance missed the new Add window.
+    if editor.addMode:
         return "addcards"
-    elif isinstance(parent, EditCurrent):
+    elif isinstance(editor.parentWindow, EditCurrent):
         return "editcurrent"
     else:
         return "browser"
@@ -248,9 +249,14 @@ def on_editor_will_load_note(js: str, note, editor: Editor) -> str:
 
 def on_profile_loaded():
     """Setup add-on config and templates, update if necessary"""
-    getSyncedConfig()
-    getLocalConfig()
-    getOrCreateModel()
+    # Klaus: a malformed imgocc config is logged, never raised into
+    # profile_did_open (that would skip the callbacks after this one).
+    try:
+        getSyncedConfig()
+        getLocalConfig()
+        getOrCreateModel()
+    except Exception as e:
+        print(f"[klausmate] image occlusion profile setup failed: {type(e).__name__}: {e}")
 
 
 # Mask toggle hotkey
