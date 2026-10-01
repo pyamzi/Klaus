@@ -130,12 +130,18 @@ class ImgOccEdit(QDialog):
         self.imgoccadd = imgoccadd
         self.parent_window = parent
         self.mode = "add"
+        # Klaus: the Draw tab (draw sessions only) and the Add lock it holds
+        # until a drawing is used, so no card is made from the blank image.
+        self.draw_tab = None
+        self.add_blocked = False
         loadConfig(self)
         self.setupUi()
         restoreGeom(self, "imgoccedit")
         profile_will_close.append(self.onProfileUnload)
 
     def closeEvent(self, event):
+        if self.draw_tab is not None:
+            self.draw_tab.shutdown()  # a late "Use drawing" answer touches nothing
         if mw.pm.profile is not None:
             self.deckChooser.cleanup()
             saveGeom(self, "imgoccedit")
@@ -360,6 +366,23 @@ class ImgOccEdit(QDialog):
         )
         QShortcut(QKeySequence("Ctrl+Shift+t"), self).activated.connect(self.focusTags)
         QShortcut(QKeySequence("Ctrl+f"), self).activated.connect(self.fitImageCanvas)
+
+    def add_draw_tab(self, on_use):
+        """Klaus: the third tab, Draw, made current; Add waits for a drawing."""
+        from .excal_tab import DrawTab
+
+        self.draw_tab = DrawTab(self, on_use)
+        index = self.tab_widget.addTab(self.draw_tab, _("&Draw"))
+        self.tab_widget.setTabToolTip(index, _("Draw a diagram; its text labels become masks"))
+        self.tab_widget.setCurrentIndex(index)
+        self.set_add_enabled(False)
+        return self.draw_tab
+
+    def set_add_enabled(self, enabled):
+        """Klaus: the Add buttons, and the Ctrl+Return shortcuts through add_blocked."""
+        self.add_blocked = not enabled
+        for btn in (self.ao_btn, self.oa_btn, self.new_btn):
+            btn.setEnabled(enabled)
 
     # Various actions that act on / interact with the ImgOccEdit UI:
 

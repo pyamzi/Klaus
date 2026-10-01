@@ -149,6 +149,7 @@ class PdfSidebar(QWidget):
             self._viewer.on_selection = self._report_selection
             self._viewer.on_stale = self._on_viewer_stale
             self._viewer.on_occlude = self._on_occlude
+            self._viewer.on_draw_diagram = self._on_draw_diagram
             self._tell_occlusion_enabled()  # built with an editor already
             outer.addWidget(self._viewer, 1)
         else:
@@ -239,6 +240,21 @@ class PdfSidebar(QWidget):
             return
         if not image_occlusion.occlude(editor, path, None):
             # IOE may have said why itself (unsupported image, wrong note type).
+            tooltip("Klaus: couldn't open the occlusion editor")
+
+    def _on_draw_diagram(self) -> None:
+        """ "Draw a diagram…": the occlusion editor on a blank image, Draw tab first."""
+        from . import image_occlusion
+        from .pdfjs_viewer import NO_EDITOR_TIP
+
+        editor = self._editor_ref
+        if editor is None:
+            tooltip(NO_EDITOR_TIP)
+            return
+        if not image_occlusion._active:
+            tooltip(image_occlusion.CONFLICT_TOOLTIP)
+            return
+        if not image_occlusion.occlude(editor, draw=True):
             tooltip("Klaus: couldn't open the occlusion editor")
 
     def notify_page_changed(self, page: int) -> None:

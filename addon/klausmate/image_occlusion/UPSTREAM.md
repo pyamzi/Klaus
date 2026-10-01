@@ -16,7 +16,11 @@ Modified by Task 2 (Klaus rules: window-modal asks, gui_hooks, no `parent` shado
 
 Also modified by Task 3 (wiring): `add.py` (`occlude(image_path, initial_svg)` returns True; add mode loads `initial_svg` through svg-edit's `url` item), `main.py` (no `setConfigAction`; menu labels "Image Occlusion Options…" and "Image Occlusion Help…"; origin from `editor.addMode`; `on_profile_loaded` logs instead of raising), `add.py` again (`_current_deck_id`: Anki 26.09's NewAddCards has no deck chooser).
 
-Klaus additions, not part of IOE and not hashed below: `__init__.py`, `excalidraw/` (the offline Excalidraw page, Task 5; `scripts/build_excalidraw.sh` produces it, so edit the script, not the bundle; font licences in `excalidraw/fonts/LICENSES.txt`) and `excal_masks.py` (label masks from an Excalidraw scene, Task 6).
+Also modified by Task 7 ("Draw a diagram…"): `add.py` (`occlude(..., draw)` opens on a blank PNG with the Draw tab; `use_drawing`; Add waits for a drawing; the `.excalidraw` sidecar after the notes are added; Change Image clears it), `editor.py` (`add_draw_tab`, `set_add_enabled`, the Draw tab shut down on close), `main.py` (the Add editor's I/O button offers "Choose image…" and "Draw a diagram…"), `ngen.py` (`generateNotes` keeps the media name Anki returned as `media_name`).
+
+Klaus additions, not part of IOE and not hashed below: `__init__.py`, `excalidraw/` (the offline Excalidraw page, Task 5; `scripts/build_excalidraw.sh` produces it, so edit the script, not the bundle; font licences in `excalidraw/fonts/LICENSES.txt`), `excal_masks.py` (label masks from an Excalidraw scene, Task 6), `excal_tab.py` (the occlusion editor's Draw tab, Task 7) and `svg-edit/LICENSE-svg-edit.txt`.
+
+`svg-edit/LICENSE-svg-edit.txt` is svg-edit's MIT licence, which IOE's copy of svg-edit 2.6 did not carry (its file headers say MIT). It is svg-edit's `LICENSE` verbatim from https://github.com/SVG-Edit/svgedit at commit `92b9f6abeaca87aafa71aeba73658e7962896df9` (branch `svn/2.6`, the line IOE vendors), sha256 `8d2e7662c8903c04205ed16f610285998a92a7b22384426c0b19a68793447e2a`.
 
 ```
 3b530b4274f7458b02fa4cfdb8f876aa1befb208641ffa47d1f493dfa02e05e6  LICENSE.txt

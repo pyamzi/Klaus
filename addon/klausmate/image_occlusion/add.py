@@ -34,7 +34,10 @@
 Add notes.
 """
 
+import atexit
+import json
 import os
+import shutil
 import tempfile
 
 from anki.config import Config
@@ -42,6 +45,7 @@ from aqt import mw
 from aqt.qt import QApplication, QFileDialog, Qt, QUrl, QUrlQuery
 from aqt.utils import showWarning, tooltip
 
+from . import excal_tab
 from .config import *
 from .consts import SUPPORTED_EXTENSIONS
 from .dialogs import io_critical, io_info
@@ -86,13 +90,28 @@ class ImgOccAdd(object):
         self.origin = origin
         self.opref = {}  # original io session preference
         self.initial_svg = None
+        # Klaus: a draw session ("Draw a diagram…"): its temp folder, and the
+        # scene saved beside the image once the notes are added.
+        self.draw = False
+        self.draw_dir = None
+        self.excal_sidecar = None
         loadConfig(self)
 
-    def occlude(self, image_path=None, initial_svg=None):
+    def occlude(self, image_path=None, initial_svg=None, draw=False):
         """Klaus: initial_svg, in add mode, is loaded as the starting masks
-        (svg-edit's url item, as edit mode passes the original mask)."""
+        (svg-edit's url item, as edit mode passes the original mask). With
+        draw, the image is a blank PNG and the editor opens on its Draw tab."""
         note = self.ed.note
         isIO = note and note.model() == getOrCreateModel()
+
+        self.draw = draw
+        if draw:
+            try:
+                image_path = excal_tab.blank_png(self._draw_folder())
+            except OSError as e:
+                print("[klausmate] draw: no blank image: %s" % e)
+                tooltip(_("Klaus: couldn't start a drawing"))
+                return False
 
         if not image_path:
             if self.origin == "addcards":
@@ -244,6 +263,8 @@ class ImgOccAdd(object):
         dialog.setupFields(flds)
         dialog.switchToMode(self.mode)
         self.imgoccedit = dialog
+        if self.draw:
+            dialog.add_draw_tab(self.use_drawing).load(None)
         logging.debug("Launching new ImgOccEdit instance")
 
         url = QUrl.fromLocalFile(svg_edit_path)
@@ -334,9 +355,69 @@ class ImgOccAdd(object):
             % (bkgd_url, width, height)
         )
         self.image_path = image_path
+        # Klaus: a picked image replaces any drawing: no sidecar, Add allowed.
+        self.excal_sidecar = None
+        self.imgoccedit.set_add_enabled(True)
+
+    def _draw_folder(self):
+        """Klaus: this session's temp folder for the blank and the diagrams.
+        svg-edit reads them by URL after we return, so it goes at exit."""
+        if self.draw_dir is None:
+            self.draw_dir = tempfile.mkdtemp(prefix="klaus-diagram-")
+            atexit.register(shutil.rmtree, self.draw_dir, True)
+        return self.draw_dir
+
+    def use_drawing(self, result):
+        """Klaus: "Use drawing" on the Draw tab. The drawing becomes the
+        image (the change-image path) with one mask per text label, Add is
+        allowed, and the Masks Editor shows. False, changing nothing, when
+        the result can't be used (a tooltip says why) or the editor closed."""
+        dialog = self.imgoccedit
+        if dialog.svg_edit is None:  # closed meanwhile (Review Focus 4)
+            return False
+        try:
+            png_path, svg_path, sidecar = excal_tab.prepare_occlusion(
+                result, self._draw_folder(),
+                "#" + self.sconf["ofill"].lstrip("#"), "#" + self.sconf["scol"].lstrip("#"))
+            width, height = get_image_dimensions(png_path)
+            with open(svg_path, encoding="utf-8") as f:
+                svg = f.read()
+        except (ValueError, OSError) as e:
+            tooltip(str(e), parent=dialog)
+            return False
+        # setSvgString sizes the canvas from the SVG, so the background and
+        # resolution come after it, as onChangeImage sets them.
+        # Masks are replaced; Task 8 keeps the hand-drawn ones.
+        dialog.svg_edit.eval(
+            "svgEditor.loadFromString(%s);\n"
+            "svgCanvas.setBackground('#FFF', '%s');\n"
+            "svgCanvas.setResolution(%s, %s);\n"
+            % (json.dumps(svg), path_to_url(png_path), width, height)
+        )
+        self.image_path = png_path
+        self.excal_sidecar = sidecar
+        dialog.set_add_enabled(True)
+        dialog.tab_widget.setCurrentIndex(0)
+        dialog.fitImageCanvas()
+        dialog.fitImageCanvas(delay=200)
+        return True
+
+    def _save_sidecar(self, image_name):
+        """Klaus: the scene as <image media name>.excalidraw, beside the image
+        the notes show (written like IOE writes its masks)."""
+        path = os.path.join(mw.col.media.dir(), image_name + ".excalidraw")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.excal_sidecar)
+        except OSError as e:
+            print("[klausmate] draw: the scene was not saved: %s" % e)
+            tooltip(_("Klaus: the cards were added, but the drawing couldn't be saved for editing"))
 
     def onAddNotesButton(self, choice, close):
         dialog = self.imgoccedit
+        if dialog.add_blocked:  # Klaus: a draw session before "Use drawing"
+            tooltip(_("Press Use drawing first"), parent=dialog)
+            return
         # If the user is in in-group editing mode (i.e. editing a shape that
         # is grouped with other shapes) svgCanvasToString() doesn't work and
         # the callback gets called with `None` (might be a bug in svg-edit).
@@ -365,6 +446,8 @@ class ImgOccAdd(object):
         r = gen.generateNotes()
         if r is False:
             return False
+        if self.excal_sidecar is not None:
+            self._save_sidecar(gen.media_name)
 
         if self.origin == "addcards" and self.ed.note:
             # Update Editor with modified tags and sources field

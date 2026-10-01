@@ -108,6 +108,7 @@ class ImgOccNoteGenerator(object):
         qmasks = self._generateMaskSVGsFor("Q")
         amasks = self._generateMaskSVGsFor("A")
         image_path = mw.col.media.add_file(self.image_path)
+        self.media_name = image_path  # Klaus: the name Anki returned (the diagram sidecar follows it)
         img = path_to_img_element(image_path)
 
         mw.checkpoint("Adding Image Occlusion Cards")

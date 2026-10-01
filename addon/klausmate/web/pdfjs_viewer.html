@@ -1146,11 +1146,14 @@ window.klausSetOcclusionEnabled = function (on) { state.occlusionEnabled = !!on;
 
 /* occlusion-items:start */
 /* [label, action, disabled] rows for the context menu; the region item
-   exists only while a marquee stands. Disabled without an editor. */
+   exists only while a marquee stands. "Draw a diagram…" (3/3) opens the
+   occlusion editor on its Draw tab; it renders nothing from the page.
+   Disabled without an editor. */
 function occlusionItems(page0, pm, enabled) {
   const off = !enabled;
   const items = [["Occlude this page", () => occludeImage(page0, null), off]];
   if (pm) items.push(["Occlude this region", () => occludeImage(pm.page0, pm), off]);
+  items.push(["Draw a diagram…", () => post("draw-diagram"), off]);
   return items;
 }
 /* occlusion-items:end */

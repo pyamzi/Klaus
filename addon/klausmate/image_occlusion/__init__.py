@@ -39,13 +39,15 @@ def setup() -> bool:
     return True
 
 
-def occlude(editor, image_path: str, initial_svg: str | None = None) -> bool:
+def occlude(editor, image_path: str | None = None, initial_svg: str | None = None,
+            draw: bool = False) -> bool:
     """Open the mask editor on image_path for editor's note; initial_svg, if
-    given, is loaded as the starting masks. False, doing nothing, while the
-    conflict guard is tripped."""
+    given, is loaded as the starting masks. With draw, the image is a blank
+    PNG and the editor opens on its Draw tab ("Draw a diagram…"). False,
+    doing nothing, while the conflict guard is tripped."""
     if not _active:
         return False
     from .main import on_image_occlusion_button
 
     origin = "addcards" if editor.addMode else "editcurrent"
-    return bool(on_image_occlusion_button(editor, origin, image_path, initial_svg))
+    return bool(on_image_occlusion_button(editor, origin, image_path, initial_svg, draw=draw))

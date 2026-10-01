@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Optional
 from aqt import mw
 from aqt.editcurrent import EditCurrent
 from aqt.editor import Editor
-from aqt.qt import QAction, QDesktopServices, QMenu, Qt, QUrl
+from aqt.qt import QAction, QCursor, QDesktopServices, QMenu, Qt, QUrl
 from aqt.utils import tooltip
 
 from .add import ImgOccAdd
@@ -77,7 +77,7 @@ def on_io_help():
     ioHelp("main", parent=mw)
 
 
-def on_image_occlusion_button(self, origin=None, image_path=None, initial_svg=None):
+def on_image_occlusion_button(self, origin=None, image_path=None, initial_svg=None, draw=False):
     """Launch Image Occlusion Enhanced"""
     origin = origin or get_editor_parent_instance(self)
     io_model = getOrCreateModel()
@@ -97,11 +97,33 @@ def on_image_occlusion_button(self, origin=None, image_path=None, initial_svg=No
     except AttributeError:
         oldimg = None
     self.imgoccadd = ImgOccAdd(self, origin, oldimg)
-    return self.imgoccadd.occlude(image_path, initial_svg)
+    return self.imgoccadd.occlude(image_path, initial_svg, draw)
 
 
 # legacy alias for third-party add-ons calling IO
 onImgOccButton = on_image_occlusion_button
+
+
+def source_menu(editor):
+    """Klaus: the two sources the Add editor's I/O button offers."""
+    menu = QMenu(editor.parentWindow)
+    choose = menu.addAction(_("Choose image…"))
+    qconnect(choose.triggered, lambda _checked=False, e=editor: onImgOccButton(e))
+    draw = menu.addAction(_("Draw a diagram…"))
+    qconnect(draw.triggered, lambda _checked=False, e=editor: onImgOccButton(e, draw=True))
+    return menu
+
+
+def on_io_button(editor):
+    """Klaus: in Add, a menu of sources; elsewhere IOE's button as it was
+    (it edits an occlusion note or occludes the note's image)."""
+    if get_editor_parent_instance(editor) != "addcards":
+        return onImgOccButton(editor)
+    # A popup, not exec (K-114). The window owns it; it goes once it hides
+    # (deleteLater waits for this event loop, so the picked action still runs).
+    menu = source_menu(editor)
+    qconnect(menu.aboutToHide, menu.deleteLater)
+    menu.popup(QCursor.pos())
 
 
 def on_setup_editor_buttons(buttons, editor):
@@ -126,7 +148,7 @@ def on_setup_editor_buttons(buttons, editor):
     b = editor.addButton(
         icon,
         _("I/O"),
-        lambda editor=editor: onImgOccButton(editor),
+        lambda editor=editor: on_io_button(editor),
         tip="{} ({})".format(tt, hotkey),
         keys=hotkey,
         disables=False,

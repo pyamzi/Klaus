@@ -63,6 +63,7 @@ importlib.import_module("klausmate.settings").user_files_dir = UF
 pj = importlib.import_module("klausmate.pdfjs_viewer")
 rp = importlib.import_module("klausmate.reader_panel")
 io = importlib.import_module("klausmate.image_occlusion")
+REAL_VIEWER = pj.PdfJsViewer  # later sections swap in a stand-in
 HTML_PATH = os.path.join(ROOT, "klausmate", "web", "pdfjs_viewer.html")
 html = open(HTML_PATH, encoding="utf-8").read()
 
@@ -99,7 +100,8 @@ check("the exact no-editor tip is in the page", NO_EDITOR_TIP in html)
 check("...and in Python, the same string",
       getattr(pj, "NO_EDITOR_TIP", None) == NO_EDITOR_TIP)
 check("the labels are verbatim",
-      '"Occlude this page"' in html and '"Occlude this region"' in html)
+      '"Occlude this page"' in html and '"Occlude this region"' in html
+      and '"Draw a diagram\u2026"' in html)
 check("the page exposes klausSetOcclusionEnabled",
       "window.klausSetOcclusionEnabled" in html)
 check("the flag starts false (the page forgets it on every reload)",
@@ -117,6 +119,7 @@ if m is not None and NODE:
     prog = (
         'const NO_EDITOR_TIP = %s;\n'
         'const occludeImage = (p, pm) => ({p, pm});\n'
+        'const post = (m) => ({post: m});\n'
         + m.group(1) +
         '\nconst pm = {page0: 2, x: 1, y: 2, w: 3, h: 4};\n'
         'const out = {\n'
@@ -134,18 +137,23 @@ if m is not None and NODE:
     got = json.loads(run.stdout) if ok else {}
     check("occlusionItems runs under node", ok, run.stderr[-300:])
     if ok:
-        check("no editor, no marquee: only the page item, disabled",
-              got["offNoMarquee"] == [["Occlude this page", True, {"p": 7, "pm": None}]],
+        DRAW = "Draw a diagram\u2026"
+        check("no editor, no marquee: the page item and Draw, both disabled",
+              got["offNoMarquee"] == [["Occlude this page", True, {"p": 7, "pm": None}],
+                                      [DRAW, True, {"post": "draw-diagram"}]],
               str(got["offNoMarquee"]))
-        check("no editor, marquee up: both items, both disabled",
+        check("no editor, marquee up: all three items, all disabled",
               [(i[0], i[1]) for i in got["offMarquee"]]
-              == [("Occlude this page", True), ("Occlude this region", True)])
-        check("editor, marquee up: both enabled; the region item carries the marquee",
+              == [("Occlude this page", True), ("Occlude this region", True), (DRAW, True)])
+        check("editor, marquee up: all enabled; the region item carries the marquee",
               [(i[0], i[1]) for i in got["onMarquee"]]
-              == [("Occlude this page", False), ("Occlude this region", False)]
+              == [("Occlude this page", False), ("Occlude this region", False), (DRAW, False)]
               and got["onMarquee"][1][2]["pm"]["page0"] == 2)
-        check("editor, no marquee: only the page item",
-              [i[0] for i in got["onNoMarquee"]] == ["Occlude this page"])
+        check("editor, no marquee: the page item and Draw",
+              [i[0] for i in got["onNoMarquee"]] == ["Occlude this page", DRAW])
+        check("Draw a diagram posts draw-diagram (no image to render)",
+              got["onNoMarquee"][1:2] and got["onNoMarquee"][1][2] == {"post": "draw-diagram"},
+              str(got["onNoMarquee"]))
 elif m is not None:
     print("SKIP  occlusionItems behaviour (no node)")
 m2 = re.search(r"async function occludeImage\(.*?\n\}\n", html, re.S)
@@ -519,5 +527,51 @@ check("second run's notes show the returned Heme-p5-1.png, not the requested nam
 check("both files exist in media under their returned names",
       sorted(os.listdir(MEDIA))[:2] == ["Heme-p5-1.png", "Heme-p5.png"]
       or {"Heme-p5-1.png", "Heme-p5.png"} <= set(os.listdir(MEDIA)), str(os.listdir(MEDIA)))
+
+section("Draw a diagram\u2026: the bridge action and the sidebar handler")
+dh = getattr(REAL_VIEWER, "_bridge_draw_diagram", None)
+check("PdfJsViewer has _bridge_draw_diagram", dh is not None)
+check("parse_bridge routes draw-diagram",
+      pj.parse_bridge("klausmate_pdfjs:draw-diagram") == ("draw-diagram", ""))
+if dh is not None:
+    st = types.SimpleNamespace(on_draw_diagram=None)
+    TIPS.clear()
+    ok, _ = attempt(dh, st, "")
+    check("no hook wired: the no-editor tooltip, no raise", ok and TIPS == [NO_EDITOR_TIP], str(TIPS))
+    hits = []
+    st.on_draw_diagram = lambda: hits.append(1)
+    TIPS.clear()
+    attempt(dh, st, "")
+    check("wired: calls on_draw_diagram() once, no tooltip", hits == [1] and TIPS == [])
+check("the viewer's on_draw_diagram is the sidebar's handler",
+      getattr(sb._viewer, "on_draw_diagram", None) == getattr(sb, "_on_draw_diagram", "missing"))
+DRAWS: list = []
+io.occlude = lambda editor, path=None, svg=None, draw=False: DRAWS.append(
+    (editor, path, svg, draw)) or True
+draw_sb = getattr(sb, "_on_draw_diagram", None)
+if draw_sb is not None:
+    io._active = True
+    sb._editor = None
+    TIPS.clear()
+    attempt(draw_sb)
+    check("no editor: the exact tooltip, occlude not called",
+          TIPS == [NO_EDITOR_TIP] and DRAWS == [], f"{TIPS} {DRAWS}")
+    sb._editor = ed
+    TIPS.clear()
+    attempt(draw_sb)
+    check("with an editor: occlude(editor, draw=True), no image, no tooltip",
+          DRAWS == [(ed, None, None, True)] and TIPS == [], f"{DRAWS} {TIPS}")
+    io._active = False
+    DRAWS.clear()
+    TIPS.clear()
+    attempt(draw_sb)
+    check("guard tripped: the conflict tooltip, occlude not called",
+          TIPS == [io.CONFLICT_TOOLTIP] and DRAWS == [], f"{TIPS} {DRAWS}")
+    io._active = True
+    io.occlude = lambda *a, **k: False
+    TIPS.clear()
+    attempt(draw_sb)
+    check("occlude False: a tooltip, never silent",
+          TIPS == ["Klaus: couldn't open the occlusion editor"], str(TIPS))
 
 raise SystemExit(report())

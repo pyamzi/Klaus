@@ -1034,6 +1034,8 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         # only offers the items live while an editor exists, and the
         # sidebar pushes that through set_occlusion_enabled.
         self.on_occlude: Optional[Callable[[bytes, int, bool], None]] = None
+        # "Draw a diagram…" from the same menu: no image, just the editor.
+        self.on_draw_diagram: Optional[Callable[[], None]] = None
         self._occlusion_enabled = False
         # No Add Text prompt lives here any more (K-150): text is typed
         # in the page, so there is no dialog to keep a singleton of.
@@ -1639,6 +1641,14 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
                 tooltip(NO_EDITOR_TIP)
             return
         self.on_occlude(*hit)
+
+    def _bridge_draw_diagram(self, _payload: str) -> None:
+        """ "Draw a diagram…": open the occlusion editor on its Draw tab."""
+        if self.on_draw_diagram is None:
+            if tooltip is not None:
+                tooltip(NO_EDITOR_TIP)
+            return
+        self.on_draw_diagram()
 
     def set_occlusion_enabled(self, enabled: bool) -> None:
         """Tell the page whether an editor is there to occlude into."""

@@ -61,8 +61,10 @@ for base, dirs, files in os.walk(PKG):
     dirs[:] = [d for d in dirs if d != "__pycache__" and not (base == PKG and d == "excalidraw")]
     for f in files:
         rel = os.path.relpath(os.path.join(base, f), PKG)
-        # excal_masks.py is a Klaus addition (Task 6), not part of IOE (Ruling R9).
-        if rel not in ("UPSTREAM.md", "__init__.py", "excal_masks.py"):
+        # Klaus additions, not part of IOE (Ruling R9): excal_masks.py (Task 6),
+        # excal_tab.py and svg-edit's owed MIT text (Task 7, R18).
+        if rel not in ("UPSTREAM.md", "__init__.py", "excal_masks.py", "excal_tab.py",
+                       os.path.join("svg-edit", "LICENSE-svg-edit.txt")):
             actual[rel] = os.path.join(base, f)
 check("UPSTREAM.md hashes every vendored file", set(recorded) == set(actual),
       str(sorted(set(recorded) ^ set(actual))[:5]))
@@ -70,6 +72,15 @@ check("UPSTREAM.md hashes every vendored file", set(recorded) == set(actual),
 # provenance only; data files must still match it.
 stale = [r for r, p in actual.items() if not r.endswith(".py") and recorded.get(r) != sha(p)]
 check("non-.py files match recorded sha256", not stale, str(stale[:5]))
+svg_lic = os.path.join(PKG, "svg-edit", "LICENSE-svg-edit.txt")
+lic_text = read(svg_lic).decode() if os.path.isfile(svg_lic) else ""
+check("R18: svg-edit's MIT licence text ships beside it",
+      "Copyright (c) 2009-2012 by SVG-edit authors" in lic_text
+      and "Permission is hereby granted, free of charge" in lic_text)
+check("...and UPSTREAM.md names it with its upstream commit",
+      "svg-edit/LICENSE-svg-edit.txt" in text
+      and "92b9f6abeaca87aafa71aeba73658e7962896df9" in text)
+check("UPSTREAM.md lists excal_tab.py as a Klaus addition", "`excal_tab.py`" in text)
 t2 = [ln for ln in text.splitlines() if ln.startswith("Modified by Task 2")]
 check("UPSTREAM.md has one line naming the files Task 2 modified",
       len(t2) == 1 and all("`%s.py`" % n in t2[0] for n in MODIFIED), str(t2))
