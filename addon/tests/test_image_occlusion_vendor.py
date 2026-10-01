@@ -15,6 +15,10 @@ PKG = os.path.join(ROOT, "klausmate", "image_occlusion")
 SRC = os.path.expanduser("~/Library/Application Support/Anki2/addons21/1374772155")
 PY = ["add", "config", "consts", "dialogs", "editor", "lang", "main", "nconvert",
       "ngen", "options", "qt", "template", "utils", "web", "_version"]
+# Ruling R1: Task 2 ("the port follows Klaus rules") edits these; their
+# as-vendored sha256 stays in UPSTREAM.md, and the rest stay byte-identical.
+MODIFIED = ["add", "config", "consts", "dialogs", "editor", "main", "nconvert",
+            "ngen", "options", "web"]
 
 
 def read(p):
@@ -61,14 +65,28 @@ check("UPSTREAM.md hashes every vendored file", set(recorded) == set(actual),
 # provenance only; data files must still match it.
 stale = [r for r, p in actual.items() if not r.endswith(".py") and recorded.get(r) != sha(p)]
 check("non-.py files match recorded sha256", not stale, str(stale[:5]))
+t2 = [ln for ln in text.splitlines() if ln.startswith("Modified by Task 2")]
+check("UPSTREAM.md has one line naming the files Task 2 modified",
+      len(t2) == 1 and all("`%s.py`" % n in t2[0] for n in MODIFIED), str(t2))
 
 section("byte identity with installed IOE")
 if not os.path.isdir(SRC):
     print("  NOTE: installed IOE add-on absent, byte-identity check skipped")
 else:
     for n in PY:
-        check(n + ".py identical to upstream",
-              read(os.path.join(PKG, n + ".py")) == read(os.path.join(SRC, n + ".py")))
+        ours, theirs = read(os.path.join(PKG, n + ".py")), read(os.path.join(SRC, n + ".py"))
+        if n in MODIFIED:
+            # AGPL: "Any modifications to this file must keep this entire header intact."
+            end = theirs.find(b"# Any modifications to this file must keep this entire header intact.")
+            check(n + ".py (modified) keeps upstream's copyright header intact",
+                  end > 0 and ours[:end] == theirs[:end])
+        else:
+            check(n + ".py identical to upstream", ours == theirs)
+    vendored = [r for r in actual if r.startswith("_vendor" + os.sep) and r.endswith(".py")]
+    check("_vendor/ has its .py files", len(vendored) >= 3, str(vendored))
+    for r in sorted(vendored):
+        check(r + " identical to upstream",
+              read(os.path.join(PKG, r)) == read(os.path.join(SRC, r)))
     bad = [r for r, p in actual.items() if not r.endswith(".py")
            and read(p) != read(os.path.join(SRC, r))]
     check("data files identical to upstream", not bad, str(bad[:5]))

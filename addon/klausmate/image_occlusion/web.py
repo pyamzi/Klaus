@@ -32,7 +32,6 @@
 
 from .consts import MODULE_ADDON
 
-from aqt import mw
 from aqt.editor import Editor
 from aqt.reviewer import Reviewer
 
@@ -66,4 +65,5 @@ def setup_webview_injections():
     from aqt.gui_hooks import main_window_did_init
 
     main_window_did_init.append(on_main_window_did_init)
-    mw.addonManager.setWebExports(__name__, r"web.*")
+    # Klaus: the add-on's one setWebExports call (klausmate/__init__.py)
+    # exports image_occlusion/web/; a second call here would replace it.

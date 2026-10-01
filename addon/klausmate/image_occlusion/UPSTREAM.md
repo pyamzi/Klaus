@@ -12,6 +12,8 @@ Later tasks edit some `.py` files here. The sha256 below is of the file as vendo
 diff against upstream stays recoverable after those edits. Data files (everything that is
 not `.py`) must still match.
 
+Modified by Task 2 (Klaus rules: window-modal asks, gui_hooks, no `parent` shadow, `col.get_config`/`set_config`, web path): `add.py`, `config.py`, `consts.py`, `dialogs.py`, `editor.py`, `main.py`, `nconvert.py`, `ngen.py`, `options.py`, `web.py`.
+
 ```
 3b530b4274f7458b02fa4cfdb8f876aa1befb208641ffa47d1f493dfa02e05e6  LICENSE.txt
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  _vendor/imagesize/__init__.py

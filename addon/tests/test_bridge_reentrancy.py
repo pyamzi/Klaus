@@ -354,6 +354,29 @@ check("pdf_drive: no dialog exec either (converted under K-117, pinned "
       "dlg.exec()" not in _K114["pdf_drive"]
       and "msg.exec()" not in _K114["pdf_drive"])
 
+# The vendored Image Occlusion port (Image Occlusion 1/3, Task 2): every
+# module in klausmate/image_occlusion/ joins the roster. IOE's blocking
+# asks became io_ask callbacks; its dialogs open window-modal. The
+# behaviour (and an AST version of these bans) is in
+# tests/test_image_occlusion_rules.py.
+import glob as _glob  # noqa: E402
+
+_IO_FILES = sorted(_glob.glob("klausmate/image_occlusion/*.py"))
+check("the image_occlusion roster found the package", len(_IO_FILES) >= 15,
+      str(_IO_FILES))
+for _p in _IO_FILES:
+    _c = _no_prose(open(_p).read())
+    _hits = [t for t in (".exec(", "askUser", "getText(", "getOnlyText(", "chooseList(",
+                         "QInputDialog.get", "QMessageBox.question",
+                         "QMessageBox.information", "QMessageBox.critical",
+                         "QMessageBox.warning", ".getColor(") if t in _c]
+    check(f"{_p}: no exec() and no exec-internally helper", not _hits, str(_hits))
+_IO_DIALOGS = _no_prose(open("klausmate/image_occlusion/dialogs.py").read())
+check("image_occlusion: io_ask opens window-modal and answers from finished",
+      "box.open()" in _IO_DIALOGS
+      and "box.finished.connect(on_finished)" in _IO_DIALOGS
+      and "Qt.WindowModality.WindowModal" in _IO_DIALOGS)
+
 
 section("K-125: the statics/utilities that exec() internally are gone")
 # K-100's audit found the K-114 crash class hiding inside statics and

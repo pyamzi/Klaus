@@ -36,8 +36,8 @@ Image Occlusion editor dialog
 
 import os
 
-from anki.hooks import addHook, remHook
 from aqt import deckchooser, mw, tagedit, webview
+from aqt.gui_hooks import profile_will_close
 from aqt.qt import (
     QApplication,
     QComboBox,
@@ -59,11 +59,11 @@ from aqt.qt import (
     sip,
     pyqtSignal,
 )
-from aqt.utils import restoreGeom, saveGeom, askUser
+from aqt.utils import restoreGeom, saveGeom
 
 from .config import *
 from .consts import *
-from .dialogs import ioHelp
+from .dialogs import io_ask, ioHelp, remove_hook_later
 from .lang import _
 
 
@@ -128,17 +128,12 @@ class ImgOccEdit(QDialog):
         self.setWindowFlags(Qt.WindowType.Window)
         self.visible = False
         self.imgoccadd = imgoccadd
-        self.parent = parent
+        self.parent_window = parent
         self.mode = "add"
         loadConfig(self)
         self.setupUi()
         restoreGeom(self, "imgoccedit")
-        try:
-            from aqt.gui_hooks import profile_will_close
-
-            profile_will_close.append(self.onProfileUnload)
-        except (ImportError, ModuleNotFoundError):
-            addHook("unloadProfile", self.onProfileUnload)
+        profile_will_close.append(self.onProfileUnload)
 
     def closeEvent(self, event):
         if mw.pm.profile is not None:
@@ -147,12 +142,7 @@ class ImgOccEdit(QDialog):
         self.visible = False
         self.svg_edit = None
         del self.svg_edit_anim  # might not be gc'd
-        try:
-            from aqt.gui_hooks import profile_will_close
-
-            profile_will_close.append(self.onProfileUnload)
-        except (ImportError, ModuleNotFoundError):
-            remHook("unloadProfile", self.onProfileUnload)
+        remove_hook_later(profile_will_close, self.onProfileUnload)
         QDialog.reject(self)
 
     def onProfileUnload(self):
@@ -167,12 +157,19 @@ class ImgOccEdit(QDialog):
         )
 
     def _on_reject_callback(self, undo_stack_empty: bool):
-        if (undo_stack_empty and not self._input_modified()) or askUser(
+        if undo_stack_empty and not self._input_modified():
+            return super().reject()
+        io_ask(
+            self,
             "Are you sure you want to close the window? This will discard any unsaved"
             " changes.",
+            self._on_reject_answer,
             title="Exit Image Occlusion?",
-        ):
-            return super().reject()
+        )
+
+    def _on_reject_answer(self, yes: bool):
+        if yes:
+            super().reject()
 
     def _input_modified(self) -> bool:
         tags_modified = self.tags_edit.isModified()

@@ -38,19 +38,17 @@ import logging
 import sys
 from typing import TYPE_CHECKING, Optional
 
-from anki.hooks import wrap
 from aqt import mw
 from aqt.addcards import AddCards
 from aqt.editcurrent import EditCurrent
 from aqt.editor import Editor
-from aqt.qt import QAction, QDesktopServices, QMenu, QUrl
-from aqt.reviewer import Reviewer
+from aqt.qt import QAction, QDesktopServices, QMenu, Qt, QUrl
 from aqt.utils import tooltip
 
 from .add import ImgOccAdd
 from .config import *
 from .consts import *
-from .dialogs import ioCritical, ioHelp
+from .dialogs import io_critical, ioHelp
 from .lang import _
 from .options import ImgOccOpts
 from .web import setup_webview_injections
@@ -71,7 +69,8 @@ def on_io_settings():
         tooltip(_("Please close Image Occlusion Editor to access the Options."))
         return
     dialog = ImgOccOpts()
-    dialog.exec()
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    dialog.open()
 
 
 def on_io_help():
@@ -85,13 +84,14 @@ def on_image_occlusion_button(self, origin=None, image_path=None):
     io_model = getOrCreateModel()
     if io_model:
         io_model_fields = mw.col.models.fieldNames(io_model)
-        if "imgocc" in mw.col.conf:
-            dflt_fields = list(mw.col.conf["imgocc"]["flds"].values())
+        conf = mw.col.get_config("imgocc")
+        if conf is not None:
+            dflt_fields = list(conf["flds"].values())
         else:
             dflt_fields = list(IO_FLDS.values())
         # note type integrity check
         if not all(x in io_model_fields for x in dflt_fields):
-            ioCritical("model_error", help="notetype", parent=self.parentWindow)
+            io_critical("model_error", help="notetype", parent=self.parentWindow)
             return False
     try:  # allows us to fall back to old image if necessary
         oldimg = self.imgoccadd.image_path
@@ -271,15 +271,33 @@ def on_mw_state_shortcuts(state: str, shortcuts: list):
 
 # TODO: Handle in JS
 
+# Klaus: two gui_hooks instead of wrapping Reviewer._showAnswer.
+# card_will_show runs before the answer is rendered, and
+# reviewer_did_show_answer after it.
+_answer_scroll_pos = None
 
-def on_show_answer(self, _old):
+
+def _is_io_card(card):
+    return card.note_type()["name"] == IO_MODEL_NAME
+
+
+def on_card_will_show(text, card, kind):
+    """Remember the scroll position before the answer replaces the question"""
+    global _answer_scroll_pos
+    if kind == "reviewAnswer" and _is_io_card(card):
+        _answer_scroll_pos = mw.reviewer.web.page().scrollPosition()
+    return text
+
+
+def on_reviewer_did_show_answer(card):
     """Retain scroll position across answering the card"""
-    if not self.card or not self.card.note_type()["name"] == IO_MODEL_NAME:
-        return _old(self)
-    scroll_pos = self.web.page().scrollPosition()
-    ret = _old(self)
-    self.web.eval("window.scrollTo({}, {});".format(scroll_pos.x(), scroll_pos.y()))
-    return ret
+    global _answer_scroll_pos
+    scroll_pos, _answer_scroll_pos = _answer_scroll_pos, None
+    if scroll_pos is None or not _is_io_card(card):
+        return
+    mw.reviewer.web.eval(
+        "window.scrollTo({}, {});".format(scroll_pos.x(), scroll_pos.y())
+    )
 
 
 def setup_menus(main_window: "AnkiQt"):
@@ -294,12 +312,17 @@ def setup_menus(main_window: "AnkiQt"):
 
 def setup_main(main_window: "AnkiQt"):
     from aqt.gui_hooks import (
+        browser_menus_did_init,
+        card_will_show,
         editor_did_init_buttons,
         editor_did_load_note,
         editor_will_show_context_menu,
         profile_did_open,
+        reviewer_did_show_answer,
         state_shortcuts_will_change,
     )
+
+    from .nconvert import setupMenu as setup_browser_menu
 
     # Web assets
 
@@ -319,8 +342,12 @@ def setup_main(main_window: "AnkiQt"):
     editor_will_show_context_menu.append(maybe_add_image_menu)
     editor_did_load_note.append(on_editor_did_load_note)
 
+    # Browser
+
+    browser_menus_did_init.append(setup_browser_menu)
+
     # Reviewer
 
-    # TODO: drop monkey-patch
-    Reviewer._showAnswer = wrap(Reviewer._showAnswer, on_show_answer, "around")
+    card_will_show.append(on_card_will_show)
+    reviewer_did_show_answer.append(on_reviewer_did_show_answer)
     state_shortcuts_will_change.append(on_mw_state_shortcuts)

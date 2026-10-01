@@ -34,9 +34,9 @@
 Handles all minor utility dialogs
 """
 
-from anki.hooks import addHook, remHook
 from aqt import mw
-from aqt.qt import QMessageBox, Qt, sip
+from aqt.gui_hooks import profile_will_close
+from aqt.qt import QMessageBox, Qt, QTimer, sip
 
 # from .config import *
 from .lang import _
@@ -193,91 +193,109 @@ take a while)</i>
 """
 )
 
+
+def remove_hook_later(hook, callback):
+    """Remove a gui_hooks callback a tick later. A close that the hook
+    itself triggered (profile_will_close -> close -> remove) would
+    otherwise shrink the list the hook is iterating and skip the next
+    add-on's callback."""
+    QTimer.singleShot(0, lambda: hook.remove(callback))
+
+
 # Message dialog utility functions
+#
+# Klaus (K-114): every box is window-modal and opened with open(), never
+# exec(); answers arrive through the finished signal.
 
 
-def ioCritical(
+def _message_box(parent, title, text, icon, buttons, default):
+    parent = parent or mw.app.activeWindow() or mw
+    box = QMessageBox(parent)
+    box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    box.setWindowModality(Qt.WindowModality.WindowModal)
+    box.setIcon(icon)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setStandardButtons(buttons)
+    box.setDefaultButton(default)
+    return box
+
+
+def _answer(box, result):
+    """The standard button that closed the box, as an int: the clicked
+    one, or the done() code when no button was clicked."""
+    clicked = box.clickedButton()
+    if clicked is not None:
+        return box.standardButton(clicked).value
+    return result
+
+
+def io_critical(
     msgkey, title=_("Image Occlusion Enhanced Error"), text="", parent=None, help=None
 ):
-    msgfunc = QMessageBox.critical
+    buttons = QMessageBox.StandardButton.Ok
     if help:
-        buttons = QMessageBox.StandardButton.Help | QMessageBox.StandardButton.Ok
-    else:
-        buttons = None
-    while 1:
-        r = ioInfo(
-            msgkey,
-            title=title,
-            text=text,
-            parent=parent,
-            buttons=buttons,
-            msgfunc=msgfunc,
-        )
-        if r == QMessageBox.StandardButton.Help:
+        buttons |= QMessageBox.StandardButton.Help
+    if msgkey != "custom":
+        text = dialog_msg[msgkey]
+    box = _message_box(
+        parent, title, text, QMessageBox.Icon.Critical, buttons,
+        QMessageBox.StandardButton.Ok,
+    )
+
+    def on_finished(result):
+        if _answer(box, result) == QMessageBox.StandardButton.Help.value:
             ioHelp(help, parent=parent)
-            return False
-        else:
-            break
-    return r
+
+    box.finished.connect(on_finished)
+    box.open()
+    return box
 
 
-def ioAskUser(
-    msgkey,
-    title=_("Image Occlusion Enhanced"),
-    parent=None,
-    text="",
-    help="",
-    defaultno=False,
-    msgfunc=None,
-):
-    """Show a yes/no question. Return true if yes.
+def io_ask(parent, text, on_answer, title=_("Image Occlusion Enhanced"), help="",
+           default_no=False):
+    """Ask a yes/no question; on_answer(True) on Yes, on_answer(False)
+    otherwise. Help (if given) opens that help section and answers False.
     based on askUser by Damien Elmes"""
-    msgfunc = QMessageBox.question
     buttons = QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
     if help:
         buttons |= QMessageBox.StandardButton.Help
-    while 1:
-        if defaultno:
-            default = QMessageBox.StandardButton.No
-        else:
-            default = QMessageBox.StandardButton.Yes
-        r = ioInfo(
-            msgkey,
-            title=title,
-            text=text,
-            parent=parent,
-            buttons=buttons,
-            default=default,
-            msgfunc=msgfunc,
-        )
-        if r == QMessageBox.StandardButton.Help:
+    if default_no:
+        default = QMessageBox.StandardButton.No
+    else:
+        default = QMessageBox.StandardButton.Yes
+    box = _message_box(parent, title, text, QMessageBox.Icon.Question, buttons, default)
+
+    def on_finished(result):
+        answer = _answer(box, result)
+        if answer == QMessageBox.StandardButton.Help.value:
             ioHelp(help, parent=parent)
-            return False
-        else:
-            break
-    return r == QMessageBox.StandardButton.Yes
+        on_answer(answer == QMessageBox.StandardButton.Yes.value)
+
+    box.finished.connect(on_finished)
+    box.open()
+    return box
 
 
-def ioInfo(
+def io_info(
     msgkey,
     title=_("Image Occlusion Enhanced"),
     text="",
     parent=None,
     buttons=None,
     default=None,
-    msgfunc=None,
 ):
-    if not parent:
-        parent = mw.app.activeWindow()
     if not buttons:
         buttons = QMessageBox.StandardButton.Ok
     if not default:
         default = QMessageBox.StandardButton.Ok
-    if not msgfunc:
-        msgfunc = QMessageBox.information
     if msgkey != "custom":
         text = dialog_msg[msgkey]
-    return msgfunc(parent, title, text, buttons, default)
+    box = _message_box(
+        parent, title, text, QMessageBox.Icon.Information, buttons, default
+    )
+    box.open()
+    return box
 
 
 def ioHelp(msgkey, title=_("Image Occlusion Enhanced Help"), text="", parent=None):
@@ -297,12 +315,6 @@ def ioHelp(msgkey, title=_("Image Occlusion Enhanced Help"), text="", parent=Non
         if not sip.isdeleted(mbox):
             mbox.close()
 
-    try:
-        from aqt.gui_hooks import profile_will_close
-
-        profile_will_close.append(onProfileUnload)
-    except (ImportError, ModuleNotFoundError):
-        addHook("unloadProfile", onProfileUnload)
-
-    mbox.finished.connect(lambda: remHook("unloadProfile", onProfileUnload))
+    profile_will_close.append(onProfileUnload)
+    mbox.finished.connect(lambda: remove_hook_later(profile_will_close, onProfileUnload))
     mbox.show()

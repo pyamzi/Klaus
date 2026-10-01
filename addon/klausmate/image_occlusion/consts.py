@@ -36,7 +36,9 @@ Global variables
 import os
 
 ADDON_PATH = os.path.dirname(__file__)
-MODULE_ADDON = __name__.split(".")[0]
+# Klaus: the web path of this subpackage, "<add-on folder>/image_occlusion",
+# so asset URLs read /_addons/<add-on folder>/image_occlusion/web/...
+MODULE_ADDON = "/".join(__name__.split(".")[:-1])
 
 ICONS_PATH = os.path.join(ADDON_PATH, "icons")
 

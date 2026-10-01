@@ -35,14 +35,13 @@ Makes older IO notes editable.
 
 import logging
 
-from anki.hooks import addHook
 from aqt.utils import tooltip
 from .lang import _
 
 from xml.dom import minidom
 
 from .config import *
-from .dialogs import ioAskUser
+from .dialogs import dialog_msg, io_ask
 from .utils import img_element_to_path, path_to_img_element
 
 
@@ -245,19 +244,22 @@ class ImgOccNoteConverter(object):
 
 def onIoConvert(self):
     """Launch initial dialog, set up checkpoint, invoke converter"""
-    mw = self.mw
     selected = self.selectedNotes()
     if not selected:
         tooltip(_("No cards selected."), period=2000)
         return
-    ret = ioAskUser(
-        "question_nconvert",
+    io_ask(
+        self,
+        dialog_msg["question_nconvert"],
+        lambda yes: yes and _convertSelected(self, selected),
         title=_("Please confirm action"),
-        parent=self,
-        defaultno=True,
+        default_no=True,
     )
-    if not ret:
-        return False
+
+
+def _convertSelected(self, selected):
+    """The conversion itself, once the user said yes"""
+    mw = self.mw
     mw.progress.start()
     mw.checkpoint("Image Occlusion Note Conversions")
     self.model.beginReset()
@@ -279,9 +281,4 @@ def setupMenu(self):
     a.triggered.connect(lambda _, b=self: onIoConvert(b))
 
 
-try:
-    from aqt.gui_hooks import browser_menus_did_init
-
-    browser_menus_did_init.append(setupMenu)
-except (ImportError, ModuleNotFoundError):
-    addHook("browser.setupMenus", setupMenu)
+# Klaus: registered on browser_menus_did_init by main.setup_main, not on import.

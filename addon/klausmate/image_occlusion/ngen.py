@@ -44,7 +44,7 @@ from anki.notes import Note
 from xml.dom import minidom
 import uuid
 
-from .dialogs import ioAskUser
+from .dialogs import io_ask
 from .utils import path_to_img_element
 from .config import *
 from .lang import _, ngettext
@@ -86,7 +86,7 @@ class ImgOccNoteGenerator(object):
         self.tags = tags
         self.fields = fields
         self.did = did
-        self.qfill = "#" + mw.col.conf["imgocc"]["qfill"]
+        self.qfill = "#" + mw.col.get_config("imgocc")["qfill"]
         self._media_path = mw.col.media.dir()
         loadConfig(self)
 
@@ -124,12 +124,12 @@ class ImgOccNoteGenerator(object):
         )
         return state
 
-    def updateNotes(self):
-        """Update existing notes"""
-        state = "default"
+    def updateNotes(self, on_done=None):
+        """Update existing notes. on_done(state) runs once they are written,
+        which is after the delete confirm when one is needed (Klaus: the
+        confirm is window-modal, so this returns before the answer)."""
         self.uniq_id = self.opref["uniq_id"]
         self.occl_id = "%s-%s" % (self.uniq_id, self.occl_tp)
-        omask_path = None
 
         self._findAllNotes()
         (svg_node, mlayer_node) = self._getMnodesAndSetIds(True)
@@ -142,13 +142,19 @@ class ImgOccNoteGenerator(object):
             )
             return False
         mw.checkpoint("Editing Image Occlusion Cards")
-        ret = self._deleteAndIdNotes(mlayer_node)
-        if not ret:
-            # confirmation window rejected
-            return False
-        else:
-            (del_count, new_count) = ret
 
+        def proceed(del_count, new_count):
+            state = self._finishUpdate(svg_node, del_count, new_count)
+            if on_done:
+                on_done(state)
+
+        # confirmation window rejected: proceed never runs
+        self._deleteAndIdNotes(mlayer_node, proceed)
+
+    def _finishUpdate(self, svg_node, del_count, new_count):
+        """The rest of updateNotes, once deletions are confirmed"""
+        state = "default"
+        omask_path = None
         self.new_svg = svg_node.toxml()  # write changes to svg
         old_svg = self._getOriginalSvg()  # load original svg
         if self.new_svg != old_svg or self.occl_tp != self.opref["occl_tp"]:
@@ -296,11 +302,12 @@ class ImgOccNoteGenerator(object):
         logging.debug("res %s", res)
         logging.debug("nids %s", self.nids)
 
-    def _deleteAndIdNotes(self, mlayer_node):
+    def _deleteAndIdNotes(self, mlayer_node, then):
         """
         Determine which mask nodes have been deleted or newly created and, depending
         on which, either delete their respective notes or ID them in correspondence
-        with the numbering of older nodes
+        with the numbering of older nodes. then(del_count, new_count) runs after
+        the deletions, and only if the user confirmed them.
         """
         uniq_id = self.opref["uniq_id"]
         mnode_ids = self.mnode_ids
@@ -387,6 +394,11 @@ class ImgOccNoteGenerator(object):
         logging.debug("edited nids %s", nids)
         logging.debug("edited self.mnode_ids %s", self.mnode_ids)
 
+        def proceed():
+            if deleted_nids:
+                mw.col.remNotes(deleted_nids)
+            then(del_count, new_count)
+
         if del_count or new_count:
             q = _(
                 "This will <b>delete {del_count} card(s)</b> and "
@@ -394,19 +406,16 @@ class ImgOccNoteGenerator(object):
                 "Please note that this action is irreversible.<br><br>"
                 "Would you still like to proceed?"
             ).format(del_count=del_count, new_count=new_count)
-            if not ioAskUser(
-                "custom",
-                text=q,
+            io_ask(
+                # TODO: pass imgoccedit instance to ngen in order to avoid ↓ this
+                self.ed.imgoccadd.imgoccedit,
+                q,
+                lambda yes: yes and proceed(),
                 title=_("Please confirm action"),
-                parent=self.ed.imgoccadd.imgoccedit,
                 help="edit",
-            ):
-                # TODO: pass imgoccedit instance to ngen in order to avoid ↑ this
-                return False
-
-        if deleted_nids:
-            mw.col.remNotes(deleted_nids)
-        return (del_count, new_count)
+            )
+        else:
+            proceed()
 
     def _generateMaskSVGsFor(self, side):
         """Generate a mask for each mask node"""

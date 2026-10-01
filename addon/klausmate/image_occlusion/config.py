@@ -36,6 +36,7 @@ Sets up configuration, including constants
 
 # TODO: move constants to consts.py
 
+import copy
 import os
 import sys
 
@@ -96,36 +97,41 @@ from . import template
 
 def getSyncedConfig():
     # Synced preferences
-    if "imgocc" not in mw.col.conf:
+    # Klaus: through col.get_config/set_config (a copy comes back; write it
+    # back to persist), never the legacy mw.col.conf dict.
+    conf = mw.col.get_config("imgocc")
+    if conf is None:
         # create initial configuration
-        mw.col.conf["imgocc"] = default_conf_syncd
+        conf = copy.deepcopy(default_conf_syncd)
 
         # upgrade from IO 2.0:
-        if "image_occlusion_conf" in mw.col.conf:
-            old_conf = mw.col.conf["image_occlusion_conf"]
-            mw.col.conf["imgocc"]["ofill"] = old_conf["initFill[color]"]
-            mw.col.conf["imgocc"]["qfill"] = old_conf["mask_fill_color"]
+        old_conf = mw.col.get_config("image_occlusion_conf")
+        if old_conf is not None:
+            conf["ofill"] = old_conf["initFill[color]"]
+            conf["qfill"] = old_conf["mask_fill_color"]
             # insert other upgrade actions here
-        mw.col.setMod()
+        mw.col.set_config("imgocc", conf)
 
-    elif mw.col.conf["imgocc"]["version"] < default_conf_syncd["version"]:
+    elif conf["version"] < default_conf_syncd["version"]:
         print("Updating config DB from earlier IO release")
         for key in list(default_conf_syncd.keys()):
-            if key not in mw.col.conf["imgocc"]:
-                mw.col.conf["imgocc"][key] = default_conf_syncd[key]
-        mw.col.conf["imgocc"]["version"] = default_conf_syncd["version"]
-        mw.col.setMod()
+            if key not in conf:
+                conf[key] = copy.deepcopy(default_conf_syncd[key])
+        conf["version"] = default_conf_syncd["version"]
+        mw.col.set_config("imgocc", conf)
 
-    return mw.col.conf["imgocc"]
+    return conf
 
 
 def getLocalConfig():
     # Local preferences
     if "imgocc" not in mw.pm.profile:
-        mw.pm.profile["imgocc"] = default_conf_local
+        mw.pm.profile["imgocc"] = dict(default_conf_local)
     elif mw.pm.profile["imgocc"].get("version", 0) < default_conf_syncd["version"]:
         for key in list(default_conf_local.keys()):
-            if key not in mw.col.conf["imgocc"]:
+            # Klaus: IOE tested the synced config here, which reset the
+            # user's hotkey and image folder on every local upgrade.
+            if key not in mw.pm.profile["imgocc"]:
                 mw.pm.profile["imgocc"][key] = default_conf_local[key]
         mw.pm.profile["imgocc"]["version"] = default_conf_local["version"]
 
@@ -137,9 +143,11 @@ def getOrCreateModel():
     if not model:
         # create model and set up default field name config
         model = template.add_io_model(mw.col)
-        mw.col.conf["imgocc"]["flds"] = default_conf_syncd["flds"]
+        conf = getSyncedConfig()
+        conf["flds"] = copy.deepcopy(default_conf_syncd["flds"])
+        mw.col.set_config("imgocc", conf)
         return model
-    model_version = mw.col.conf["imgocc"]["version"]
+    model_version = getSyncedConfig()["version"]
     if model_version < default_conf_syncd["version"]:
         return template.update_template(mw.col, model_version)
     return model
@@ -148,7 +156,7 @@ def getOrCreateModel():
 def getModelConfig():
     model = getOrCreateModel()
     mflds = model["flds"]
-    ioflds = mw.col.conf["imgocc"]["flds"]
+    ioflds = getSyncedConfig()["flds"]
     ioflds_priv = []
     for i in IO_FIDS_PRIV:
         ioflds_priv.append(ioflds[i])

@@ -44,7 +44,7 @@ from aqt.utils import showWarning, tooltip
 
 from .config import *
 from .consts import SUPPORTED_EXTENSIONS
-from .dialogs import ioCritical, ioInfo
+from .dialogs import io_critical, io_info
 from .editor import ImgOccEdit
 from .lang import _
 from .ngen import *
@@ -276,7 +276,7 @@ class ImgOccAdd(object):
             def onSvgEditLoaded():
                 # Handle obsolete "aa" occlusion mode:
                 if self.opref["occl_tp"] == "aa":
-                    ioInfo("obsolete_aa", parent=dialog)
+                    io_info("obsolete_aa", parent=dialog)
                 dialog.showSvgEdit(True)
                 dialog.fitImageCanvas()
                 dialog.fitImageCanvas(delay=200)
@@ -381,10 +381,12 @@ class ImgOccAdd(object):
         gen = noteGenerator(
             self.ed, svg, self.image_path, self.opref, tags, fields, did
         )
-        r = gen.updateNotes()
-        if r is False:
-            return False
+        # Klaus: updateNotes may ask first (window-modal); the rest runs
+        # once the notes are written.
+        gen.updateNotes(lambda r: self._afterEditNotes(dialog, r))
 
+    def _afterEditNotes(self, dialog, r):
+        """The rest of _onEditNotesButton, once updateNotes is done"""
         if r != "reset":
             # no media cache/collection reset required
             dialog.close()
@@ -435,7 +437,7 @@ class ImgOccAdd(object):
         # note type integrity check:
         io_model_fields = mw.col.models.fieldNames(self.model)
         if not all(x in io_model_fields for x in list(self.ioflds.values())):
-            ioCritical("model_error", help="notetype", parent=dialog)
+            io_critical("model_error", help="notetype", parent=dialog)
             return False
         for i in self.mflds:
             fn = i["name"]
