@@ -184,6 +184,7 @@
     <h1>Decks</h1>
     <div class="actions">
       <button onclick={addNote}>Add</button>
+      <button onclick={() => (location.href = "/browse")}>Browse</button>
       <button onclick={() => askName()}>Create Deck</button>
       <button onclick={() => openFiltered()}>Filtered Deck…</button>
       <button onclick={importPackage}>Import…</button>

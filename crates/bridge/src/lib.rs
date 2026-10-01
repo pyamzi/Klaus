@@ -111,6 +111,17 @@ const ALLOWED: &[&str] = &[
     "addOrUpdateFilteredDeck",
     "rebuildFilteredDeck",
     "emptyFilteredDeck",
+    // Klaus's browser (Anki's is Qt: aqt/browser). The side editor is Anki's
+    // editor page, which saves through updateNotes itself.
+    "searchCards",
+    "searchNotes",
+    "browserRowForId",
+    "allBrowserColumns",
+    "setActiveBrowserColumns",
+    "buildSearchString",
+    "tagTree",
+    "setConfigBool",
+    "cardsOfNote",
     // A mediasrv post handler in Anki (missing keys read as null); see Bridge::call.
     "getConfigJson",
     // Deck options: post handlers in Anki, a plain backend call there too. Saving
@@ -641,10 +652,10 @@ const UNTRUSTED_MEDIA_CSP: &str = "default-src 'none'; script-src 'none'; connec
 
 /// Anki's SvelteKit shell, with what Anki's Qt webview would provide: the host
 /// script (`bridgeCommand`) before any page script runs, and base styling. Sent with
-/// the response CSP Anki's
-/// mediasrv sends in place of the build's meta tag: pages are never framed, and the
+/// the response CSP Anki's mediasrv sends in place of the build's meta tag: the
 /// pages that show note HTML (editor, image-occlusion) only run Anki's and Klaus's
-/// own scripts and can't submit forms.
+/// own scripts and can't submit forms. Pages are never framed by other origins; the
+/// editor may be framed by Klaus's own pages (the browser's side editor).
 async fn anki_page(State(state): State<AppState>, page: &'static str) -> Response {
     let Ok(html) = tokio::fs::read_to_string(state.anki_dir.join("index.html")).await else {
         return StatusCode::NOT_FOUND.into_response();
@@ -666,7 +677,7 @@ async fn anki_page(State(state): State<AppState>, page: &'static str) -> Respons
     );
     let csp = if matches!(page, "editor" | "image-occlusion") {
         let o = &state.origin;
-        format!("script-src {o}/_anki/ {o}/_app/ {o}/native-dialogs.js {o}/anki-host.js {hash}; form-action 'none'; frame-ancestors 'none'")
+        format!("script-src {o}/_anki/ {o}/_app/ {o}/native-dialogs.js {o}/anki-host.js {hash}; form-action 'none'; frame-ancestors 'self'")
     } else {
         "frame-ancestors 'none'".to_owned()
     };
