@@ -675,11 +675,14 @@ async fn anki_page(State(state): State<AppState>, page: &'static str) -> Respons
         r#"<head><link rel="stylesheet" href="/anki-host.css"><script src="/native-dialogs.js"></script><script src="/anki-host.js"></script>"#,
         1,
     );
+    // Only Klaus's same-origin pages can frame the editor: the card frame is an
+    // opaque origin and media is sandboxed, so neither matches 'self'.
+    let ancestors = if page == "editor" { "'self'" } else { "'none'" };
     let csp = if matches!(page, "editor" | "image-occlusion") {
         let o = &state.origin;
-        format!("script-src {o}/_anki/ {o}/_app/ {o}/native-dialogs.js {o}/anki-host.js {hash}; form-action 'none'; frame-ancestors 'self'")
+        format!("script-src {o}/_anki/ {o}/_app/ {o}/native-dialogs.js {o}/anki-host.js {hash}; form-action 'none'; frame-ancestors {ancestors}")
     } else {
-        "frame-ancestors 'none'".to_owned()
+        format!("frame-ancestors {ancestors}")
     };
     ([(header::CONTENT_SECURITY_POLICY, csp)], Html(html)).into_response()
 }

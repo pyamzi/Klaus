@@ -454,11 +454,12 @@ async fn http_contract_matches_ankis_post_ts() {
         async move { client.get(url).send().await.unwrap().headers()["content-security-policy"].to_str().unwrap().to_owned() }
     };
     let o = &base;
-    let untrusted = format!(
-        "script-src {o}/_anki/ {o}/_app/ {o}/native-dialogs.js {o}/anki-host.js 'sha256-abc='; form-action 'none'; frame-ancestors 'self'"
-    );
-    assert_eq!(csp("/editor/?mode=add").await, untrusted);
-    assert_eq!(csp("/image-occlusion/Users/me/a.png").await, untrusted);
+    let untrusted = |ancestors: &str| {
+        format!("script-src {o}/_anki/ {o}/_app/ {o}/native-dialogs.js {o}/anki-host.js 'sha256-abc='; form-action 'none'; frame-ancestors {ancestors}")
+    };
+    // Only the editor may be framed, by Klaus's own pages (the browser's side editor).
+    assert_eq!(csp("/editor/?mode=add").await, untrusted("'self'"));
+    assert_eq!(csp("/image-occlusion/Users/me/a.png").await, untrusted("'none'"));
     assert_eq!(csp("/deck-options/1").await, "frame-ancestors 'none'");
 
     // Reviewer assets are served for the card frame, readable cross-origin (fonts)…
