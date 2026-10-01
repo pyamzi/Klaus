@@ -88,6 +88,9 @@ const ALLOWED: &[&str] = &[
     "deckTree",
     // A mediasrv post handler in Anki (missing keys read as null); see Bridge::call.
     "getConfigJson",
+    // Deck options: post handlers in Anki, a plain backend call there too. Saving
+    // (updateDeckConfigs) is not a passthrough; see save_deck_configs.
+    "getDeckConfigsForUpdate",
     // Anki 26.09.3 qt/aqt/mediasrv.py exposed_backend_list, in order.
     "latestProgress",
     "getCustomColours",
@@ -170,6 +173,8 @@ const HOOKS: &[&str] = &[
     "saveCustomColours",
     "klausImportPackage",
     "klausPaste",
+    "deckOptionsReady",
+    "deckOptionsRequireClose",
 ];
 
 /// Anki host calls that are pure data, answered by the bridge itself.
@@ -560,6 +565,36 @@ async fn grant_cookie(State(state): State<AppState>, req: Request, next: Next) -
     (StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, location)]).into_response()
 }
 
+/// aqt/mediasrv.py update_deck_configs. A save can take minutes (FSRS recomputes
+/// memory states; "Optimize all presets" fits every preset), longer than a request
+/// should stay open, so reply at once and save in the background. Then, as in Anki,
+/// the page closes (`deckOptionsRequireClose`) unless it was an optimise-all, which
+/// reloads itself; a failure is shown with `showMessageBox`.
+fn save_deck_configs(state: AppState, body: Bytes) -> Response {
+    use anki_proto::deck_config::{UpdateDeckConfigsMode, UpdateDeckConfigsRequest};
+    let Ok(req) = UpdateDeckConfigsRequest::decode(body.as_ref()) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "invalid updateDeckConfigs request").into_response();
+    };
+    let compute_all = req.mode() == UpdateDeckConfigsMode::ComputeAllParams;
+    // ponytail: no progress window during the save (Anki shows one); the page's own
+    // Optimize button has progress. Add an overlay polling latestProgress if saves drag.
+    tokio::task::spawn_blocking(move || match state.bridge.call_trusted("updateDeckConfigs", &body) {
+        Ok(_) if !compute_all => {
+            (state.hook)("deckOptionsRequireClose", &[]);
+        }
+        Ok(_) => {}
+        Err(err) => {
+            let text = match err {
+                CallError::Backend(msg) => msg,
+                other => format!("{other:?}"),
+            };
+            let msg = frontend::ShowMessageBoxRequest { text, r#type: 2, title: None };
+            (state.hook)("showMessageBox", &msg.encode_to_vec());
+        }
+    });
+    StatusCode::NO_CONTENT.into_response()
+}
+
 async fn anki_method(
     State(state): State<AppState>,
     UrlPath(method): UrlPath<String>,
@@ -584,6 +619,9 @@ async fn anki_method(
             Ok(_) => StatusCode::NO_CONTENT.into_response(),
             Err(join) => (StatusCode::INTERNAL_SERVER_ERROR, join.to_string()).into_response(),
         };
+    }
+    if method == "updateDeckConfigs" {
+        return save_deck_configs(state, body);
     }
     let bridge = state.bridge.clone();
     let result = tokio::task::spawn_blocking(move || bridge.call(&method, &body)).await;

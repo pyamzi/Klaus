@@ -28,7 +28,7 @@
     <p>Loading…</p>
   {:then root}
     <table>
-      <thead><tr><th>Deck</th><th>New</th><th>Learn</th><th>Due</th></tr></thead>
+      <thead><tr><th>Deck</th><th>New</th><th>Learn</th><th>Due</th><th><span class="visually-hidden">Options</span></th></tr></thead>
       <tbody><DeckRows decks={root.children} /></tbody>
     </table>
   {:catch err}
@@ -43,6 +43,7 @@
     background: Canvas;
     color-scheme: light dark;
   }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   main { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
   header { display: flex; align-items: center; justify-content: space-between; }
   table { width: 100%; border-collapse: collapse; }
