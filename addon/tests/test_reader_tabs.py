@@ -52,7 +52,9 @@ ph = importlib.import_module("klausmate.pdf_handler")
 src = importlib.import_module("klausmate.pdf_source")
 src.user_files_dir = lambda: UF
 pj = importlib.import_module("klausmate.pdfjs_viewer")
-pj.renderer_from_config = lambda cfg: "native"
+# Every reader runs on pdf.js; headless there is no QtWebEngine to build it,
+# so these readers take the native fallback (PDF reader 3/5).
+pj.PDFJS_AVAILABLE = False
 pv = importlib.import_module("klausmate.pdf_viewer")
 rt = importlib.import_module("klausmate.reader_tabs")
 
@@ -304,6 +306,122 @@ if pick is not None:
     pick.slots[0](False)
 check("choosing one opens it in this reader", ed.tabs.names() == ["a", "b"]
       and ed.tabs.current() == "b" and ed_loads[-1] == "b", f"{ed.tabs.names()} {ed_loads}")
+
+section("every reader runs on pdf.js; without QtWebEngine, the native fallback")
+
+
+class FakeJsViewer(QtWidgets.QWidget):
+    """Stands in for PdfJsViewer (its AnkiWebView is a stub here)."""
+
+    def __init__(self, on_page_changed=None, parent=None):
+        super().__init__(parent)
+
+    def clear_document(self):
+        pass
+
+    def cleanup(self):
+        pass
+
+
+real_js, real_flag = pj.PdfJsViewer, pj.renderer_from_config
+pj.PdfJsViewer, pj.PDFJS_AVAILABLE = FakeJsViewer, True
+# A profile that still says "native": the flag is retired, nothing reads it.
+pj.renderer_from_config = lambda cfg: "native"
+try:
+    js_sb = pv.PdfSidebar(None, host_key="lecture")
+finally:
+    pj.PdfJsViewer, pj.PDFJS_AVAILABLE, pj.renderer_from_config = real_js, False, real_flag
+check("with QtWebEngine every reader builds the pdf.js viewer, whatever "
+      "pdf_renderer says", js_sb._renderer == "pdfjs"
+      and isinstance(js_sb._viewer, FakeJsViewer), js_sb._renderer)
+js_sb.cleanup()
+js_sb.close()
+_out = io.StringIO()
+with contextlib.redirect_stdout(_out):
+    nat = pv.PdfSidebar(None, host_key="lecture")
+check("without QtWebEngine the native viewer stays (never a blank panel)",
+      nat._renderer == "native" and isinstance(nat._viewer, pv.PdfViewer))
+check("...and says so in one log line",
+      _out.getvalue().count("pdf.js unavailable") == 1, _out.getvalue())
+
+section("a failing tab sync cannot escape load_pdf (_notify_loaded)")
+heard = []
+nat.on_loaded = heard.append
+
+
+def _boom(_name):
+    raise RuntimeError("tab sync broke")
+
+
+nat._on_sidebar_loaded = _boom
+_out = io.StringIO()
+raised = None
+with contextlib.redirect_stdout(_out):
+    try:
+        nat._notify_loaded("a")
+    except Exception as exc:  # noqa: BLE001
+        raised = exc
+check("the error is logged, not raised, and the host still hears the load",
+      raised is None and heard == ["a"] and "tab sync broke" in _out.getvalue(),
+      f"{raised!r} {heard} {_out.getvalue()!r}")
+nat.cleanup()
+nat.close()
+
+section("Lecture panel: a card's lecture opens as a tab; focus returns to the reviewer")
+lv = importlib.import_module("klausmate.lecture_view")
+events = []
+
+
+class NowTimer:
+    @staticmethod
+    def singleShot(_ms, fn):  # noqa: N802 — Qt naming
+        fn()
+
+
+real_lv = (lv.mw, lv.QTimer, lv._refocus_reviewer)
+host = QtWidgets.QMainWindow()
+lv.mw, lv.QTimer = host, NowTimer
+lv._refocus_reviewer = lambda: events.append("focus")
+dock = None
+try:
+    dock = lv.LectureDock()
+    host.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, dock)
+    host.show()
+    spin()
+    dock.sidebar.tabs.set_tabs([], None)
+    lec_dock_loads = fake_load(dock.sidebar)
+    dock.sidebar.jump_to_page = lambda p: events.append(f"jump {p}")
+
+    def _match(safe, page):
+        return lv.LectureMatch(safe=safe, page=page, score=1.0,
+                               pages_known=True, stale=False)
+
+    dock._show_match(_match("a", 2))
+    events.clear()
+    dock._show_match(_match("b", 3))
+    check("lecture b while a is open: tabs [a, b] with b active",
+          dock.sidebar.tabs.names() == ["a", "b"]
+          and dock.sidebar.tabs.current() == "b"
+          and lec_dock_loads == ["a", "b"]
+          and dock.stack.currentWidget() is dock.sidebar,
+          f"{dock.sidebar.tabs.names()} {lec_dock_loads}")
+    jumps_at = [i for i, e in enumerate(events) if e.startswith("jump")]
+    check("every jump hands keyboard focus back to the reviewer",
+          jumps_at and all(i + 1 < len(events) and events[i + 1] == "focus"
+                           for i in jumps_at), str(events))
+    dock.sidebar.tabs.close("b")
+    check("closing a tab while another remains keeps the reader",
+          dock.stack.currentWidget() is dock.sidebar)
+    dock.sidebar.tabs.close("a")
+    check("closing the last tab shows the panel's empty state, not a blank reader",
+          dock.stack.currentWidget() is dock.empty_label)
+finally:
+    lv.mw, lv.QTimer, lv._refocus_reviewer = real_lv
+    if dock is not None:
+        dock._closing_for_shutdown = True
+        dock.shutdown()
+    host.close()
+spin()
 
 for sb in (lec, ed):
     sb.cleanup()

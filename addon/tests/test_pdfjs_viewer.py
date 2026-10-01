@@ -550,8 +550,8 @@ check("pdf.worker.min.js vendored",
 section("config default")
 import json
 cfg = json.load(open(os.path.join(here, "..", "klausmate", "config.json")))
-check("config.json defaults pdf_renderer to native",
-      cfg.get("pdf_renderer") == "native")
+check("config.json no longer carries the retired pdf_renderer flag "
+      "(every reader runs on pdf.js)", "pdf_renderer" not in cfg)
 
 section("bridge dialogs deferred past the webchannel call (live crash)")
 # The deferral rule itself — QTimer.singleShot(0, ...) around every

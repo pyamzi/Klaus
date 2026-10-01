@@ -34,6 +34,8 @@ pv = importlib.import_module("klausmate.pdf_viewer")
 vc = importlib.import_module("klausmate.viewer_context")
 ps = importlib.import_module("klausmate.page_store")
 ep = importlib.import_module("klausmate.anki_endpoint")
+# These readers drive the native renderer: no QtWebEngine, the fallback.
+importlib.import_module("klausmate.pdfjs_viewer").PDFJS_AVAILABLE = False
 
 class UnloadableDoc:
     """Exercise both native load overload failures after a successful load."""

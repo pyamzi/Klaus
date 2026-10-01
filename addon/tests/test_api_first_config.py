@@ -156,4 +156,37 @@ finally:
     K.get_config, K.write_config = _real_get_config, _real_write_config
 
 
+
+section("PDF reader 3/5: the retired pdf_renderer key is scrubbed")
+# Whichever owner exists: settings (after the seam) or __init__ (before it).
+try:
+    import klausmate.settings as _st12
+except ImportError:
+    _st12 = None
+_profile12 = {"pdf_renderer": "native", "color_theme": "rose",
+              "_local_embeddings_migrated": True}
+if _st12 is not None:
+    _legacy12 = _st12.LEGACY_KEYS_DROPPED
+    _store12 = _st12.store
+    _st12.store = _st12.DictStore(_profile12)
+    try:
+        _st12.migrate()
+        _after12 = _st12.store.read()
+    finally:
+        _st12.store = _store12
+else:
+    _legacy12 = K._LEGACY_KEYS_DROPPED
+    _after12 = dict(_profile12)
+    _io12 = K.get_config, K.write_config
+    K.get_config = lambda: dict(_after12)
+    K.write_config = lambda c: (_after12.clear(), _after12.update(c))
+    try:
+        K._migrate_config()
+    finally:
+        K.get_config, K.write_config = _io12
+check("pdf_renderer is in the retired-keys list", "pdf_renderer" in _legacy12)
+check("a stored pdf_renderer: 'native' is removed; other choices stay",
+      "pdf_renderer" not in _after12 and _after12.get("color_theme") == "rose",
+      str(_after12))
+
 raise SystemExit(report())

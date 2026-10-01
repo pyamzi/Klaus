@@ -199,15 +199,6 @@ removed. Use the external MCP client setup below.
   scoring and deck copying available, but stops automatic membership updates.
   See [tag sync](tag_sync.py).
 
-- **pdf_renderer**: Default `"native"`. Which engine draws PDFs in the
-  viewer panel and Library. `"native"` is Qt's built-in QPdfView;
-  `"pdfjs"` switches to the bundled pdf.js webview renderer — smoother,
-  flicker-free scrolling, but still reaching feature parity (highlights,
-  find, and thumbnails land there incrementally — see the K-095 board
-  umbrella). Toggle it from **KlausMate Preferences → General → "Use the
-  new pdf.js viewer"**, then press **Save**. Requires an Anki restart to
-  take effect.
-
 
 ## Appearance
 

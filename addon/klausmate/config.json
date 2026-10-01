@@ -6,7 +6,6 @@
   "auto_index_on_add": true,
   "pdf_match_threshold": 0.45,
   "pdf_match_best_delta": -1,
-  "pdf_renderer": "native",
   "color_theme": "ocean",
   "color_theme_custom": "#0071D3",
   "klausbook_design": false,

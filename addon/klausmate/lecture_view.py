@@ -413,6 +413,9 @@ class LectureDock(_DockBase):  # type: ignore[misc]
         except Exception:
             pass
         self.sidebar = PdfSidebar(None, parent=body, host_key="lecture")
+        # The reader clears itself when its last tab closes; show the
+        # panel's empty state then, not a blank reader.
+        self.sidebar.tabs.closed.connect(self._on_tab_closed)
         self.stack.addWidget(self.empty_label)
         self.stack.addWidget(self.sidebar)
         lay.addWidget(self.stack, 1)
@@ -457,7 +460,9 @@ class LectureDock(_DockBase):  # type: ignore[misc]
     def _show_match(self, m: LectureMatch) -> None:
         try:
             if getattr(self.sidebar, "_name", None) != m.safe:
-                self.sidebar.load_pdf(m.safe)
+                # A tab per lecture (PDF reader 3/5): opening B while A is
+                # open adds B beside A and loads it, instead of replacing A.
+                self.sidebar.tabs.open(m.safe)
                 self._last_target = None
                 # The webview grabbing focus on load would eat the answer
                 # keys — hand focus straight back to the reviewer.
@@ -503,6 +508,11 @@ class LectureDock(_DockBase):  # type: ignore[misc]
             pass
         self._set_status(_STATUS_HINTS.get(reason, ""))
 
+    @_guarded
+    def _on_tab_closed(self, *_args) -> None:
+        if not self.sidebar.tabs.names():
+            self._show_empty("")
+
     def _set_status(self, text: str) -> None:
         try:
             self.status.setText(text)
@@ -529,6 +539,9 @@ class LectureDock(_DockBase):  # type: ignore[misc]
             except Exception as e:
                 print(f"[klausmate] lecture: jump failed: {e}")
                 return
+            # A jump can move focus into the reader; the answer keys must
+            # keep reaching the reviewer.
+            QTimer.singleShot(0, _refocus_reviewer)
             if i + 1 < len(_JUMP_DELAYS_MS):
                 QTimer.singleShot(
                     _JUMP_DELAYS_MS[i + 1], lambda: attempt(i + 1)

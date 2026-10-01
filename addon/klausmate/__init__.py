@@ -28,7 +28,6 @@ from aqt.qt import (
     QLabel,
     QMenu,
     QRect,
-    QTabBar,
     QTimer,
     QToolButton,
     QWidget,
@@ -130,6 +129,8 @@ _LEGACY_KEYS_DROPPED = (
     "reasoning_model", "transcription_model",
     # 2026-09-30: lecture recording moved to the Klaus app (K-314).
     "transcription_model_path", "transcription_binary", "transcription_language",
+    # 2026-10-01: every reader runs on pdf.js (PDF reader 3/5).
+    "pdf_renderer",
 )
 
 
@@ -1217,7 +1218,9 @@ def on_editor_did_init(editor: Editor) -> None:
                     existing._editor = editor
                     sidebar._editor = editor
                     active = pdf_handler.get_active_pdf(USER_FILES)
-                    if active:
+                    # Lazy (PDF reader 3/5): a hidden dock loads on its
+                    # first show (PdfDock.showEvent), never at install.
+                    if active and existing.isVisible():
                         sidebar.load_pdf(active)
                     return
 
@@ -1232,10 +1235,8 @@ def on_editor_did_init(editor: Editor) -> None:
                 editor._klausmate_pdf_tabs = container  # type: ignore[attr-defined]
                 editor._klausmate_sidebar = sidebar  # type: ignore[attr-defined]
                 parent_window._klausmate_pdf_container = container
-
-                active = pdf_handler.get_active_pdf(USER_FILES)
-                if active:
-                    sidebar.load_pdf(active)
+                # Nothing loads here: the dock starts hidden and loads its
+                # active tab on the first show (PdfDock.showEvent).
             except Exception as e:
                 print(
                     "[klausmate] PDF panel install failed: "

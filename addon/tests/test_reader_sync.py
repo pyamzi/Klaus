@@ -69,7 +69,7 @@ ds = importlib.import_module("klausmate.doc_sync")
 ds._sync = lambda: None  # no real watcher: events are driven by hand
 asv = importlib.import_module("klausmate.annotation_save")
 pj = importlib.import_module("klausmate.pdfjs_viewer")
-pj.renderer_from_config = lambda cfg: "native"
+pj.PDFJS_AVAILABLE = False  # the native fallback: no QtWebEngine headless (PDF reader 3/5)
 pv = importlib.import_module("klausmate.pdf_viewer")
 pdrive = importlib.import_module("klausmate.pdf_drive")
 

@@ -432,6 +432,50 @@ check("...and calling _on_host_closing again (the destroyed backstop can "
       "cleanup() never runs twice (F3, review round 1)",
       sb.cleanups == 1, f"cleanups={sb.cleanups}")
 
+section("lazy load: a hidden editor dock loads nothing until it is shown")
+K.pdf_handler.save_panel_state(_scratch, placement="right")
+# The active pointer holds a bare basename with a stored context.
+with open(_os.path.join(_scratch, "contexts", "lazy.txt"), "w",
+          encoding="utf-8") as _fh:
+    _fh.write("page one\n")
+K.pdf_handler.set_active_pdf(_scratch, "lazy")
+check("fixture: the active PDF resolves",
+      K.pdf_handler.get_active_pdf(_scratch) == "lazy")
+_lw = _QtW.QMainWindow()
+_lw.setCentralWidget(_QtW.QWidget())
+_QtW.QVBoxLayout(_lw.centralWidget()).addWidget(_QtW.QWidget())
+_lw.resize(1000, 700)
+_lw.show()
+_app.processEvents()
+_lazy_ed = types.SimpleNamespace(widget=_lw.centralWidget(), parentWindow=_lw)
+_lazy_sb = _FakeSidebar()
+_pv_mod = importlib.import_module("klausmate.pdf_viewer")
+_real_sidebar_cls = _pv_mod.PdfSidebar
+_pv_mod.PdfSidebar = lambda editor, parent=None: _lazy_sb
+try:
+    K.on_editor_did_init(_lazy_ed)
+    _app.processEvents()  # the install is deferred one tick
+finally:
+    _pv_mod.PdfSidebar = _real_sidebar_cls
+_lazy_dock = getattr(_lazy_ed, "_klausmate_pdf_tabs", None)
+if isinstance(_lazy_dock, K.PdfDock):
+    _all_docks.append((_lw, _lazy_dock))
+check("the editor dock installs hidden and has not called load_pdf",
+      isinstance(_lazy_dock, K.PdfDock) and not _lazy_dock.isVisible()
+      and _lazy_sb.loaded == [], f"{_lazy_dock!r} {_lazy_sb.loaded}")
+_lazy_ed2 = types.SimpleNamespace(widget=_lw.centralWidget(), parentWindow=_lw)
+K.on_editor_did_init(_lazy_ed2)
+_app.processEvents()
+check("an editor re-init reusing the hidden dock loads nothing either",
+      getattr(_lazy_ed2, "_klausmate_pdf_tabs", None) is _lazy_dock
+      and _lazy_sb.loaded == [], str(_lazy_sb.loaded))
+if isinstance(_lazy_dock, K.PdfDock):
+    _lazy_dock.panel_show()
+    _app.processEvents()
+check("the first show loads the active tab",
+      _lazy_sb.loaded == ["lazy"] and _lazy_sb.tabs.current() == "lazy",
+      str(_lazy_sb.loaded))
+
 section("the deleted machinery is gone")
 _src = open(_os.path.join(
     _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),

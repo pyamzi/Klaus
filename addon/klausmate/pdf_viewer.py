@@ -4208,20 +4208,19 @@ class PdfSidebar(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Renderer selection (K-095): config pdf_renderer == "pdfjs"
-        # swaps in the webview/pdf.js viewer; anything else (or any
-        # failure reading config) stays on the proven QPdfView path.
+        # Every reader runs on pdf.js (PDF reader 3/5; the pdf_renderer flag
+        # is retired). Without QtWebEngine the QPdfView path stays as the
+        # fallback rather than a blank panel; phase 5 deletes it.
         self._renderer = "native"
         try:
             from . import pdfjs_viewer as _pdfjs
 
             if _pdfjs.PDFJS_AVAILABLE:
-                from aqt import mw as _mw
-
-                cfg = _mw.addonManager.getConfig(__package__) or {}
-                self._renderer = _pdfjs.renderer_from_config(cfg)
+                self._renderer = "pdfjs"
+            else:
+                print("[klausmate] pdf.js unavailable (no QtWebEngine): using the native PDF viewer")
         except Exception as exc:
-            print(f"[klausmate] renderer flag read failed: {exc}")
+            print(f"[klausmate] pdf.js viewer import failed: {exc}")
 
         if self._renderer == "pdfjs":
             from . import pdfjs_viewer as _pdfjs
@@ -4441,7 +4440,10 @@ class PdfSidebar(QWidget):
 
     def _notify_loaded(self, name: str) -> None:
         self._report_document()
-        self._on_sidebar_loaded(name)
+        try:
+            self._on_sidebar_loaded(name)
+        except Exception as exc:
+            print(f"[klausmate] tab sync after load failed for {name}: {exc}")
         cb = self.on_loaded
         if cb is None:
             return
