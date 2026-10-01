@@ -954,13 +954,18 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._note_dialog: Any = None  # live Highlight Note prompt (singleton)
         self._goto_dlg: Any = None  # live Go to Page prompt (singleton)
 
-        # Debounced bake, same shape as the native viewer's: pending
-        # jobs are a SET so annotating PDF A then PDF B inside one
-        # debounce window bakes both.
-        self._bake_timer: Any = None
-        self._bake_pending: dict[tuple[str, str], bool] = {}
-        self._bake_lock = threading.Lock()
-        self._bake_running = False
+        # Bakes run in annotation_save's one pipeline (PDF reader 1/5),
+        # shared with the native viewer: this one only hears the events
+        # for its own document.
+        self._unsub_save: Optional[Callable[[], None]] = None
+        try:
+            from . import annotation_save
+
+            self._unsub_save = annotation_save.pipeline().subscribe(
+                self._on_save_event
+            )
+        except Exception as exc:
+            print(f"[klausmate] pdfjs save pipeline subscribe failed: {exc}")
 
         # Same adoption contract as the native viewer: the tab container
         # re-parents this label into the panel header bar. Clicking it
@@ -1548,14 +1553,14 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         )
 
     def _refresh_highlight_overlay(self) -> None:
-        """Duck-typed by shared sidebar code (_reload_records_for's
-        post-bake refresh sets ``v._highlights`` then calls this) — for
+        """Duck-typed by shared sidebar code (a records reload sets
+        ``_highlights`` then calls this) — for
         this renderer, refreshing the overlay means pushing the records
         to the page."""
         self._push_annotations()
 
     def _save_annotations(self) -> None:
-        """Synchronous write-through + debounced bake (native parity)."""
+        """Synchronous write-through, then the shared save pipeline."""
         if self._annotations_name is None:
             return
         try:
@@ -1569,50 +1574,29 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         except Exception as exc:
             print(f"[klausmate] pdfjs save annotations failed: {exc}")
 
-    def _schedule_bake(self, user_files_dir: str, name: str) -> None:
-        self._bake_pending[(user_files_dir, name)] = True
-        try:
-            if self._bake_timer is None:
-                timer = QTimer(self)
-                timer.setSingleShot(True)
-                timer.setInterval(500)
-                timer.timeout.connect(self._on_bake_timer)
-                self._bake_timer = timer
-            self._bake_timer.start()
-        except Exception as exc:
-            print(f"[klausmate] pdfjs bake schedule failed: {exc}")
+    def _schedule_bake(self, _user_files_dir: str, name: str) -> None:
+        """Hand the bake to the shared pipeline. Only a forwarder: its
+        call site carries another session's uncommitted edit."""
+        from . import annotation_save
 
-    def _on_bake_timer(self) -> None:
-        jobs = list(self._bake_pending.keys())
-        self._bake_pending.clear()
-        if not jobs:
+        annotation_save.pipeline().request(name)
+
+    def _on_save_event(self, event: str, name: str) -> None:
+        """Pipeline event for THIS viewer's document: "records" reloads
+        the marks the bake dropped; "failed" toasts that they are kept."""
+        if name != self._annotations_name:
             return
-        with self._bake_lock:
-            if self._bake_running:
-                # Re-arm; the running bake predates this batch's saves.
-                for j in jobs:
-                    self._bake_pending[j] = True
-                try:
-                    self._bake_timer.start()
-                except Exception:
-                    pass
-                return
-            self._bake_running = True
+        if event == "records":
+            from . import pdf_handler, pdf_source
 
-        def work() -> None:
-            try:
-                from . import pdf_handler
+            self._highlights = pdf_handler.load_annotations(
+                pdf_source.user_files_dir(), name
+            )
+            self._refresh_highlight_overlay()
+        elif event == "failed" and tooltip is not None:
+            from . import annotation_save
 
-                for user_files_dir, name in jobs:
-                    try:
-                        pdf_handler.bake_annotations(user_files_dir, name)
-                    except Exception as exc:
-                        print(f"[klausmate] pdfjs bake failed for {name}: {exc}")
-            finally:
-                with self._bake_lock:
-                    self._bake_running = False
-
-        threading.Thread(target=work, daemon=True).start()
+            tooltip(annotation_save.SAVE_FAILED_COPY)
 
     # ---- loading --------------------------------------------------------
 
@@ -1838,6 +1822,9 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         Library window closed, then the theme was switched). Idempotent
         and safe to call twice.
         """
+        unsub, self._unsub_save = self._unsub_save, None
+        if unsub is not None:
+            unsub()
         self._close_source()
         web, self._web = self._web, None
         self._page_loaded = False

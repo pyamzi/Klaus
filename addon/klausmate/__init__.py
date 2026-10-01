@@ -1498,12 +1498,26 @@ from . import curation as _curation
 
 _curation.setup_hooks()
 
+
+def _flush_annotation_saves() -> None:
+    """Bake every annotation save still debouncing before the profile
+    goes (PDF reader 1/5)."""
+    try:
+        from . import annotation_save
+
+        annotation_save.flush_all()
+    except Exception as exc:
+        print(f"[klausmate] annotation save flush failed: {exc}")
+
+
 try:
     # Backstop against dangling AnkiWebViews in Anki's global hooks
     # (see pdf_viewer.PdfSidebar.cleanup): sweep every live sidebar on
-    # profile switch and on quit.
+    # profile switch and on quit. Pending saves flush FIRST, while the
+    # viewers that hear their events still exist.
     from . import pdf_viewer as _pdf_viewer_cleanup
 
+    gui_hooks.profile_will_close.append(_flush_annotation_saves)
     gui_hooks.profile_will_close.append(
         _pdf_viewer_cleanup.cleanup_all_sidebars
     )

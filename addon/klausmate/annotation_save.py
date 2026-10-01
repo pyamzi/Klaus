@@ -18,6 +18,8 @@ import time
 from typing import Callable, Optional
 
 DEBOUNCE_MS = 500  # defined once; K-085 (Klaus edits reach the file in <1s)
+# Both viewers toast this on a "failed" event for their document.
+SAVE_FAILED_COPY = "Marks couldn't be saved into the file yet; they're kept and will retry."
 
 
 class SavePipeline:

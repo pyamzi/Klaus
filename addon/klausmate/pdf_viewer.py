@@ -724,19 +724,10 @@ class PdfViewer(QWidget):
         self._annotations_name: str | None = None
         self._selection_page_rects: list[tuple[int, QRectF]] = []
         self._doc_generation = 0
-        # Annotation baking (real PDF annots written into the stored
-        # .pdf). Debounced by a single-shot QTimer; the actual bake runs
-        # on a plain threading.Thread (files + pypdf only, no Qt).
-        # _bake_pending captures (user_files, name) BY VALUE at schedule
-        # time — the viewer may switch tabs before the timer fires.
-        # _bake_lock guards _bake_running across UI thread and worker.
-        self._bake_timer: Any = None
-        # Ordered set of pending (user_files, name) jobs — a plain slot
-        # would drop PDF A's bake when PDF B is annotated within the
-        # same debounce window.
-        self._bake_pending: dict[tuple[str, str], bool] = {}
-        self._bake_lock = threading.Lock()
-        self._bake_running = False
+        # Bakes run in annotation_save's one pipeline (PDF reader 1/5):
+        # this viewer only hears the events for its own document.
+        self._unsub_save: Callable[[], None] | None = None
+        self._subscribe_saves()
         # Single-entry cache for _document_page_geometries (last key
         # wins). Geometries are doc-coord and scroll-independent, but
         # _on_view_scrolled refreshes the highlight overlay on EVERY
@@ -1738,6 +1729,9 @@ class PdfViewer(QWidget):
         set_document, so the first mapping can land on stale geometry.
         """
         self._annotations_name = name
+        # Again after a cleanup: a profile switch sweeps every sidebar,
+        # but the single window's PDF dock is reused afterwards.
+        self._subscribe_saves()
         if self._doc is None:
             self._highlights = []
             self._refresh_highlight_overlay()
@@ -1868,111 +1862,50 @@ class PdfViewer(QWidget):
         except Exception as exc:
             print(f"[klausmate] save annotations failed: {exc}")
 
-    def _schedule_bake(self, user_files_dir: str, name: str) -> None:
-        """Debounce a PDF-annotation bake (~500ms, restarted on every
-        change — K-085 dropped it from 1200ms so Klaus edits reach the
-        file, and Preview, in well under a second). Args are captured
-        by value NOW — the viewer may switch
-        tabs before the timer fires, and the bake must target the pdf
-        whose annotations just changed. Pending jobs are a SET (ordered
-        dict): annotating PDF A then PDF B inside one debounce window
-        bakes BOTH."""
-        self._bake_pending[(user_files_dir, name)] = True
-        try:
-            if self._bake_timer is None:
-                timer = QTimer(self)
-                timer.setSingleShot(True)
-                timer.setInterval(500)
-                timer.timeout.connect(self._on_bake_timer)
-                self._bake_timer = timer
-            self._bake_timer.start()
-        except Exception as exc:
-            print(f"[klausmate] could not schedule bake: {exc}")
+    def _schedule_bake(self, _user_files_dir: str, name: str) -> None:
+        """Hand the bake to the shared pipeline (500 ms debounce, one
+        worker per PDF, post-bake bookkeeping). Only a forwarder: its two
+        call sites carry another session's uncommitted edits."""
+        from . import annotation_save
 
-    def _on_bake_timer(self) -> None:
-        """Debounce fired — spawn the bake worker.
+        annotation_save.pipeline().request(name)
 
-        If a bake is already in flight, re-arm the timer instead of
-        overlapping: the running bake reads the json it saw at start, so
-        the re-armed pass picks up whatever changed mid-bake. The worker
-        touches only files + pypdf — no Qt objects — so a plain
-        threading.Thread keeps the UI free (12MB clone+write can take a
-        second)."""
-        if not self._bake_pending:
+    def _subscribe_saves(self) -> None:
+        if self._unsub_save is not None:
             return
-        with self._bake_lock:
-            if self._bake_running:
-                try:
-                    if self._bake_timer is not None:
-                        self._bake_timer.start()
-                except Exception:
-                    pass
-                return
-            self._bake_running = True
-        jobs = list(self._bake_pending.keys())
-        self._bake_pending.clear()
-
-        def _worker() -> None:
-            try:
-                from . import pdf_handler
-
-                for user_files_dir, name in jobs:
-                    try:
-                        print(f"[klausmate] bake started: {name}")
-                        rep: dict = {}
-                        ok = pdf_handler.bake_annotations(
-                            user_files_dir, name, report=rep
-                        )
-                        print(
-                            f"[klausmate] bake finished: {name} "
-                            f"({'ok' if ok else 'FAILED'})"
-                        )
-                        if ok:
-                            # Main thread, in order: pin the fingerprint
-                            # of the file WE wrote (K-078/K-085), drop
-                            # records for marks the bake omitted as
-                            # externally deleted (resurrection race),
-                            # refresh overlays, then the ledger.
-                            def _post(
-                                d=user_files_dir,
-                                n=name,
-                                r=dict(rep),
-                            ) -> None:
-                                _refresh_stats_for(n, r.get("stat"))
-                                try:
-                                    from . import pdf_handler as _ph
-
-                                    omitted = r.get("omitted_native") or []
-                                    if omitted:
-                                        _ph.remove_records(d, n, omitted)
-                                        _reload_records_for(n)
-                                    _ph.mark_native_baked(
-                                        d, n, r.get("native_ids") or []
-                                    )
-                                except Exception as exc:
-                                    print(
-                                        "[klausmate] post-bake sync "
-                                        f"failed: {exc}"
-                                    )
-
-                            _run_on_main(_post)
-                    except Exception as exc:
-                        print(
-                            f"[klausmate] bake worker error for "
-                            f"{name}: {exc}"
-                        )
-            finally:
-                with self._bake_lock:
-                    self._bake_running = False
-
         try:
-            threading.Thread(
-                target=_worker, name="klausmate-bake", daemon=True
-            ).start()
+            from . import annotation_save
+
+            self._unsub_save = annotation_save.pipeline().subscribe(
+                self._on_save_event
+            )
         except Exception as exc:
-            with self._bake_lock:
-                self._bake_running = False
-            print(f"[klausmate] bake thread failed to start: {exc}")
+            print(f"[klausmate] save pipeline subscribe failed: {exc}")
+
+    def _on_save_event(self, event: str, name: str) -> None:
+        """Pipeline event for THIS viewer's document: "records" (the bake
+        dropped marks deleted outside Klaus) reloads them; "failed" says
+        the marks are kept and will retry."""
+        if name != self._annotations_name:
+            return
+        if event == "records":
+            from . import pdf_handler, pdf_source
+
+            self._highlights = pdf_handler.load_annotations(
+                pdf_source.user_files_dir(), name
+            )
+            self._refresh_highlight_overlay()
+        elif event == "failed":
+            from . import annotation_save
+
+            tooltip(annotation_save.SAVE_FAILED_COPY)
+
+    def cleanup(self) -> None:
+        """Drop the pipeline subscription. PdfSidebar.cleanup calls this;
+        safe twice."""
+        unsub, self._unsub_save = self._unsub_save, None
+        if unsub is not None:
+            unsub()
 
     def _refresh_highlight_overlay(self) -> None:
         """Re-map every highlight's page-point rects into viewport px.
@@ -4240,6 +4173,28 @@ def _refresh_stats_for(name: str, stat: tuple | None = None) -> None:
             pass
 
 
+_SAVED_HOOKED = False
+
+
+def _hook_saved_stats() -> None:
+    """ONE pipeline subscription for the module: after every successful
+    save, re-fingerprint the sidebars showing that PDF so the external-
+    change poll never reads Klaus's own write as outside (until doc_sync
+    replaces that poll)."""
+    global _SAVED_HOOKED
+    if _SAVED_HOOKED:
+        return
+    try:
+        from . import annotation_save
+
+        annotation_save.pipeline().subscribe(
+            lambda event, name: _refresh_stats_for(name) if event == "saved" else None
+        )
+        _SAVED_HOOKED = True
+    except Exception as exc:
+        print(f"[klausmate] save pipeline hook failed: {exc}")
+
+
 def _reload_records_for(name: str) -> None:
     """Refresh the overlay of every viewer showing ``name`` from the
     records on disk (K-085: after the post-bake callback removed marks
@@ -4289,6 +4244,7 @@ class PdfSidebar(QWidget):
             _open_sidebars.add(self)
         except Exception:
             pass
+        _hook_saved_stats()
         self._doc: Optional[QPdfDocument] = None
         self._page_count = 0
         self._current_page = 0
@@ -4637,10 +4593,10 @@ class PdfSidebar(QWidget):
 
     def cleanup(self) -> None:
         """Release renderer resources before this widget tree is
-        destroyed. Duck-typed: only the pdf.js renderer needs it (it
-        owns an AnkiWebView, which must be unregistered from Anki's
-        global hooks — see PdfJsViewer.cleanup); QPdfView has nothing
-        to release. Call from every path that tears a sidebar down."""
+        destroyed. Duck-typed: the pdf.js renderer owns an AnkiWebView,
+        which must be unregistered from Anki's global hooks (see
+        PdfJsViewer.cleanup); both renderers drop their save-pipeline
+        subscription. Call from every path that tears a sidebar down."""
         v = self._viewer
         fn = getattr(v, "cleanup", None) if v is not None else None
         if fn is not None:
