@@ -17,6 +17,10 @@ serde_json = "1.0.143"
 tokio = { version = "1.45", features = ["rt-multi-thread", "macros", "net"] }
 tower = { version = "0.5.2", features = ["util"] }
 tower-http = { version = "0.6.6", features = ["fs"] }
+sha2 = "0.11"
+base64 = "0.22"
+reqwest = { version = "0.12.20", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
 prost-build = "0.13"

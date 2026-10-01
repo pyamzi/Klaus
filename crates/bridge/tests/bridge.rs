@@ -724,7 +724,17 @@ fn browser_searches_and_rows() {
     assert!(columns.columns.iter().any(|c| c.key == "cardDue"));
 }
 
-// ---- Sync (#14, #15): against rslib's own sync server, started in-process. ----
+// ---- Sync (ADR-0007): Klaus Account sign-in against a fake klaus.ink, and sync
+// against rslib's own sync server, both started in-process. ----
+
+use anki_proto::sync::sync_collection_response::ChangesRequired;
+use klaus_bridge::klaus::{sync_outcome::State as SyncState, SyncAccount, SyncOutcome};
+
+/// One runtime for the test servers (sync server, fake klaus.ink, bridges).
+fn runtime() -> &'static tokio::runtime::Runtime {
+    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RT.get_or_init(|| tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap())
+}
 
 /// One local sync server for the whole test binary, with a user per test so
 /// parallel tests don't share a server-side Collection.
@@ -734,32 +744,123 @@ fn sync_server() -> String {
     URL.get_or_init(|| {
         std::env::set_var("SYNC_USER1", "normal:secret");
         std::env::set_var("SYNC_USER2", "conflict:secret");
+        std::env::set_var("SYNC_USER3", "auto:secret");
         let base_folder = tempfile::tempdir().unwrap().keep();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
-            rt.block_on(async move {
-                let config = SyncServerConfig {
-                    host: "127.0.0.1".parse().unwrap(),
-                    port: 0,
-                    base_folder,
-                    ip_header: default_ip_header(),
-                };
-                let (addr, server) = SimpleServer::make_server(config).await.unwrap();
-                tx.send(format!("http://{addr}/")).unwrap();
-                server.await.unwrap();
-            });
-        });
-        rx.recv().unwrap()
+        runtime().block_on(async move {
+            let config = SyncServerConfig { host: "127.0.0.1".parse().unwrap(), port: 0, base_folder, ip_header: default_ip_header() };
+            let (addr, server) = SimpleServer::make_server(config).await.unwrap();
+            tokio::spawn(server);
+            format!("http://{addr}/")
+        })
     })
     .clone()
 }
 
-/// A Klaus Collection signed in to the local server as `user`.
-fn signed_in(user: &str) -> (tempfile::TempDir, Bridge) {
+/// A fake klaus.ink (docs/klaus-ink-sync.md) whose account `user` maps to the
+/// local sync server: /oauth/authorize signs in at once and redirects back with a
+/// code; /oauth/token checks the code and PKCE and returns the sync key.
+fn fake_klaus_ink(user: &str) -> String {
+    use axum::extract::{Form, Query, State};
+    use axum::response::Redirect;
+    use base64::Engine;
+    use std::collections::HashMap;
+    type Pending = Arc<Mutex<Option<(String, String)>>>; // (code_challenge, redirect_uri)
+    // The account's sync key, as the sync server issues it.
+    let (_dir, login) = open_temp();
+    let req = anki_proto::sync::SyncLoginRequest { username: user.into(), password: "secret".into(), endpoint: Some(sync_server()) };
+    let hkey = anki_proto::sync::SyncAuth::decode(login.call_trusted("syncLogin", &req.encode_to_vec()).unwrap().as_slice()).unwrap().hkey;
+    let (email, sync_url) = (format!("{user}@example.com"), sync_server());
+    let pending: Pending = Arc::default();
+    let app = axum::Router::new()
+        .route(
+            "/oauth/authorize",
+            axum::routing::get(|State(p): State<Pending>, Query(q): Query<HashMap<String, String>>| async move {
+                assert_eq!((q["response_type"].as_str(), q["code_challenge_method"].as_str()), ("code", "S256"));
+                *p.lock().unwrap() = Some((q["code_challenge"].clone(), q["redirect_uri"].clone()));
+                Redirect::to(&format!("{}?code=the-code&state={}", q["redirect_uri"], q["state"]))
+            }),
+        )
+        .route(
+            "/oauth/token",
+            axum::routing::post(move |State(p): State<Pending>, Form(f): Form<HashMap<String, String>>| async move {
+                let (challenge, redirect) = p.lock().unwrap().take().expect("authorize first");
+                let proof = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(<sha2::Sha256 as sha2::Digest>::digest(f["code_verifier"].as_bytes()));
+                assert_eq!((f["grant_type"].as_str(), f["code"].as_str()), ("authorization_code", "the-code"));
+                assert_eq!((proof, f["redirect_uri"].clone()), (challenge, redirect), "PKCE proof and redirect");
+                axum::Json(serde_json::json!({ "access_token": hkey, "token_type": "Bearer", "email": email, "sync_url": sync_url }))
+            }),
+        )
+        .with_state(pending);
+    runtime().block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        format!("http://{addr}")
+    })
+}
+
+/// A served bridge (its sign-in redirect needs an origin): (base URL, token).
+fn serve_bridge(bridge: Arc<Bridge>) -> (String, String) {
+    let (dirs, web) = empty_web_dirs();
+    let token = new_token();
+    let base = runtime().block_on({
+        let token = token.clone();
+        async move {
+            let hook: Hook = Arc::new(|_: &str, _: &[u8]| None);
+            let (addr, server) = serve(bridge, web, token, hook).await.unwrap();
+            tokio::spawn(async move {
+                let _keep = dirs;
+                server.await
+            });
+            format!("http://{addr}")
+        }
+    });
+    (base, token)
+}
+
+/// The page's view of a served bridge: POST /_anki/<method> with its session cookie.
+struct Page {
+    base: String,
+    cookie: String,
+    client: reqwest::Client,
+}
+
+impl Page {
+    fn open(bridge: Arc<Bridge>) -> Self {
+        let (base, token) = serve_bridge(bridge);
+        let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+        let grant = runtime().block_on(client.get(format!("{base}/?t={token}")).send()).unwrap();
+        let cookie = grant.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+        Page { base, cookie, client }
+    }
+
+    fn post(&self, method: &str, body: Vec<u8>) -> (u16, Vec<u8>) {
+        runtime().block_on(async {
+            let res = self
+                .client
+                .post(format!("{}/_anki/{method}", self.base))
+                .header("Content-Type", "application/binary")
+                .header("Cookie", &self.cookie)
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            (res.status().as_u16(), res.bytes().await.unwrap().to_vec())
+        })
+    }
+}
+
+/// A Klaus Collection signed in to the fake klaus.ink as `user`, the browser way:
+/// open the sign-in URL and follow klaus.ink's redirect back to the bridge.
+fn signed_in(user: &str) -> (tempfile::TempDir, Arc<Bridge>) {
     let (dir, bridge) = open_temp();
-    let _: Empty = call(&bridge, "klausSetSyncUrl", generic::String { val: sync_server().trim_end_matches('/').into() });
-    let _: Empty = call(&bridge, "klausSyncSignIn", klaus_bridge::klaus::SyncSignIn { username: user.into(), password: "secret".into() });
+    let bridge = Arc::new(bridge);
+    bridge.set_account_url(&fake_klaus_ink(user));
+    serve_bridge(bridge.clone());
+    let url: generic::String = call(&bridge, "klausAccountSignIn", Empty {});
+    let page = runtime().block_on(async { reqwest::get(url.val).await.unwrap() });
+    assert_eq!(page.status(), 200);
     (dir, bridge)
 }
 
@@ -778,9 +879,6 @@ fn cards_in(bridge: &Bridge) -> u32 {
     deck_tree(bridge).children.iter().map(|d| d.total_including_children).sum()
 }
 
-use anki_proto::sync::sync_collection_response::ChangesRequired;
-use klaus_bridge::klaus::{sync_outcome::State as SyncState, SyncAccount, SyncOutcome};
-
 /// A finished sync without error.
 fn done(outcome: &SyncOutcome) {
     assert_eq!((outcome.state(), outcome.error.as_str()), (SyncState::Done, ""), "{outcome:?}");
@@ -788,35 +886,46 @@ fn done(outcome: &SyncOutcome) {
 
 /// …and what the server required.
 fn ok(outcome: &SyncOutcome) -> ChangesRequired {
-    assert_eq!((outcome.state(), outcome.error.as_str()), (SyncState::Done, ""), "{outcome:?}");
+    done(outcome);
     ChangesRequired::try_from(outcome.required).unwrap()
 }
 
-/// #14: sign-in (key kept out of files), first upload, first-run download on a
-/// second device, normal sync both ways, media, and the background HTTP path.
+/// Klaus's and Anki's web dirs, empty (for tests that only call /_anki).
+fn empty_web_dirs() -> ([tempfile::TempDir; 3], WebDirs) {
+    let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+    let web = WebDirs { klaus: dirs[0].path().into(), anki: dirs[1].path().into(), anki_static: dirs[2].path().into() };
+    (dirs, web)
+}
+
+/// ADR-0007: browser sign-in (key kept out of files, forged redirects refused),
+/// first upload, first-run download on a second device, normal sync both ways,
+/// media, and the page's background sync path.
 #[test]
-fn syncs_with_a_local_sync_server() {
+fn signs_in_with_a_klaus_account_and_syncs() {
     let (dir_a, a) = signed_in("normal");
     let account: SyncAccount = call(&a, "klausSyncAccount", Empty {});
-    assert_eq!((account.username.as_str(), account.custom_url.as_str()), ("normal", sync_server().as_str()));
+    assert_eq!(account.email, "normal@example.com");
     assert!(account.auto_sync && account.sync_media);
     // The sync key lives in the secret store, never in klaus-settings.json.
     let settings = std::fs::read_to_string(dir_a.path().join("klaus-settings.json")).unwrap();
     let profile: serde_json::Value = serde_json::from_str(&settings).unwrap();
     let keys: Vec<_> = profile["profile"].as_object().unwrap().keys().cloned().collect();
-    assert_eq!(keys, ["currentSyncUrl", "customSyncUrl", "syncUser"], "{settings}");
-    // A wrong password is refused.
+    assert_eq!(keys, ["syncUrl", "syncUser"], "{settings}");
+    // A redirect that wasn't started from Klaus (wrong or reused state) is refused.
     let (_dir_x, x) = open_temp();
-    let _: Empty = call(&x, "klausSetSyncUrl", generic::String { val: sync_server() });
-    let wrong = klaus_bridge::klaus::SyncSignIn { username: "normal".into(), password: "nope".into() };
-    assert!(x.call("klausSyncSignIn", &wrong.encode_to_vec()).is_err());
+    let x = Arc::new(x);
+    x.set_account_url(&fake_klaus_ink("normal"));
+    let (base, _) = serve_bridge(x.clone());
+    let _: generic::String = call(&x, "klausAccountSignIn", Empty {});
+    let forged = runtime().block_on(async { reqwest::get(format!("{base}/auth/callback?code=the-code&state=forged")).await.unwrap() });
+    assert_eq!(forged.status(), 400);
+    assert_eq!(call::<SyncAccount>(&x, "klausSyncAccount", Empty {}).email, "");
 
     // Device A has a note and an image; a new account's first sync uploads it.
     add_tagged(&a, 1, ["Heart", "<img src=heart.png>"], &[]);
     let _: generic::String = call(&a, "addMediaFile", AddMediaFileRequest { desired_name: "heart.png".into(), data: b"png".to_vec() });
     let out = a.sync();
-    let required = ok(&out);
-    assert!(matches!(required, ChangesRequired::FullUpload | ChangesRequired::FullSync), "{required:?}");
+    assert!(matches!(ok(&out), ChangesRequired::FullUpload | ChangesRequired::FullSync), "{out:?}");
     done(&a.full_sync(true, Some(out.server_media_usn)));
     wait_for_media(&a);
 
@@ -835,51 +944,21 @@ fn syncs_with_a_local_sync_server() {
     add_tagged(&b, 1, ["Lung", "gas exchange"], &[]);
     assert_eq!(ok(&b.sync()), ChangesRequired::NoChanges);
 
-    // …and A pulls it down the webview's way: klausSync returns at once (204),
-    // then the outcome is polled.
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
-    rt.block_on(async move {
-        let (_web, web_dirs) = empty_web_dirs();
-        let token = new_token();
-        let hook: Hook = std::sync::Arc::new(|_: &str, _: &[u8]| None);
-        let (addr, server) = serve(std::sync::Arc::new(a), web_dirs, token.clone(), hook).await.unwrap();
-        tokio::spawn(server);
-        let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-        let grant = client.get(format!("http://{addr}/?t={token}")).send().await.unwrap();
-        let cookie = grant.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
-        let post = |method: &str, body: Vec<u8>| {
-            client
-                .post(format!("http://{addr}/_anki/{method}"))
-                .header("Content-Type", "application/binary")
-                .header("Cookie", &cookie)
-                .body(body)
-                .send()
-        };
-        assert_eq!(post("klausSync", vec![]).await.unwrap().status(), 204);
-        let outcome = loop {
-            let res = post("klausSyncOutcome", vec![]).await.unwrap();
-            let outcome = SyncOutcome::decode(res.bytes().await.unwrap()).unwrap();
-            if outcome.state() != SyncState::Running {
-                break outcome;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        };
-        assert_eq!(ok(&outcome), ChangesRequired::NoChanges);
-        // Read once: the next poll is idle again.
-        let res = post("klausSyncOutcome", vec![]).await.unwrap();
-        assert_eq!(SyncOutcome::decode(res.bytes().await.unwrap()).unwrap().state(), SyncState::Idle);
-        let tree = post("deckTree", DeckTreeRequest { now: now() }.encode_to_vec()).await.unwrap();
-        let tree = DeckTreeNode::decode(tree.bytes().await.unwrap()).unwrap();
-        assert_eq!(tree.children.iter().map(|d| d.total_including_children).sum::<u32>(), 2, "A has B's note");
-    });
-    drop(dir_a);
-}
-
-/// Klaus's and Anki's web dirs, empty (for tests that only call /_anki).
-fn empty_web_dirs() -> ([tempfile::TempDir; 3], WebDirs) {
-    let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
-    let web = WebDirs { klaus: dirs[0].path().into(), anki: dirs[1].path().into(), anki_static: dirs[2].path().into() };
-    (dirs, web)
+    // …and A pulls it down the page's way: klausSync returns at once (204), then
+    // the outcome is polled until this sync's id is done.
+    let page = Page::open(a.clone());
+    let before = SyncOutcome::decode(page.post("klausSyncOutcome", vec![]).1.as_slice()).unwrap().id;
+    assert_eq!(page.post("klausSync", vec![]).0, 204);
+    let outcome = loop {
+        let outcome = SyncOutcome::decode(page.post("klausSyncOutcome", vec![]).1.as_slice()).unwrap();
+        if outcome.id > before && outcome.state() == SyncState::Done {
+            break outcome;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(ok(&outcome), ChangesRequired::NoChanges);
+    assert!(!outcome.background && outcome.finished_ms > 0);
+    assert_eq!(cards_in(&a), 2, "A has B's note");
 }
 
 fn notetype_names(bridge: &Bridge) -> Vec<String> {
@@ -896,8 +975,8 @@ fn change_schema(bridge: &Bridge, name: &str) {
         Message::decode(bridge.call_trusted("removeNotetype", &NotetypeId { ntid }.encode_to_vec()).unwrap().as_slice()).unwrap();
 }
 
-/// #15: both devices change the schema, so the second to sync gets a real
-/// conflict (FULL_SYNC: choose a side). Resolved once by downloading, once by uploading.
+/// Both devices change the schema, so the second to sync gets a real conflict
+/// (FULL_SYNC: choose a side). Resolved once by downloading, once by uploading.
 #[test]
 fn full_sync_conflicts_resolve_in_both_directions() {
     let (_dir_a, a) = signed_in("conflict");
@@ -907,7 +986,7 @@ fn full_sync_conflicts_resolve_in_both_directions() {
     let out = b.sync();
     done(&b.full_sync(false, Some(out.server_media_usn)));
 
-    // Download: B discards its own change and takes AnkiWeb's (A's) version.
+    // Download: B discards its own change and takes the server's (A's) version.
     change_schema(&a, "Cloze");
     add_tagged(&a, 1, ["only on A", "a"], &[]);
     change_schema(&b, "Basic (type in the answer)");
@@ -921,7 +1000,7 @@ fn full_sync_conflicts_resolve_in_both_directions() {
     assert_eq!(notetype_names(&b), notetype_names(&a));
     assert_eq!(cards_in(&b), 1, "B's note gone, A's note here");
 
-    // Upload: B keeps its own change and overwrites AnkiWeb; A then takes B's version.
+    // Upload: B keeps its own change and overwrites the server; A then takes B's version.
     change_schema(&a, "Basic (and reversed card)");
     change_schema(&b, "Basic (optional reversed card)");
     let out = a.sync();
@@ -934,4 +1013,41 @@ fn full_sync_conflicts_resolve_in_both_directions() {
     done(&a.full_sync(false, Some(out.server_media_usn)));
     assert_eq!(notetype_names(&a), notetype_names(&b));
     assert!(notetype_names(&a).contains(&"Basic (and reversed card)".to_string()), "A's change was overwritten");
+}
+
+/// Automatic sync: a quiet app with local changes syncs on its own; an active one
+/// waits; nothing to sync means no sync; a full sync is found but left for the user.
+#[test]
+fn syncs_automatically_when_quiet() {
+    let (_dir_a, a) = signed_in("auto");
+    let (_dir_b, b) = signed_in("auto");
+    let out = a.sync();
+    done(&a.full_sync(true, Some(out.server_media_usn)));
+    let out = b.sync();
+    done(&b.full_sync(false, Some(out.server_media_usn)));
+
+    assert!(!a.auto_sync_tick(), "nothing to sync");
+    // A changed and nobody has touched the app: it syncs up on its own…
+    add_tagged(&a, 1, ["auto", "synced"], &[]);
+    assert!(a.auto_sync_tick());
+    let out: SyncOutcome = call(&a, "klausSyncOutcome", Empty {});
+    assert!(out.background && ok(&out) == ChangesRequired::NoChanges, "{out:?}");
+    // B learns of it from the server, which rslib asks at most every 5 minutes
+    // (B just synced, so not yet); a sync then brings it down.
+    assert!(!b.auto_sync_tick(), "server checked at most every 5 minutes");
+    assert_eq!(ok(&b.sync()), ChangesRequired::NoChanges);
+    assert_eq!(cards_in(&b), 1);
+
+    // While the page is in use, it waits.
+    add_tagged(&a, 1, ["later", "x"], &[]);
+    let page = Page::open(a.clone());
+    assert_eq!(page.post("deckTree", DeckTreeRequest { now: now() }.encode_to_vec()).0, 200);
+    assert!(!a.auto_sync_tick(), "app in use");
+
+    // A full sync is found once and left for the user to choose.
+    change_schema(&b, "Cloze");
+    assert!(b.auto_sync_tick());
+    let out: SyncOutcome = call(&b, "klausSyncOutcome", Empty {});
+    assert!(matches!(ok(&out), ChangesRequired::FullUpload | ChangesRequired::FullSync), "{out:?}");
+    assert!(!b.auto_sync_tick(), "not asked again while it waits");
 }

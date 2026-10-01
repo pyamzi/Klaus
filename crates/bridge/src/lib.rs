@@ -13,7 +13,7 @@ use anki_proto::backend::{backend_error, BackendError, BackendInit};
 use anki_proto::collection::{CloseCollectionRequest, OpenCollectionRequest};
 use anki_proto::generic;
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path as UrlPath, Request, State};
+use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
@@ -227,9 +227,8 @@ const LOCAL: &[&str] = &[
     "convertPastedImage",
     "klausRenderCard",
     "klausSyncAccount",
-    "klausSyncSignIn",
+    "klausAccountSignIn",
     "klausSyncSignOut",
-    "klausSetSyncUrl",
     "klausSyncOutcome",
 ];
 
@@ -274,8 +273,16 @@ pub struct Bridge {
     settings: Mutex<Value>,
     /// Where the AnkiWeb sync key lives: the macOS Keychain in the app.
     secrets: Box<dyn Secrets>,
-    /// The background sync's state, for `klausSyncOutcome`.
+    /// The latest sync (page-started or automatic), for `klausSyncOutcome`.
     sync_outcome: Mutex<klaus::SyncOutcome>,
+    /// klaus.ink, where the Klaus Account signs in (ADR-0007).
+    account_url: Mutex<String>,
+    /// This bridge's own origin, for the sign-in redirect back to it.
+    origin: Mutex<Option<String>>,
+    /// The sign-in in progress: (state, PKCE verifier, redirect URI).
+    pending_sign_in: Mutex<Option<(String, String, String)>>,
+    /// When the page last did something (Unix ms); automatic sync waits for quiet.
+    last_activity: std::sync::atomic::AtomicI64,
 }
 
 /// Secret storage (the sync key must never be written to a plain file).
@@ -302,7 +309,16 @@ impl Secrets for MemorySecrets {
     }
 }
 
-const SYNC_KEY: &str = "ankiweb-sync-key";
+const SYNC_KEY: &str = "klaus-account-sync-key";
+const DEFAULT_ACCOUNT_URL: &str = "https://klaus.ink";
+const DEFAULT_SYNC_URL: &str = "https://sync.klaus.ink/";
+/// Automatic sync starts only after this long without page activity: a sync holds
+/// the Collection for its network round-trip, which would stall reviewing.
+const QUIET_MS: i64 = 30_000;
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
 
 impl Bridge {
     pub fn new() -> Result<Self, String> {
@@ -320,6 +336,12 @@ impl Bridge {
             settings: Mutex::new(Value::Null),
             secrets,
             sync_outcome: Mutex::default(),
+            account_url: Mutex::new(
+                std::env::var("KLAUS_ACCOUNT_URL").unwrap_or_else(|_| DEFAULT_ACCOUNT_URL.into()),
+            ),
+            origin: Mutex::new(None),
+            pending_sign_in: Mutex::new(None),
+            last_activity: std::sync::atomic::AtomicI64::new(0),
         })
     }
 
@@ -410,28 +432,12 @@ impl Bridge {
                 Ok(ConvertPastedImageResponse { data }.encode_to_vec())
             }
             "klausSyncAccount" => Ok(self.sync_account().encode_to_vec()),
-            "klausSyncSignIn" => {
-                let req = klaus::SyncSignIn::decode(input).map_err(bad)?;
-                self.sync_sign_in(&req.username, &req.password)?;
-                Ok(vec![])
-            }
+            "klausAccountSignIn" => Ok(generic::String { val: self.account_sign_in_url()? }.encode_to_vec()),
             "klausSyncSignOut" => {
                 self.sync_sign_out()?;
                 Ok(vec![])
             }
-            "klausSetSyncUrl" => {
-                let url = generic::String::decode(input).map_err(bad)?.val;
-                self.set_sync_url(&url)?;
-                Ok(vec![])
-            }
-            "klausSyncOutcome" => {
-                let mut outcome = self.sync_outcome.lock().unwrap();
-                let current = outcome.clone();
-                if current.state() == klaus::sync_outcome::State::Done {
-                    *outcome = klaus::SyncOutcome::default();
-                }
-                Ok(current.encode_to_vec())
-            }
+            "klausSyncOutcome" => Ok(self.sync_outcome.lock().unwrap().encode_to_vec()),
             "getMetaJson" | "getProfileConfigJson" => {
                 let key = generic::String::decode(input).map_err(bad)?.val;
                 let settings = self.settings.lock().unwrap();
@@ -461,56 +467,89 @@ impl Bridge {
     }
 }
 
-// AnkiWeb sync, as aqt/sync.py and aqt/profiles.py drive it. Profile keys match
-// Anki's (syncUser, customSyncUrl, currentSyncUrl, autoSync, syncMedia).
+// Collection sync through the Klaus Account (ADR-0007; contract in
+// docs/klaus-ink-sync.md). The protocol is Anki's, so sync itself is aqt/sync.py's
+// flow; profile keys match Anki's where it has them (syncUser, autoSync, syncMedia).
 impl Bridge {
     pub fn sync_account(&self) -> klaus::SyncAccount {
         let flag = |key: &str| self.profile(key).as_bool().unwrap_or(true);
         let signed_in = self.secrets.get(SYNC_KEY).is_some();
         klaus::SyncAccount {
-            username: if signed_in { self.profile("syncUser").as_str().unwrap_or_default().into() } else { String::new() },
-            custom_url: self.profile("customSyncUrl").as_str().unwrap_or_default().into(),
+            email: if signed_in { self.profile("syncUser").as_str().unwrap_or_default().into() } else { String::new() },
             auto_sync: flag("autoSync"),
             sync_media: flag("syncMedia"),
         }
     }
 
-    /// pm.sync_endpoint: the server's redirect, else the self-hosted URL, else AnkiWeb.
-    fn sync_endpoint(&self) -> Option<String> {
-        ["currentSyncUrl", "customSyncUrl"]
-            .iter()
-            .find_map(|key| self.profile(key).as_str().filter(|s| !s.is_empty()).map(String::from))
+    /// Where klaus.ink is (tests and staging point it elsewhere).
+    pub fn set_account_url(&self, url: &str) {
+        *self.account_url.lock().unwrap() = url.trim_end_matches('/').to_owned();
     }
 
     fn sync_auth(&self) -> Option<anki_proto::sync::SyncAuth> {
-        Some(anki_proto::sync::SyncAuth { hkey: self.secrets.get(SYNC_KEY)?, endpoint: self.sync_endpoint(), io_timeout_secs: None })
+        let endpoint = self.profile("syncUrl").as_str().unwrap_or(DEFAULT_SYNC_URL).to_owned();
+        Some(anki_proto::sync::SyncAuth { hkey: self.secrets.get(SYNC_KEY)?, endpoint: Some(endpoint), io_timeout_secs: None })
     }
 
-    pub fn sync_sign_in(&self, username: &str, password: &str) -> Result<(), CallError> {
-        let req = anki_proto::sync::SyncLoginRequest {
-            username: username.into(),
-            password: password.into(),
-            endpoint: self.sync_endpoint(),
+    /// Starts a browser sign-in (OAuth 2.0 code flow with PKCE, RFC 8252 loopback
+    /// redirect to this bridge): returns the klaus.ink URL the page opens.
+    pub fn account_sign_in_url(&self) -> Result<String, CallError> {
+        use base64::Engine;
+        use rand::Rng;
+        let origin = self.origin.lock().unwrap().clone().ok_or_else(|| CallError::Backend("bridge not serving".into()))?;
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let state = b64.encode(rand::rng().random::<[u8; 16]>());
+        let verifier = b64.encode(rand::rng().random::<[u8; 32]>());
+        let challenge = b64.encode(<sha2::Sha256 as sha2::Digest>::digest(verifier.as_bytes()));
+        let redirect = format!("{origin}/auth/callback");
+        let url = format!(
+            "{}/oauth/authorize?response_type=code&client_id=klaus-desktop&redirect_uri={}&code_challenge={challenge}&code_challenge_method=S256&state={state}",
+            self.account_url.lock().unwrap(),
+            form_encode(&redirect),
+        );
+        *self.pending_sign_in.lock().unwrap() = Some((state, verifier, redirect));
+        Ok(url)
+    }
+
+    /// klaus.ink's redirect back: checks the state (one-shot), exchanges the code
+    /// for the account's sync key, and stores it.
+    async fn finish_sign_in(&self, code: &str, state: &str) -> Result<String, String> {
+        let pending = self.pending_sign_in.lock().unwrap().take();
+        let Some((expected, verifier, redirect)) = pending.filter(|(expected, ..)| expected == state) else {
+            return Err("This sign-in link has expired. Start again from Klaus.".into());
         };
-        let auth: anki_proto::sync::SyncAuth = self.rpc("syncLogin", req)?;
-        self.secrets.set(SYNC_KEY, &auth.hkey).map_err(CallError::Backend)?;
-        self.set_setting("profile", "syncUser", username.into())
+        let _ = expected;
+        #[derive(serde::Deserialize)]
+        struct Token {
+            access_token: String,
+            email: String,
+            sync_url: Option<String>,
+        }
+        let url = format!("{}/oauth/token", self.account_url.lock().unwrap());
+        let form = [
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("code_verifier", &verifier),
+            ("redirect_uri", &redirect),
+            ("client_id", "klaus-desktop"),
+        ];
+        let response = reqwest::Client::new().post(url).form(&form).send().await.map_err(|e| e.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("klaus.ink refused the sign-in ({}).", response.status()));
+        }
+        let token: Token = response.json().await.map_err(|e| e.to_string())?;
+        self.secrets.set(SYNC_KEY, &token.access_token)?;
+        let set = |key: &str, value: Value| self.set_setting("profile", key, value).map_err(|e| format!("{e:?}"));
+        set("syncUser", token.email.clone().into())?;
+        set("syncUrl", token.sync_url.map_or(Value::Null, Value::from))?;
+        Ok(token.email)
     }
 
     /// pm.clear_sync_auth.
     pub fn sync_sign_out(&self) -> Result<(), CallError> {
         self.secrets.delete(SYNC_KEY);
         self.set_setting("profile", "syncUser", Value::Null)?;
-        self.set_setting("profile", "currentSyncUrl", Value::Null)
-    }
-
-    /// pm.set_custom_sync_url: normalised with a trailing slash; a new server
-    /// forgets AnkiWeb's redirect.
-    pub fn set_sync_url(&self, url: &str) -> Result<(), CallError> {
-        let url = url.trim();
-        let url = if url.is_empty() || url.ends_with('/') { url.to_owned() } else { format!("{url}/") };
-        self.set_setting("profile", "currentSyncUrl", Value::Null)?;
-        self.set_setting("profile", "customSyncUrl", url.into())
+        self.set_setting("profile", "syncUrl", Value::Null)
     }
 
     fn failed(err: Option<BackendError>) -> klaus::SyncOutcome {
@@ -525,13 +564,13 @@ impl Bridge {
 
     fn not_signed_in() -> klaus::SyncOutcome {
         Self::failed(Some(BackendError {
-            message: "Sign in to AnkiWeb to sync.".into(),
+            message: "Sign in to your Klaus Account to sync.".into(),
             kind: backend_error::Kind::SyncAuthError as i32,
             ..Default::default()
         }))
     }
 
-    /// Like failed(), but an expired sign-in also signs out (Anki's handle_sync_error).
+    /// Like failed(), but a revoked sign-in also signs out (Anki's handle_sync_error).
     fn sync_failed(&self, err: Option<BackendError>) -> klaus::SyncOutcome {
         let outcome = Self::failed(err);
         if outcome.error_kind == backend_error::Kind::SyncAuthError as i32 {
@@ -540,8 +579,7 @@ impl Bridge {
         outcome
     }
 
-    /// A normal sync (and media sync in the background when enabled). Blocks; the
-    /// webview runs it through `start_sync`.
+    /// A normal sync (and media sync in the background when enabled). Blocks.
     pub fn sync(&self) -> klaus::SyncOutcome {
         let Some(auth) = self.sync_auth() else { return Self::not_signed_in() };
         let req = anki_proto::sync::SyncCollectionRequest { auth: Some(auth), sync_media: self.sync_account().sync_media };
@@ -550,7 +588,7 @@ impl Bridge {
             Ok(bytes) => {
                 let out = anki_proto::sync::SyncCollectionResponse::decode(bytes.as_slice()).unwrap_or_default();
                 if let Some(endpoint) = &out.new_endpoint {
-                    let _ = self.set_setting("profile", "currentSyncUrl", endpoint.as_str().into());
+                    let _ = self.set_setting("profile", "syncUrl", endpoint.as_str().into());
                 }
                 klaus::SyncOutcome {
                     state: klaus::sync_outcome::State::Done as i32,
@@ -588,6 +626,25 @@ impl Bridge {
         }
     }
 
+    /// Marks a sync as running (false if one already is), numbered for the page.
+    fn begin_sync(&self, background: bool) -> Option<u32> {
+        let mut outcome = self.sync_outcome.lock().unwrap();
+        if outcome.state() == klaus::sync_outcome::State::Running {
+            return None;
+        }
+        let id = outcome.id + 1;
+        *outcome = klaus::SyncOutcome { state: klaus::sync_outcome::State::Running as i32, id, background, ..Default::default() };
+        Some(id)
+    }
+
+    fn end_sync(&self, id: u32, background: bool, result: klaus::SyncOutcome) {
+        *self.sync_outcome.lock().unwrap() = klaus::SyncOutcome { id, background, finished_ms: now_ms(), ..result };
+    }
+
+    pub fn sync_running(&self) -> bool {
+        self.sync_outcome.lock().unwrap().state() == klaus::sync_outcome::State::Running
+    }
+
     /// Starts klausSync / klausFullSync on its own thread and returns at once: a
     /// sync can take minutes, longer than a request should stay open.
     fn start_sync(self: &Arc<Self>, method: &str, input: &[u8]) -> Result<(), CallError> {
@@ -596,23 +653,84 @@ impl Bridge {
         } else {
             None
         };
-        {
-            let mut outcome = self.sync_outcome.lock().unwrap();
-            if outcome.state() == klaus::sync_outcome::State::Running {
-                return Err(CallError::Backend("A sync is already running.".into()));
-            }
-            *outcome = klaus::SyncOutcome { state: klaus::sync_outcome::State::Running as i32, ..Default::default() };
-        }
+        let id = self.begin_sync(false).ok_or_else(|| CallError::Backend("A sync is already running.".into()))?;
         let bridge = Arc::clone(self);
         std::thread::spawn(move || {
-            let outcome = match full {
+            let result = match full {
                 Some(req) => bridge.full_sync(req.upload, req.server_media_usn),
                 None => bridge.sync(),
             };
-            *bridge.sync_outcome.lock().unwrap() = outcome;
+            bridge.end_sync(id, false, result);
         });
         Ok(())
     }
+
+    /// Notes page activity; automatic sync waits for the app to be quiet.
+    fn touch(&self) {
+        self.last_activity.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// One step of automatic sync, run about once a minute: when signed in, with
+    /// auto sync on, nothing running, the page quiet, and Anki's syncStatus saying
+    /// there's something to sync (local changes, checked for free; server changes,
+    /// asked at most every 5 minutes). A full sync it finds is left for the page to
+    /// ask about. Returns whether it synced.
+    pub fn auto_sync_tick(&self) -> bool {
+        let account = self.sync_account();
+        let quiet = now_ms() - self.last_activity.load(std::sync::atomic::Ordering::Relaxed) >= QUIET_MS;
+        let Some(auth) = self.sync_auth() else { return false };
+        if account.email.is_empty() || !account.auto_sync || !quiet {
+            return false;
+        }
+        let pending_full = {
+            let outcome = self.sync_outcome.lock().unwrap();
+            outcome.state() == klaus::sync_outcome::State::Done
+                && outcome.error.is_empty()
+                && outcome.required >= anki_proto::sync::sync_collection_response::ChangesRequired::FullSync as i32
+        };
+        let Ok(status) = self.rpc::<_, anki_proto::sync::SyncStatusResponse>("syncStatus", auth) else { return false };
+        use anki_proto::sync::sync_status_response::Required;
+        if status.required() == Required::NoChanges || (status.required() == Required::FullSync && pending_full) {
+            return false;
+        }
+        let Some(id) = self.begin_sync(true) else { return false };
+        let result = self.sync();
+        self.end_sync(id, true, result);
+        true
+    }
+
+    /// Syncs now on a background thread (on open, Anki's sync when the profile
+    /// loads); the page sees it through klausSyncOutcome.
+    pub fn sync_in_background(self: &Arc<Self>) {
+        if self.sync_account().email.is_empty() {
+            return;
+        }
+        let Some(id) = self.begin_sync(true) else { return };
+        let bridge = Arc::clone(self);
+        std::thread::spawn(move || {
+            let result = bridge.sync();
+            bridge.end_sync(id, true, result);
+        });
+    }
+
+    /// Runs automatic sync for the life of the app.
+    pub fn start_auto_sync(self: &Arc<Self>) {
+        let bridge = Arc::clone(self);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            bridge.auto_sync_tick();
+        });
+    }
+}
+
+/// application/x-www-form-urlencoded value encoding.
+fn form_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 impl Bridge {
@@ -840,7 +958,8 @@ pub async fn serve(
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let addr = listener.local_addr()?;
     let cookie = format!("klaus_{}={token}", addr.port()).into();
-    let origin = format!("http://127.0.0.1:{}", addr.port()).into();
+    let origin: Arc<str> = format!("http://127.0.0.1:{}", addr.port()).into();
+    *bridge.origin.lock().unwrap() = Some(origin.to_string());
     let state = AppState { bridge, token: token.into(), cookie, hook, anki_dir: web.anki.clone().into(), origin };
     let klaus = ServeDir::new(&web.klaus).fallback(ServeFile::new(web.klaus.join("index.html")));
     let klaus_dir: Arc<PathBuf> = web.klaus.clone().into();
@@ -848,6 +967,9 @@ pub async fn serve(
         // Axum's default 2 MiB cap would reject pasted photos (convertPastedImage,
         // addMediaFile carry the bytes); the caller is already cookie-authenticated.
         .route("/_anki/{method}", post(anki_method).layer(DefaultBodyLimit::max(MAX_BODY)))
+        // klaus.ink's sign-in redirect, from the system browser: no session cookie
+        // there, the one-shot OAuth state is the check.
+        .route("/auth/callback", get(auth_callback))
         .nest_service("/_app", ServeDir::new(web.anki.join("_app")))
         .merge(anki_static(&web.anki_static));
     for page in ANKI_PAGES {
@@ -1042,6 +1164,33 @@ fn save_deck_configs(state: AppState, body: Bytes) -> Response {
     StatusCode::NO_CONTENT.into_response()
 }
 
+#[derive(serde::Deserialize)]
+struct CallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+async fn auth_callback(State(state): State<AppState>, Query(query): Query<CallbackQuery>) -> Response {
+    let result = match (query.code, query.state, query.error) {
+        (Some(code), Some(oauth_state), None) => state.bridge.finish_sign_in(&code, &oauth_state).await,
+        (_, _, Some(_)) => Err("Sign-in was cancelled.".into()),
+        _ => Err("This sign-in link is incomplete.".into()),
+    };
+    let (status, title, detail) = match result {
+        Ok(email) => (StatusCode::OK, "Signed in to Klaus".to_owned(), format!("Signed in as {email}. You can close this tab and return to Klaus.")),
+        Err(err) => (StatusCode::BAD_REQUEST, "Couldn't sign in".to_owned(), err),
+    };
+    let escape = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let page = format!(
+        "<!doctype html><meta charset=utf-8><title>{t}</title><meta name=color-scheme content=\"light dark\">\
+         <body style=\"font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem\"><h1>{t}</h1><p>{d}</p>",
+        t = escape(&title),
+        d = escape(&detail)
+    );
+    (status, Html(page)).into_response()
+}
+
 async fn anki_method(
     State(state): State<AppState>,
     UrlPath(method): UrlPath<String>,
@@ -1069,6 +1218,10 @@ async fn anki_method(
     }
     if method == "updateDeckConfigs" {
         return save_deck_configs(state, body);
+    }
+    // Polls don't count as activity, or the app would never look quiet to auto sync.
+    if !matches!(method.as_str(), "klausSyncOutcome" | "latestProgress" | "mediaSyncStatus" | "klausSyncAccount") {
+        state.bridge.touch();
     }
     if BACKGROUND_SYNC.contains(&method.as_str()) {
         return match state.bridge.start_sync(&method, &body) {

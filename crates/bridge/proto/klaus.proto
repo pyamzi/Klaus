@@ -18,23 +18,19 @@ message RenderCardResponse {
   string answer = 2;
 }
 
-// AnkiWeb sync (#14, #15). The sync key stays in the bridge (Keychain); the page
-// only sees the account and each sync's outcome.
+// Collection sync through the Klaus Account (ADR-0007, docs/klaus-ink-sync.md).
+// The sync key stays in the bridge (Keychain); the page only sees the account
+// and the latest sync's outcome.
 
-// klausSyncAccount: the signed-in account and sync settings (empty username = signed out).
+// klausSyncAccount: the signed-in account and sync settings (empty email = signed out).
 message SyncAccount {
-  string username = 1;
-  // Self-hosted sync server, normalised; empty = AnkiWeb.
-  string custom_url = 2;
+  string email = 1;
   bool auto_sync = 3;
   bool sync_media = 4;
 }
 
-// klausSyncSignIn
-message SyncSignIn {
-  string username = 1;
-  string password = 2;
-}
+// klausAccountSignIn returns (as generic.String) the klaus.ink URL to open in the
+// browser; klaus.ink redirects back to the bridge's /auth/callback, which signs in.
 
 // klausFullSync: resolve a full sync by uploading or downloading.
 message FullSyncRequest {
@@ -43,8 +39,8 @@ message FullSyncRequest {
   optional int32 server_media_usn = 2;
 }
 
-// klausSyncOutcome: polled while klausSync/klausFullSync run in the background.
-// A DONE outcome is returned once, then the state is IDLE again.
+// klausSyncOutcome: the latest sync, whether the page started it (klausSync,
+// klausFullSync) or the bridge did (automatic sync). Polled by the page.
 message SyncOutcome {
   enum State {
     IDLE = 0;
@@ -53,14 +49,20 @@ message SyncOutcome {
   }
   State state = 1;
   // DONE with an error: Anki's message and BackendError.Kind (SYNC_AUTH_ERROR
-  // means the sign-in has expired and the account was signed out).
+  // means the sign-in was revoked and the account was signed out).
   string error = 2;
   int32 error_kind = 3;
   // DONE without error: anki.sync.SyncCollectionResponse.ChangesRequired
-  // (NO_CHANGES after a full sync).
+  // (NO_CHANGES after a full sync). FULL_* waits for the user's choice.
   int32 required = 4;
   int32 server_media_usn = 5;
   string server_message = 6;
   // Set when a full download first backed up the Collection.
   string backup_folder = 7;
+  // Counts syncs this launch, so the page handles each finished sync once.
+  uint32 id = 8;
+  // When the last sync finished (Unix ms), for "Synced 2 min ago".
+  int64 finished_ms = 9;
+  // Started by automatic sync rather than the page.
+  bool background = 10;
 }
