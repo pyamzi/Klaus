@@ -8,7 +8,10 @@ reader 5/5 deleted the native QPdfView renderer, so there is no fallback).
 
 from __future__ import annotations
 
+import atexit
 import os
+import shutil
+import tempfile
 import weakref
 from typing import Callable, Optional
 
@@ -38,6 +41,11 @@ def cleanup_all_sidebars() -> None:
             sb.cleanup()
         except Exception as exc:
             print(f"[klausmate] sidebar cleanup sweep failed: {exc}")
+
+
+def occlude_media_stem(safe: str, page0: int, region: bool) -> str:
+    """Media name (no extension) for an occluded page or region."""
+    return f"{safe}-p{page0 + 1}" + ("-region" if region else "")
 
 
 def _pdf_display_name(safe: str) -> str:
@@ -140,6 +148,8 @@ class PdfSidebar(QWidget):
             )
             self._viewer.on_selection = self._report_selection
             self._viewer.on_stale = self._on_viewer_stale
+            self._viewer.on_occlude = self._on_occlude
+            self._tell_occlusion_enabled()  # built with an editor already
             outer.addWidget(self._viewer, 1)
         else:
             if _pdfjs is not None:
@@ -175,6 +185,52 @@ class PdfSidebar(QWidget):
             print(f"[klausmate] tab restore failed: {exc}")
             restored = []
         self.tabs.set_tabs(restored, None)
+
+    @property
+    def _editor(self) -> Optional[Editor]:
+        return self._editor_ref
+
+    @_editor.setter
+    def _editor(self, editor: Optional[Editor]) -> None:
+        """reader_host assigns this directly as the Add/Edit window comes and
+        goes, so the page's "Occlude" items follow it from here."""
+        self._editor_ref = editor
+        self._tell_occlusion_enabled()
+
+    def _tell_occlusion_enabled(self) -> None:
+        # No viewer yet (the first assignment is in __init__), or a stand-in
+        # that predates the call: nothing to tell.
+        push = getattr(getattr(self, "_viewer", None), "set_occlusion_enabled", None)
+        if push is not None:
+            push(self._editor_ref is not None)
+
+    def _on_occlude(self, png: bytes, page0: int, region: bool) -> None:
+        """Write the rendered page/region as <stem>.png in a fresh temp dir
+        and open the mask editor on it. IOE copies the image into the
+        collection's media itself (``col.media.add_file``) when the notes are
+        made, so nothing here touches user_files or the media folder."""
+        from . import image_occlusion
+        from .pdfjs_viewer import NO_EDITOR_TIP
+
+        editor = self._editor_ref
+        if editor is None:
+            tooltip(NO_EDITOR_TIP)
+            return
+        if not self._name:
+            return
+        folder = tempfile.mkdtemp(prefix="klaus-occlude-")
+        # The editor reads the file after this returns (svg-edit loads it
+        # by URL), so it can only go at exit.
+        atexit.register(shutil.rmtree, folder, True)
+        path = os.path.join(folder, occlude_media_stem(self._name, page0, region) + ".png")
+        with open(path, "wb") as f:
+            f.write(png)
+        if not image_occlusion.occlude(editor, path, None):
+            tooltip(
+                image_occlusion.CONFLICT_TOOLTIP
+                if not image_occlusion._active
+                else "Klaus: couldn't open the occlusion editor"
+            )
 
     def notify_page_changed(self, page: int) -> None:
         self._on_page_changed(page)

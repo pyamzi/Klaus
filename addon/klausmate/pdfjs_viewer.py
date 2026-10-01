@@ -689,6 +689,42 @@ def _finite(value: Any) -> float | None:
     return f if math.isfinite(f) else None
 
 
+# The menu's disabled-item tooltip. The page carries the same string
+# (pdfjs_viewer.html's NO_EDITOR_TIP); tests/test_reader_occlude.py pins both.
+NO_EDITOR_TIP = "Open the Add or Edit window to make an occlusion card"
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def decode_occlude_payload(
+    data: Any, page_count: int = 0
+) -> tuple[bytes, int, bool] | None:
+    """``(png_bytes, page0, region)`` out of an ``occlude-image`` payload.
+
+    JS is never trusted: ``png`` must be base64 of real PNG bytes (the
+    signature is checked, so an empty or foreign blob is refused before a
+    file is written), ``page`` a whole, finite, non-negative number inside
+    ``page_count`` when that is known (:func:`_finite` rejects bools and
+    ints too big for a float), ``region`` a real bool. None otherwise.
+    """
+    if not isinstance(data, dict):
+        return None
+    png_b64, region = data.get("png"), data.get("region")
+    if not isinstance(png_b64, str) or not isinstance(region, bool):
+        return None
+    page = _finite(data.get("page"))
+    if page is None or page < 0 or page != int(page):
+        return None
+    if page_count > 0 and page >= page_count:
+        return None
+    try:
+        png = base64.b64decode(png_b64, validate=True)
+    except Exception:
+        return None
+    if not png.startswith(_PNG_MAGIC):
+        return None
+    return png, int(page), region
+
+
 def clamp_text_add(
     data: Any, page_count: int = 0
 ) -> tuple[int, float, float] | None:
@@ -993,6 +1029,12 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         # fired from _bridge_sel whenever the page's own debounced
         # selectionchange listener posts the live selection text.
         self.on_selection: Optional[Callable[[str], None]] = None
+        # Image Occlusion 2/3: set by PdfSidebar; fired with (png_bytes,
+        # 0-based page, region) from "Occlude this page/region". The page
+        # only offers the items live while an editor exists, and the
+        # sidebar pushes that through set_occlusion_enabled.
+        self.on_occlude: Optional[Callable[[bytes, int, bool], None]] = None
+        self._occlusion_enabled = False
         # No Add Text prompt lives here any more (K-150): text is typed
         # in the page, so there is no dialog to keep a singleton of.
         self._note_dialog: Any = None  # live Highlight Note prompt (singleton)
@@ -1184,6 +1226,8 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         # openDocument's teardown() wiped page state — (re)push whatever
         # records we hold so annotations survive load order races.
         self._push_annotations()
+        # The page forgot it with the reload.
+        self._push_occlusion_enabled()
         if self._scroll_pos:
             self._eval(f"window.klausScrollTo && window.klausScrollTo({int(self._scroll_pos)});")
 
@@ -1582,6 +1626,31 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
                 cb.setImage(img)
                 if tooltip is not None:
                     tooltip("Klaus: copied as image")
+
+    def _bridge_occlude_image(self, payload: str) -> None:
+        """A rendered page or region from "Occlude this page/region"."""
+        hit = decode_occlude_payload(decode_b64_json(payload), self._page_count)
+        if hit is None:
+            if tooltip is not None:
+                tooltip("Klaus: couldn't read that image")
+            return
+        if self.on_occlude is None:
+            if tooltip is not None:
+                tooltip(NO_EDITOR_TIP)
+            return
+        self.on_occlude(*hit)
+
+    def set_occlusion_enabled(self, enabled: bool) -> None:
+        """Tell the page whether an editor is there to occlude into."""
+        self._occlusion_enabled = bool(enabled)
+        self._push_occlusion_enabled()
+
+    def _push_occlusion_enabled(self) -> None:
+        flag = "true" if self._occlusion_enabled else "false"
+        self._eval(
+            "window.klausSetOcclusionEnabled && "
+            f"window.klausSetOcclusionEnabled({flag});"
+        )
 
     def _bridge_goto_request(self, _payload: str) -> None:
         # Deferred for the same reason _bridge_note_edit is — see its

@@ -317,6 +317,8 @@ origin, matching the native viewer and the bake pipeline exactly
     padding: 5px 10px; border-radius: 6px; cursor: pointer; color: var(--text);
   }
   #ctxmenu .mi:hover { background: var(--hover-subtle); }
+  #ctxmenu .mi.off { opacity: 0.45; cursor: default; }
+  #ctxmenu .mi.off:hover { background: none; }
   #ctxmenu .sep { height: 1px; background: var(--grey-light); margin: 4px 6px; }
   #error {
     display: none; margin: 40px auto; max-width: 420px; padding: 20px;
@@ -456,6 +458,7 @@ const state = {
   find: { query: "", matches: [], index: -1 },
   marquee: null,         // {page, x0, y0} while alt-dragging
   persistMarquee: null,  // {page0,x,y,w,h,dataUrl} kept after release (K-100)
+  occlusionEnabled: false, // an Add/Edit editor exists (klausSetOcclusionEnabled)
   zoom: null,            // live zoom session — pinch or stepped (zoomTo)
   prevZoom: 0,           // last committed user zoom: smart zoom's way back
   tool: null,            // "hl" | "text" | null — annobar mode
@@ -1112,6 +1115,43 @@ async function copyRegionImage(page0, xPt, yPt, wPt, hPt) {
   } catch (e) { post("log:copy region failed: " + e.message); }
 }
 
+/* ==== Image Occlusion (2/3) ======================================== */
+/* Same offscreen render (scale 2) as the image copies; Python writes the
+   PNG and opens the mask editor. page0 is 0-based, pm the frozen marquee
+   ({page0,x,y,w,h}) for "this region", null for the whole page. */
+async function occludeImage(page0, pm) {
+  try {
+    let out;
+    if (pm) {
+      out = await renderRegionCanvas(pm.page0, pm.x, pm.y, pm.w, pm.h);
+    } else {
+      const page = await state.doc.getPage(page0 + 1);
+      const vp = page.getViewport({ scale: 1 });
+      out = await renderRegionCanvas(page0, 0, 0, vp.width, vp.height);
+    }
+    postB64("occlude-image", {
+      png: out.toDataURL("image/png").split(",", 2)[1],
+      page: pm ? pm.page0 : page0,
+      region: !!pm,
+    });
+  } catch (e) { post("log:occlude failed: " + e.message); }
+}
+
+/* Python's pdfjs_viewer.NO_EDITOR_TIP, the same string. */
+const NO_EDITOR_TIP = "Open the Add or Edit window to make an occlusion card";
+window.klausSetOcclusionEnabled = function (on) { state.occlusionEnabled = !!on; };
+
+/* occlusion-items:start */
+/* [label, action, disabled] rows for the context menu; the region item
+   exists only while a marquee stands. Disabled without an editor. */
+function occlusionItems(page0, pm, enabled) {
+  const off = !enabled;
+  const items = [["Occlude this page", () => occludeImage(page0, null), off]];
+  if (pm) items.push(["Occlude this region", () => occludeImage(pm.page0, pm), off]);
+  return items;
+}
+/* occlusion-items:end */
+
 async function copyPageText(page0) {
   const text = await pageText(page0);
   const t = (text && text.str) || "";
@@ -1190,6 +1230,9 @@ document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
   items.push(["Copy Page Text", () => copyPageText(hit.page0)]);
   items.push(["Copy Slide as Image", () => copyPageImage(hit.page0)]);
   items.push(null);
+  items.push(...occlusionItems(
+    hit.page0, state.persistMarquee, state.occlusionEnabled));
+  items.push(null);
   /* Zoom lived only on ⌘+/−/0 with no visible affordance anywhere
      (critique P3) — the menu is its discoverable twin. */
   items.push(["Zoom In\u2002\u2318+", () => window.klausSetZoom(1.1)]);
@@ -1203,6 +1246,16 @@ document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
     }
     const mi = document.createElement("div");
     mi.className = "mi"; mi.textContent = it[0];
+    if (it[2]) {
+      /* Disabled: says why on hover, and again on click. */
+      mi.classList.add("off");
+      mi.title = NO_EDITOR_TIP;
+      mi.addEventListener("click", (e) => {
+        e.stopPropagation(); hideMenu(); post("toast:" + btoa(NO_EDITOR_TIP));
+      });
+      ctxmenu.appendChild(mi);
+      continue;
+    }
     mi.addEventListener("click", (e) => { e.stopPropagation(); hideMenu(); it[1](); });
     ctxmenu.appendChild(mi);
   }
