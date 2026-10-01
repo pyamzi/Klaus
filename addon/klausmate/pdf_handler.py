@@ -680,22 +680,54 @@ def load_library_stats(user_files_dir: str) -> dict[str, list[int]]:
     return out
 
 
-def _apply_stats(user_files_dir: str, updates: dict) -> None:
-    """Merge ``{safe: stat | None}`` into the sidecar in ONE atomic write
-    (``None`` removes), preserving reserved ``__`` keys."""
+def _edit_stats(user_files_dir: str, edit) -> None:
+    """Run ``edit(data)`` on the whole sidecar under the lock and write it
+    back in ONE atomic write when it changed."""
     try:
         with _STATS_LOCK:
             data = _read_stats_raw(user_files_dir)
             before = dict(data)
-            for safe, stat in updates.items():
-                if stat is None:
-                    data.pop(safe, None)
-                else:
-                    data[safe] = _stat_entry(stat)
+            edit(data)
             if data != before:
                 _atomic_write_json(_stats_path(user_files_dir), data)
     except OSError as e:
         print(f"[klausmate] library_stats write failed: {e}")
+
+
+def _apply_stats(user_files_dir: str, updates: dict) -> None:
+    """Merge ``{safe: stat | None}`` into the sidecar (``None`` removes),
+    preserving reserved ``__`` keys."""
+
+    def edit(data: dict) -> None:
+        for safe, stat in updates.items():
+            if stat is None:
+                data.pop(safe, None)
+            else:
+                data[safe] = _stat_entry(stat)
+
+    _edit_stats(user_files_dir, edit)
+
+
+_MISSING_KEY = "__missing__"
+
+
+def load_missing(user_files_dir: str) -> set[str]:
+    """Mapped PDFs the last rescan could not find in the Library folder."""
+    v = _read_stats_raw(user_files_dir).get(_MISSING_KEY)
+    return {str(s) for s in v} if isinstance(v, list) else set()
+
+
+def set_missing(user_files_dir: str, safes) -> None:
+    """Persist the missing set (empty drops the key)."""
+    want = sorted(set(safes))
+
+    def edit(data: dict) -> None:
+        if want:
+            data[_MISSING_KEY] = want
+        else:
+            data.pop(_MISSING_KEY, None)
+
+    _edit_stats(user_files_dir, edit)
 
 
 def record_stat(user_files_dir: str, safe: str, stat: tuple | None) -> None:
@@ -1198,18 +1230,44 @@ def plan_rescan(mapping: dict, disk_rels: list[str], fingerprints: dict | None =
     }
 
 
+def _root_ok(root: str) -> bool:
+    """The Library root exists and can be listed (os.walk swallows errors)."""
+    try:
+        os.listdir(root)
+    except OSError:
+        return False
+    return os.path.isdir(root)
+
+
 def prepare_rescan(user_files_dir: str, root: str) -> dict:
     """The slow half of a rescan, safe off the main thread (no Qt, no
-    collection): read the text of every new file ONCE, fingerprint it
-    against the stored text of every missing PDF, and OCR-repair the
-    files that will be ingested. ``rescan_root(..., prepared=...)``
-    then applies the result without touching a PDF again. Empty when
-    nothing on disk is new."""
+    collection): walk the root ONCE (``"disk"``), read the text of every
+    new file once, fingerprint it against the stored text of every
+    missing PDF, OCR-repair the files that will be ingested, and
+    re-extract (``"changed"``: {safe: pages}) mapped files that changed
+    while closed and not by Klaus's own recorded write.
+    ``rescan_root(..., prepared=...)`` then applies the result without
+    walking or touching a PDF again. ``{"root_ok": False}`` alone when
+    the root is absent or unreadable."""
+    if not _root_ok(root):
+        return {"root_ok": False}
     mapping = load_library_map(user_files_dir)
     disk = walk_root(root)
+    from . import doc_sync  # open files are their reader's job
+
+    open_safes = doc_sync.open_paths()
+    closed = {s: rel for s, rel in mapping.items() if s not in open_safes}
+    changed: dict = {}
+    for safe in changed_since_recorded(user_files_dir, root, closed):
+        path = os.path.join(root, mapping[safe])
+        try:
+            changed[safe] = repair_garbled_pages(path, extract_pages(path))
+        except Exception as exc:  # noqa: BLE001 - one bad file never stops a rescan
+            print(f"[klausmate] rescan: could not re-read {safe!r}: {exc}")
+    out = {"root_ok": True, "disk": disk, "changed": changed, "fingerprints": None, "pages": {}}
     first = plan_rescan(mapping, disk)
     if not first["new"]:
-        return {}
+        return out
     raw: dict = {}
     for rel in first["new"]:
         try:
@@ -1229,7 +1287,8 @@ def prepare_rescan(user_files_dir: str, root: str) -> dict:
             except Exception as exc:  # noqa: BLE001
                 print(f"[klausmate] rescan: could not repair {rel!r}: {exc}")
                 pages[rel] = raw[rel]
-    return {"fingerprints": fingerprints if first["missing"] else None, "pages": pages}
+    out.update(fingerprints=fingerprints if first["missing"] else None, pages=pages)
+    return out
 
 
 def _rel_folder(rel: str) -> str | None:
@@ -1256,6 +1315,27 @@ def _unique_safe(user_files_dir: str, mapping: dict, stem: str) -> str:
     return f"{base}_{n}"
 
 
+def _write_context(user_files_dir: str, safe: str, pages: list[str]) -> None:
+    """``contexts/<safe>.txt`` and ``.json`` from ``pages``, as ingest writes them."""
+    ctx_dir = os.path.join(user_files_dir, "contexts")
+    os.makedirs(ctx_dir, exist_ok=True)
+    with open(os.path.join(ctx_dir, safe + ".txt"), "w", encoding="utf-8") as f:
+        f.write("\n\n".join(pages))
+    with open(os.path.join(ctx_dir, safe + ".json"), "w", encoding="utf-8") as f:
+        json.dump({"pages": pages, "page_count": len(pages)}, f)
+
+
+def _exists_exact(root: str, rel: str) -> bool:
+    """``rel`` exists with exactly this spelling. ``os.path.isfile`` would
+    say yes to ``Lecture.pdf`` after a case-only rename to ``lecture.pdf``
+    on case-insensitive APFS."""
+    d, base = os.path.split(os.path.join(root, rel))
+    try:
+        return base in os.listdir(d)
+    except OSError:
+        return False
+
+
 def rescan_root(
     user_files_dir: str, root: str, folders: dict | None = None, prepared: dict | None = None
 ) -> dict:
@@ -1277,18 +1357,36 @@ def rescan_root(
     A display only changes when the on-disk basename no longer
     corresponds to it under ``_library_filename`` — a plain move keeps
     the user's display text untouched.
+
+    Also reports ``"moved"`` ({safe: new absolute path}), ``"missing"``
+    (persisted with ``set_missing``), ``"back"`` (was missing, found
+    again) and ``"changed_text"`` (closed files from ``prepared["changed"]``
+    whose page text really changed). With the root unavailable nothing
+    is reported or changed. ``prepared`` may be ``{}`` or None (walks).
     """
     from . import drive_store  # aqt-free; local import keeps deps one-way
 
     folders = folders or {}
     prepared = prepared or {}
+    result: dict = {"moved": {}, "tree_changed": [], "ingested": [], "ingest_failed": [],
+                    "missing": [], "ambiguous_new": [], "ambiguous": False, "back": [], "changed_text": []}
+    if not prepared.get("root_ok", True) or not _root_ok(root):
+        return result
     mapping = load_library_map(user_files_dir)
-    plan = plan_rescan(mapping, walk_root(root), prepared.get("fingerprints"))
+    disk = prepared.get("disk")
+    if disk is None:
+        disk = walk_root(root)
+    else:
+        # Mapped since the walk (the straggler sweep runs between prepare
+        # and apply): present, not missing.
+        seen = set(disk)
+        disk = list(disk) + [rel for rel in mapping.values() if rel not in seen and _exists_exact(root, rel)]
+    plan = plan_rescan(mapping, disk, prepared.get("fingerprints"))
 
-    moved: list[str] = []
+    moved: dict = {}
     for safe, rel in sorted(plan["moves"].items()):
         mapping[safe] = rel
-        moved.append(safe)
+        moved[safe] = os.path.join(root, rel)
 
     ingested: list[str] = []
     ingest_failed: list[str] = []
@@ -1304,17 +1402,35 @@ def rescan_root(
             continue
         stem = os.path.splitext(os.path.basename(rel))[0]
         safe = _unique_safe(user_files_dir, mapping, stem)
-        ctx_dir = os.path.join(user_files_dir, "contexts")
-        os.makedirs(ctx_dir, exist_ok=True)
-        with open(os.path.join(ctx_dir, safe + ".txt"), "w", encoding="utf-8") as f:
-            f.write("\n\n".join(pages))
-        with open(os.path.join(ctx_dir, safe + ".json"), "w", encoding="utf-8") as f:
-            json.dump({"pages": pages, "page_count": len(pages)}, f)
+        _write_context(user_files_dir, safe, pages)
         mapping[safe] = rel
         ingested.append(safe)
 
     if moved or ingested:
         save_library_map(user_files_dir, mapping)
+
+    changed_text: list[str] = []
+    if prepared.get("changed"):
+        from . import page_store
+
+        for safe, pages in sorted(prepared["changed"].items()):
+            if safe not in mapping or safe in plan["missing"]:
+                continue
+            path = os.path.join(root, mapping[safe])
+            old = load_pages(user_files_dir, safe)
+            try:
+                _write_context(user_files_dir, safe, pages)
+                page_store.ensure_records(user_files_dir, safe, path, pages)
+            except Exception as exc:  # noqa: BLE001 - one bad file never stops a rescan
+                print(f"[klausmate] rescan: could not refresh {safe!r}: {exc}")
+                continue
+            record_stat(user_files_dir, safe, file_stat(path))
+            if old is None or [page_store._norm(p) for p in old] != [page_store._norm(p) for p in pages]:
+                changed_text.append(safe)
+
+    was_missing = load_missing(user_files_dir)
+    now_missing = set(plan["missing"])
+    set_missing(user_files_dir, now_missing)
 
     # The tree follows the MAPPING for EVERY entry whose file exists,
     # not just this pass's moves. The tree is derived state and drifts
@@ -1373,15 +1489,18 @@ def rescan_root(
             "resolve one file at a time."
         )
 
-    return {
-        "moved": moved,
-        "tree_changed": tree_changed,
-        "ingested": ingested,
-        "ingest_failed": ingest_failed,
-        "missing": plan["missing"],
-        "ambiguous_new": plan["new"] if plan["ambiguous"] else [],
-        "ambiguous": plan["ambiguous"],
-    }
+    result.update(
+        moved=moved,
+        tree_changed=tree_changed,
+        ingested=ingested,
+        ingest_failed=ingest_failed,
+        missing=plan["missing"],
+        ambiguous_new=plan["new"] if plan["ambiguous"] else [],
+        ambiguous=plan["ambiguous"],
+        back=sorted((was_missing & set(mapping)) - now_missing),
+        changed_text=changed_text,
+    )
+    return result
 
 
 def annotations_path_for(user_files_dir: str, name: str) -> str:

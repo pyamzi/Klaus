@@ -629,7 +629,7 @@ check(
 )
 check(
     "empty root -> quiet summary",
-    bool(_g_summary) and _g_summary.get("moved") == [] and _g_summary.get("ingested") == [],
+    bool(_g_summary) and _g_summary.get("moved") == {} and _g_summary.get("ingested") == [],
     repr(_g_summary),
 )
 
@@ -667,7 +667,7 @@ try:
     # next pass — live, that read as "my folder move snapped back".
     _k_sum = _ph.rescan_root(_k_uf, _k_root, drive_store.load(_k_uf).get("pdfs", {}))
     check("rescan is quiet after the move",
-          _k_sum.get("moved") == [] and _k_sum.get("tree_changed") == [],
+          _k_sum.get("moved") == {} and _k_sum.get("tree_changed") == [],
           repr(_k_sum))
     check("folder assignment SURVIVES the rescan",
           drive_store.load(_k_uf)["pdfs"]["Biostats"]["folder"] == "Archive/Bootcamp",

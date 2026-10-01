@@ -1542,7 +1542,7 @@ check("rename applied to mapping",
 check("rename updates the display",
       drive_store.load(tw_user)["pdfs"]["Sync_B"]["display"] == "Better Name.pdf")
 check("rescan with nothing changed is a no-op",
-      pdf_handler.rescan_root(tw_user, tw_root, drive_store.load(tw_user)["pdfs"])["moved"] == [])
+      pdf_handler.rescan_root(tw_user, tw_root, drive_store.load(tw_user)["pdfs"])["moved"] == {})
 
 # Finder DELETE: report, never destroy Klaus data.
 os.remove(os.path.join(tw_root, "Better Name.pdf"))
@@ -1635,7 +1635,7 @@ drive_store.record_import(dr_user, "Bio", "Bio.pdf")
 drive_store.record_import(dr_user, "Meas", "Meas.pdf")
 drive_store.set_folder(dr_user, "Meas", "Bootcamp")
 _dr = pdf_handler.rescan_root(dr_user, dr_root, drive_store.load(dr_user)["pdfs"])
-check("no moves planned (mapping was already consistent)", _dr["moved"] == [], str(_dr))
+check("no moves planned (mapping was already consistent)", _dr["moved"] == {}, str(_dr))
 check("tree drift is repaired anyway",
       sorted(_dr["tree_changed"]) == ["Bio", "Meas"], str(_dr))
 _dr_tree = drive_store.load(dr_user)["pdfs"]
@@ -1645,7 +1645,7 @@ check("repaired safes are handed to the tag sync (tree_changed drives tags)",
       set(_dr["tree_changed"]) == {"Bio", "Meas"})
 _dr2 = pdf_handler.rescan_root(dr_user, dr_root, drive_store.load(dr_user)["pdfs"])
 check("second rescan is fully quiet (converged)",
-      _dr2["moved"] == [] and _dr2["tree_changed"] == [])
+      _dr2["moved"] == {} and _dr2["tree_changed"] == [])
 
 
 print("== Anki -> disk file moves (K-075) ==")

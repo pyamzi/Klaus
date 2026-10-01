@@ -91,6 +91,7 @@ def repoint(safe: str, new_path: str) -> None:
     """The rescan found ``safe`` at ``new_path``: follow it, emit "moved"."""
     if safe in _hosts:
         _paths[safe] = new_path
+        _last[safe] = pdf_handler.file_stat(new_path)  # a late fileChanged is not "changed"
         _sync()
     _emit("moved", safe, new_path)
 
@@ -102,8 +103,15 @@ def mark_missing(safe: str) -> None:
 def mark_back(safe: str, path: str) -> None:
     if safe in _hosts:
         _paths[safe] = path
+        _last[safe] = pdf_handler.file_stat(path)
         _sync()
     _emit("back", safe, path)
+
+
+def resync() -> None:
+    """Re-watch every open path that exists now (the rescan calls this
+    each pass; idempotent)."""
+    _sync()
 
 
 def _settled(safe: str, stat: Optional[tuple]) -> None:
