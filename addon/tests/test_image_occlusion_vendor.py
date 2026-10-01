@@ -57,7 +57,8 @@ check("UPSTREAM.md says __init__.py not copied", "__init__.py" in text)
 recorded = dict((p, h) for h, p in re.findall(r"^([0-9a-f]{64})  (\S.*)$", text, re.M))
 actual = {}
 for base, dirs, files in os.walk(PKG):
-    dirs[:] = [d for d in dirs if d != "__pycache__"]
+    # excalidraw/ is Klaus's own page (Task 5), not part of IOE.
+    dirs[:] = [d for d in dirs if d != "__pycache__" and not (base == PKG and d == "excalidraw")]
     for f in files:
         rel = os.path.relpath(os.path.join(base, f), PKG)
         if rel not in ("UPSTREAM.md", "__init__.py"):
