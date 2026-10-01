@@ -35,8 +35,11 @@ function b64(text) {
   return btoa(bin);
 }
 
-function send(action, obj) {
+// Anki assigns pycmd only after its QWebChannel handshake, which can finish
+// after Excalidraw mounts; wait for it (up to 10 s) rather than drop "ready".
+function send(action, obj, tries = 0) {
   if (typeof pycmd === "function") pycmd("klausexcal:" + action + ":" + b64(JSON.stringify(obj)));
+  else if (tries < 200) setTimeout(() => send(action, obj, tries + 1), 50);
 }
 
 function blobBase64(blob) {
