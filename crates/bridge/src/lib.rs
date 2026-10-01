@@ -28,17 +28,31 @@ include!(concat!(env!("OUT_DIR"), "/methods.rs"));
 /// webview never gets the whole backend.
 const ALLOWED: &[&str] = &[
     "deckTree",
-    // From Anki's qt/aqt/mediasrv.py exposed_backend_list.
+    // Anki 26.09.3 qt/aqt/mediasrv.py exposed_backend_list, in order.
     "latestProgress",
     "getCustomColours",
     "getDeckNames",
+    "getDeck",
     "i18nResources",
     "getCsvMetadata",
     "getImportAnkiPackagePresets",
+    "importCsv",
+    "importAnkiPackage",
+    "importJsonFile",
+    "importJsonString",
     "getFieldNames",
     "getNote",
+    "newNote",
+    "noteFieldsCheck",
+    "defaultsForAdding",
+    "defaultDeckForNotetype",
+    "addNote",
+    "updateNotes",
+    "updateNotetype",
+    "getNotetype",
     "getNotetypeNames",
     "getChangeNotetypeInfo",
+    "getClozeFieldOrds",
     "cardStats",
     "getReviewLogs",
     "graphs",
@@ -59,9 +73,18 @@ const ALLOWED: &[&str] = &[
     "simulateFsrsWorkload",
     "getIgnoredBeforeCount",
     "getRetentionWorkload",
+    "encodeIriPaths",
+    "decodeIriPaths",
+    "htmlToTextLine",
+    "setConfigJson",
+    "getConfigBool",
+    "addMediaFile",
+    "addMediaFromPath",
+    "addMediaFromUrl",
+    "getAbsoluteMediaPath",
+    "extractMediaFiles",
+    "getCard",
 ];
-
-const TOKEN_COOKIE: &str = "klaus_token";
 
 #[derive(Debug, PartialEq)]
 pub enum CallError {
@@ -140,8 +163,9 @@ fn path_str(p: &Path) -> String {
 }
 
 /// A fresh per-launch secret. The webview is opened at `/?t=<token>`, which sets an
-/// HttpOnly cookie; `/_anki` calls without it are refused, so other local processes
-/// and web pages can't drive the Collection.
+/// HttpOnly cookie and redirects to a token-free URL (so page scripts never see the
+/// token); `/_anki` calls without the cookie are refused, so other local processes,
+/// web pages and card JS can't drive the Collection.
 pub fn new_token() -> String {
     use rand::Rng;
     let bytes: [u8; 16] = rand::rng().random();
@@ -152,6 +176,9 @@ pub fn new_token() -> String {
 struct AppState {
     bridge: Arc<Bridge>,
     token: Arc<str>,
+    /// `klaus_<port>=<token>`. Cookies aren't scoped by port, so the name carries it:
+    /// two running instances must not overwrite each other's cookie.
+    cookie: Arc<str>,
 }
 
 /// Binds 127.0.0.1 on a free port and returns the address plus the server future.
@@ -161,15 +188,16 @@ pub async fn serve(
     static_dir: PathBuf,
     token: String,
 ) -> std::io::Result<(SocketAddr, impl std::future::Future<Output = std::io::Result<()>>)> {
-    let state = AppState { bridge, token: token.into() };
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let addr = listener.local_addr()?;
+    let cookie = format!("klaus_{}={token}", addr.port()).into();
+    let state = AppState { bridge, token: token.into(), cookie };
     let spa = ServeDir::new(&static_dir).fallback(ServeFile::new(static_dir.join("index.html")));
     let app = Router::new()
         .route("/_anki/{method}", post(anki_method))
         .fallback_service(spa)
         .layer(middleware::from_fn_with_state(state.clone(), grant_cookie))
         .with_state(state);
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let addr = listener.local_addr()?;
     Ok((addr, async move { axum::serve(listener, app).await }))
 }
 
@@ -178,12 +206,12 @@ async fn grant_cookie(State(state): State<AppState>, req: Request, next: Next) -
         .uri()
         .query()
         .is_some_and(|q| q.split('&').any(|kv| kv == format!("t={}", state.token)));
-    let mut res = next.run(req).await;
-    if grant {
-        let cookie = format!("{TOKEN_COOKIE}={}; HttpOnly; SameSite=Strict; Path=/", state.token);
-        res.headers_mut().insert(header::SET_COOKIE, cookie.parse().unwrap());
+    if !grant {
+        return next.run(req).await;
     }
-    res
+    let cookie = format!("{}; HttpOnly; SameSite=Strict; Path=/", state.cookie);
+    let location = req.uri().path().to_owned();
+    (StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, location)]).into_response()
 }
 
 async fn anki_method(
@@ -197,7 +225,7 @@ async fn anki_method(
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
-        .any(|c| c.trim() == format!("{TOKEN_COOKIE}={}", state.token));
+        .any(|c| c.trim() == &*state.cookie);
     // Same check as Anki's mediasrv: forces a CORS preflight for cross-origin callers.
     let binary = headers.get(header::CONTENT_TYPE).is_some_and(|v| v == "application/binary");
     if !has_token || !binary {

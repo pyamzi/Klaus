@@ -8,9 +8,10 @@ cargo build -q -p anki_proto
 out=src/lib/generated
 rm -rf "$out" && mkdir -p "$out"
 cp vendor/anki/out/ts/lib/generated/backend.ts vendor/anki/ts/lib/generated/post.ts "$out/"
-# protoc.exe can't run npm's extensionless shim on Windows.
+# protoc.exe can't run npm's extensionless shim on Windows, and runs the .cmd
+# through cmd.exe, which needs a native backslash path.
 plugin=node_modules/.bin/protoc-gen-es
-case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) plugin="$plugin.cmd" ;; esac
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) plugin=$(cygpath -w "$PWD/$plugin.cmd") ;; esac
 protoc --plugin=protoc-gen-es="$plugin" \
   --es_out="$out" --es_opt=target=ts \
   -I vendor/anki/proto vendor/anki/proto/anki/*.proto

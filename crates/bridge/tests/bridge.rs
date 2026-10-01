@@ -74,7 +74,7 @@ async fn http_contract_matches_ankis_post_ts() {
     let (addr, server) = serve(Arc::new(bridge), static_dir.path().into(), token.clone()).await.unwrap();
     tokio::spawn(server);
     let base = format!("http://{addr}");
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
     let body = DeckTreeRequest { now: now() }.encode_to_vec();
     let post = |cookie: Option<&str>, ctype: &str| {
         let mut req = client.post(format!("{base}/_anki/deckTree")).header("Content-Type", ctype).body(body.clone());
@@ -84,10 +84,14 @@ async fn http_contract_matches_ankis_post_ts() {
         req.send()
     };
 
-    // Opening the page with the token grants the cookie.
-    let page = client.get(format!("{base}/?t={token}")).send().await.unwrap();
-    let cookie = page.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
-    assert_eq!(page.text().await.unwrap(), "<p>klaus</p>");
+    // Opening the page with the token grants the cookie and redirects to a
+    // token-free URL, so page scripts can't read the token from location.
+    let grant = client.get(format!("{base}/?t={token}")).send().await.unwrap();
+    assert_eq!(grant.status(), 303);
+    assert_eq!(grant.headers()["location"], "/");
+    let cookie = grant.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+    assert_eq!(cookie, format!("klaus_{}={token}", addr.port()));
+    assert_eq!(client.get(format!("{base}/")).send().await.unwrap().text().await.unwrap(), "<p>klaus</p>");
 
     let ok = post(Some(&cookie), "application/binary").await.unwrap();
     assert_eq!(ok.status(), 200);
@@ -104,4 +108,19 @@ async fn http_contract_matches_ankis_post_ts() {
         .await
         .unwrap();
     assert_eq!(missing.status(), 404);
+
+    let raw = |method: &str, body: Vec<u8>| {
+        client
+            .post(format!("{base}/_anki/{method}"))
+            .header("Content-Type", "application/binary")
+            .header("Cookie", &cookie)
+            .body(body)
+            .send()
+    };
+    // Empty output (generic.Empty) comes back as 204, like Anki's mediasrv.
+    assert_eq!(raw("setWantsAbort", vec![]).await.unwrap().status(), 204);
+    // Backend errors are 500 with the message as plain text, which post.ts shows.
+    let err = raw("getNote", NoteId { nid: 42 }.encode_to_vec()).await.unwrap();
+    assert_eq!(err.status(), 500);
+    assert!(!err.text().await.unwrap().is_empty());
 }

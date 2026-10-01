@@ -30,7 +30,8 @@
   table { width: 100%; border-collapse: collapse; }
   th, :global(td) { padding: 0.35rem 0.5rem; text-align: right; }
   th:first-child, :global(td:first-child) { text-align: left; }
-  :global(.new) { color: #2563eb; }
-  :global(.learn) { color: #dc2626; }
-  :global(.review) { color: #16a34a; }
+  /* ≥4.5:1 against the Canvas background in both schemes. */
+  :global(.new) { color: light-dark(#1d4ed8, #93c5fd); }
+  :global(.learn) { color: light-dark(#b91c1c, #fca5a5); }
+  :global(.review) { color: light-dark(#15803d, #86efac); }
 </style>
