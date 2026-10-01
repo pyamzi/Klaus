@@ -17,3 +17,52 @@ message RenderCardResponse {
   string question = 1;
   string answer = 2;
 }
+
+// Collection sync through the Klaus Account (ADR-0007, docs/klaus-ink-sync.md).
+// The sync key stays in the bridge (Keychain); the page only sees the account
+// and the latest sync's outcome.
+
+// klausSyncAccount: the signed-in account and sync settings (empty email = signed out).
+message SyncAccount {
+  string email = 1;
+  bool auto_sync = 3;
+  bool sync_media = 4;
+}
+
+// klausAccountSignIn returns (as generic.String) the klaus.ink URL to open in the
+// browser; klaus.ink redirects back to the bridge's /auth/callback, which signs in.
+
+// klausFullSync: resolve a full sync by uploading or downloading.
+message FullSyncRequest {
+  bool upload = 1;
+  // The server's media USN from the normal sync, so media syncs afterwards.
+  optional int32 server_media_usn = 2;
+}
+
+// klausSyncOutcome: the latest sync, whether the page started it (klausSync,
+// klausFullSync) or the bridge did (automatic sync). Polled by the page.
+message SyncOutcome {
+  enum State {
+    IDLE = 0;
+    RUNNING = 1;
+    DONE = 2;
+  }
+  State state = 1;
+  // DONE with an error: Anki's message and BackendError.Kind (SYNC_AUTH_ERROR
+  // means the sign-in was revoked and the account was signed out).
+  string error = 2;
+  int32 error_kind = 3;
+  // DONE without error: anki.sync.SyncCollectionResponse.ChangesRequired
+  // (NO_CHANGES after a full sync). FULL_* waits for the user's choice.
+  int32 required = 4;
+  int32 server_media_usn = 5;
+  string server_message = 6;
+  // Set when a full download first backed up the Collection.
+  string backup_folder = 7;
+  // Counts syncs this launch, so the page handles each finished sync once.
+  uint32 id = 8;
+  // When the last sync finished (Unix ms), for "Synced 2 min ago".
+  int64 finished_ms = 9;
+  // Started by automatic sync rather than the page.
+  bool background = 10;
+}

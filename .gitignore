@@ -21,3 +21,6 @@ node_modules/
 /build/
 /.svelte-kit/
 src-tauri/gen/
+
+# Other sessions' worktrees (keep .claude/skills tracked)
+.claude/worktrees/

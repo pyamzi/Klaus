@@ -26,7 +26,7 @@ Milestone 1 is tracked in [issue #4](../../issues/4). Still to come:
 
 - Browser bulk actions
 - Review actions: bury, suspend, flag and edit; card info; audio
-- AnkiWeb sync, including the full-sync choice
+- Sync through your Klaus Account (klaus.ink): automatic, with AnkiMobile and AnkiDroid able to sync with it too
 - Note types, change notetype and image occlusion
 - Import, export and backups
 - Stats and Check Database
@@ -49,7 +49,7 @@ Later milestones add **Documents** (PDF annotation), **Linking** (sections, link
 
 - Anki's `rslib` is a pinned git submodule (`vendor/anki`). Klaus calls it through one seam, the **Backend Bridge** (`crates/bridge`), which serves the same `/_anki/<method>` HTTP contract Anki's desktop app uses. That lets Anki's Svelte pages (editor, deck options, import, graphs) run unmodified.
 - Klaus's own screens (deck list, reviewer) live in `src/`. Cards render in a sandboxed frame using Anki's reviewer code, and card scripts can't reach your Collection.
-- Klaus keeps its own Collection in its app data folder. It never opens Anki desktop's files directly; syncing goes through AnkiWeb.
+- Klaus keeps its own Collection in its app data folder. It never opens Anki desktop's files directly; it syncs through your Klaus Account on klaus.ink, using Anki's sync protocol ([ADR 0007](docs/adr/0007-collection-sync-through-klaus-account.md)).
 
 The design decisions are in [`docs/adr`](docs/adr), and the vocabulary (Collection, Note, Card, Document, Page…) is in [`CONTEXT.md`](CONTEXT.md).
 

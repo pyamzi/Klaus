@@ -7,6 +7,8 @@
   import type { RenderCardResponse } from "@generated/klaus_pb";
   import { onMount } from "svelte";
   import { cardBodyClass, cardFrameSrc, night, postToCard, renderCard as render } from "$lib/card";
+  import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
+  import { Button } from "$lib/components/ui/button";
 
   const ratings = [CardAnswer_Rating.AGAIN, CardAnswer_Rating.HARD, CardAnswer_Rating.GOOD, CardAnswer_Rating.EASY];
   const ratingNames = ["Again", "Hard", "Good", "Easy"];
@@ -144,61 +146,33 @@
   });
 </script>
 
-<div class="reviewer">
-  <iframe
-    bind:this={frame}
-    title="Card"
-    src={cardFrameSrc}
-    sandbox="allow-scripts"
+<div class="flex h-screen flex-col">
+  <iframe bind:this={frame} title="Card" src={cardFrameSrc} sandbox="allow-scripts" class="w-full flex-1 border-0"
   ></iframe>
-  <footer>
-    <a href="/" class="back">← Decks</a>
-    <div class="actions">
+  <footer class="grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-t px-4 py-2">
+    <Button href="/" variant="ghost" size="sm" class="justify-self-start">
+      <ArrowLeftIcon data-icon="inline-start" />
+      Decks
+    </Button>
+    <div class="flex gap-2">
       {#if side === "question"}
-        <button class="show" onclick={reveal} disabled={!current}>Show Answer</button>
+        <Button class="min-w-32" onclick={reveal} disabled={!current}>Show Answer</Button>
       {:else}
         {#each ratingNames as name, i (name)}
-          <button onclick={() => grade(i + 1)}>
-            <span class="interval">{labels[i] ?? ""}</span>
+          <Button variant="outline" class="h-auto min-w-24 flex-col gap-0 py-1" onclick={() => grade(i + 1)}>
+            <span class="text-xs text-muted-foreground">{labels[i] ?? ""}</span>
             {name}
-          </button>
+          </Button>
         {/each}
       {/if}
     </div>
-    <div class="counts" aria-label="New, learning, due">
+    <div class="flex gap-3 justify-self-end tabular-nums" aria-label="New, learning, due">
       {#each counts as count, i (i)}
-        <span class:current={current?.queue === i} class={["new", "learn", "review"][i]}>{count}</span>
+        <span
+          class={["text-count-new", "text-count-learn", "text-count-review"][i]}
+          class:underline={current?.queue === i}>{count}</span
+        >
       {/each}
     </div>
   </footer>
 </div>
-
-<style>
-  :global(body) {
-    margin: 0;
-    font-family: system-ui, sans-serif;
-    color: CanvasText;
-    background: Canvas;
-    color-scheme: light dark;
-  }
-  .reviewer { display: flex; flex-direction: column; height: 100vh; }
-  iframe { flex: 1; border: 0; width: 100%; }
-  footer {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    gap: 1rem;
-    padding: 0.6rem 1rem;
-    border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
-  }
-  .back { color: inherit; justify-self: start; }
-  .actions { display: flex; gap: 0.5rem; }
-  .actions button { min-width: 5.5rem; padding: 0.35rem 0.8rem; }
-  .interval { display: block; font-size: 0.75rem; opacity: 0.75; }
-  .counts { justify-self: end; display: flex; gap: 0.6rem; font-variant-numeric: tabular-nums; }
-  .current { text-decoration: underline; }
-  /* ≥4.5:1 against the Canvas background in both schemes (see the deck list). */
-  .new { color: light-dark(#1d4ed8, #93c5fd); }
-  .learn { color: light-dark(#b91c1c, #fca5a5); }
-  .review { color: light-dark(#15803d, #86efac); }
-</style>

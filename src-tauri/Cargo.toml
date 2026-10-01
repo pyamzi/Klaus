@@ -13,6 +13,8 @@ prost = "0.13"
 klaus-bridge = { path = "../crates/bridge" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+tauri-plugin-opener = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

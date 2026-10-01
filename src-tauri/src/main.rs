@@ -1,11 +1,12 @@
 // Prevents an extra console window on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anki_proto::generic;
 use klaus_bridge::frontend::{AskUserRequest, OpenFilePickerRequest, ShowMessageBoxRequest};
-use klaus_bridge::{new_token, serve, Bridge, Hook, WebDirs};
+use klaus_bridge::{new_token, serve, Bridge, Hook, Secrets, WebDirs};
 use prost::Message;
 use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -13,13 +14,14 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             // Dev only: a scratch Collection (e.g. a test fixture) instead of the real one.
             #[cfg(debug_assertions)]
             let dir = std::env::var_os("KLAUS_DATA_DIR").map(std::path::PathBuf::from).unwrap_or(dir);
             std::fs::create_dir_all(&dir)?;
-            let bridge = Arc::new(Bridge::new()?);
+            let bridge = Arc::new(Bridge::with_secrets(Box::new(Keychain))?);
             bridge.open_collection(&dir).map_err(|e| format!("could not open Collection: {e:?}"))?;
             app.manage(bridge.clone());
 
@@ -32,6 +34,10 @@ fn main() {
             let hook: Hook = Arc::new(move |method: &str, input: &[u8]| on_hook(&handle, method, input));
             let (addr, server) = tauri::async_runtime::block_on(serve(bridge, web, token.clone(), hook))?;
             tauri::async_runtime::spawn(server);
+            // Automatic sync (ADR-0007): once now, then whenever there's something to sync.
+            let sync = app.state::<Arc<Bridge>>().inner().clone();
+            sync.sync_in_background();
+            sync.start_auto_sync();
             println!("Klaus bridge listening on {addr}");
 
             let base: Url = format!("http://{addr}/").parse()?;
@@ -56,11 +62,56 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Klaus");
 
-    app.run(|app, event| {
-        if let RunEvent::Exit = event {
+    let synced_on_close = Arc::new(AtomicBool::new(false));
+    app.run(move |app, event| match event {
+        // Anki syncs on close (autoSync); Klaus holds the exit until the sync and
+        // its media sync are done. A full sync needs a choice, so it's left for
+        // the next sync rather than asked for while quitting.
+        RunEvent::ExitRequested { api, .. } => {
+            let bridge = app.state::<Arc<Bridge>>().inner().clone();
+            let account = bridge.sync_account();
+            if account.email.is_empty() || !account.auto_sync || synced_on_close.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            api.prevent_exit();
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_title("Klaus — Syncing…");
+            }
+            let app = app.clone();
+            std::thread::spawn(move || {
+                // ponytail: 2 minutes for the whole quit; a huge first media upload resumes next time.
+                bridge.sync_before_quit(std::time::Duration::from_secs(120));
+                app.exit(0);
+            });
+        }
+        RunEvent::Exit => {
             let _ = app.state::<Arc<Bridge>>().close_collection();
         }
+        _ => {}
     });
+}
+
+/// The Klaus Account sync key, in the macOS Keychain (Windows Credential Manager,
+/// Linux keyutils) rather than a file.
+struct Keychain;
+
+const KEYCHAIN_SERVICE: &str = "ink.klaus.desktop";
+
+impl Secrets for Keychain {
+    fn get(&self, key: &str) -> Option<String> {
+        keyring::Entry::new(KEYCHAIN_SERVICE, key).ok()?.get_password().ok()
+    }
+    fn set(&self, key: &str, value: &str) -> Result<(), String> {
+        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, key).map_err(|e| e.to_string())?;
+        entry.set_password(value).map_err(|e| e.to_string())
+    }
+    fn delete(&self, key: &str) -> Result<(), String> {
+        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, key).map_err(|e| e.to_string())?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
 }
 
 /// Requests the webview makes to its host (see klaus_bridge::HOOKS); the reply is
@@ -127,6 +178,15 @@ fn on_hook(app: &AppHandle, method: &str, input: &[u8]) -> Option<Vec<u8>> {
         }
         // Not wired yet: the browser (#11), note type dialogs (#16), recording/playback,
         // clipboard reads, external links. Anki pages treat the empty reply as cancel.
+        // Links from Anki pages and Klaus's sign-in: the system browser.
+        "openLink" => {
+            use tauri_plugin_opener::OpenerExt;
+            let url = generic::String::decode(input).ok()?.val;
+            if url.starts_with("https://") || url.starts_with("http://") {
+                let _ = app.opener().open_url(url, None::<&str>);
+            }
+            None
+        }
         _ => None,
     }
 }
