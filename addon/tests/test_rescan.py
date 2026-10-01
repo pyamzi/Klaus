@@ -455,4 +455,197 @@ _init = open("klausmate/__init__.py", encoding="utf-8").read()
 check("profile open starts the background rescan",
       "_pdf_drive.start_library_rescan()" in _init and "_pdf_drive.rescan_library_root()" not in _init)
 
+# ------------------------------------------------------------ Task 5b
+import types  # noqa: E402
+
+
+def _point_user_files(path):
+    """HEAD reads the package's USER_FILES, the settings seam reads settings."""
+    sys.modules["klausmate"].USER_FILES = path
+    _s = sys.modules.get("klausmate.settings")
+    if _s is not None:
+        _s.user_files_dir = path
+
+
+class FakeSignal:
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, fn):
+        self.slots.append(fn)
+
+    def emit(self, *a):
+        for fn in self.slots:
+            fn(*a)
+
+
+class FakeWatcher:
+    def __init__(self, parent=None):
+        self.dirs, self.directoryChanged = [], FakeSignal()
+
+    def directories(self):
+        return list(self.dirs)
+
+    def removePaths(self, paths):
+        self.dirs = [d for d in self.dirs if d not in paths]
+
+    def addPaths(self, paths):
+        self.dirs.extend(paths)
+
+
+class FakeTimer:
+    def __init__(self, parent=None):
+        self.timeout, self.active = FakeSignal(), False
+
+    def setSingleShot(self, _on):
+        pass
+
+    def setInterval(self, _ms):
+        pass
+
+    def start(self):
+        self.active = True
+
+    def isActive(self):
+        return self.active
+
+
+section("readers hear moved, missing and back only after the mapping is applied")
+pdg = importlib.reload(importlib.import_module("klausmate.pdf_drive"))
+ufg = tempfile.mkdtemp(prefix="klaus-t5b-uf-")
+rootg = tempfile.mkdtemp(prefix="klaus-t5b-root-")
+os.makedirs(os.path.join(ufg, "contexts"))
+
+
+def putg(rel, text):
+    write_text(os.path.join(rootg, rel), text)
+
+
+for _safe, (_rel, _text) in {"Lecture": ("Lecture.pdf", "lecture one|two"), "Gone": ("Gone.pdf", "gone one"),
+                             "Edited": ("Edited.pdf", "old|text")}.items():
+    putg(_rel, _text)
+    write_text(os.path.join(ufg, "contexts", _safe + ".json"),
+               json.dumps({"pages": _text.split("|"), "page_count": len(_text.split("|"))}))
+ph.save_library_map(ufg, {"Lecture": "Lecture.pdf", "Gone": "Gone.pdf", "Edited": "Edited.pdf"})
+_point_user_files(ufg)
+ph._live_library_root = lambda: rootg
+ph.extract_pages = lambda path: read_text(path).split("|")
+ph.repair_garbled_pages = lambda path, pages, **k: pages
+ps5.ensure_records = lambda *a: None
+pdg.QueryOp, pdg.mw = FakeQueryOp, type("MW", (), {"col": None})()
+pdg.QFileSystemWatcher, pdg.QTimer = FakeWatcher, FakeTimer
+ui = []
+pdg._library_changed = lambda: ui.append(1)
+requested, resyncs, events = [], [], []
+_real_request_pdf = iq.request_pdf
+iq.request_pdf = lambda safe, **k: requested.append(safe)
+_real_resync = ds5.resync
+ds5.resync = lambda: resyncs.append(1)
+_unsub = ds5.subscribe(lambda ev, safe, path: events.append((ev, safe, path, ph.load_library_map(ufg).get(safe))))
+pdg.start_library_rescan()  # first pass: records every stat, reports nothing
+check("a settled folder tells readers nothing but still re-watches",
+      events == [] and requested == [] and resyncs == [1], str((events, requested, resyncs)))
+
+del resyncs[:]
+os.rename(os.path.join(rootg, "Lecture.pdf"), os.path.join(rootg, "Lecture (final) & notes.pdf"))
+pdg.start_library_rescan()
+check("a Finder rename: 'moved' with the new path, the mapping already updated",
+      events == [("moved", "Lecture", os.path.join(rootg, "Lecture (final) & notes.pdf"),
+                  "Lecture (final) & notes.pdf")], str(events))
+check("...then the watches are re-synced once", resyncs == [1], str(resyncs))
+
+del events[:]
+os.remove(os.path.join(rootg, "Gone.pdf"))
+del ui[:]
+pdg.start_library_rescan()
+check("a deleted file: 'missing'", events == [("missing", "Gone", None, "Gone.pdf")], str(events))
+check("...and the sidebar redraws its warning icon", ui == [1], str(ui))
+del events[:]
+putg("Gone.pdf", "gone one")
+del ui[:]
+pdg.start_library_rescan()
+check("it comes back: 'back' with its path", events == [("back", "Gone", os.path.join(rootg, "Gone.pdf"), "Gone.pdf")],
+      str(events))
+check("...and the sidebar clears the icon", ui == [1], str(ui))
+
+del events[:]
+putg("Edited.pdf", "new|text|three")
+pdg.start_library_rescan()
+check("a closed file whose text changed outside Klaus is re-indexed once", requested == ["Edited"], str(requested))
+pdg.start_library_rescan()
+check("...and only once", requested == ["Edited"], str(requested))
+putg("Edited.pdf", "new |text|three\n")
+pdg.start_library_rescan()
+check("a whitespace-only change is not re-indexed", requested == ["Edited"], str(requested))
+check("none of these were reader events", events == [], str(events))
+
+section("the watcher tick skips the rescan when it saw only Klaus's own files")
+pvs = types.ModuleType("klausmate.pdf_viewer")
+polls = []
+pvs.poll_external_changes = lambda: polls.append(1)
+_had_pv = sys.modules.get("klausmate.pdf_viewer"), getattr(sys.modules["klausmate"], "pdf_viewer", None)
+sys.modules["klausmate.pdf_viewer"] = pvs
+sys.modules["klausmate"].pdf_viewer = pvs
+starts = []
+_real_start = pdg.start_library_rescan
+pdg.start_library_rescan = lambda *a, **k: starts.append(1)
+_lect = os.path.join(rootg, "Lecture (final) & notes.pdf")
+
+
+def tick(*dirs):
+    """Directory events as Qt delivers them, then the debounce fires."""
+    for d in dirs or (rootg,):
+        pdg._fs_watcher.directoryChanged.emit(d)
+    pdg._fs_debounce.active = False
+    del starts[:], polls[:]
+    pdg._on_fs_tick()
+    return bool(starts)
+
+
+check("the watcher holds the root", rootg in pdg._fs_watcher.directories())
+_tmp = os.path.join(rootg, ".Lecture (final) & notes.pdf.4f2a9c.tmp")
+write_text(_tmp, "half a bake")
+check("a tick that only created .x.pdf.uuid.tmp does not start a rescan", tick() is False)
+check("...and the open-viewer poll still runs (R29)", polls == [1], str(polls))
+write_text(_tmp, "baked|pages")
+os.replace(_tmp, _lect)
+ph.record_stat(ufg, "Lecture", ph.file_stat(_lect))
+check("Klaus's own bake (stat recorded) does not start a rescan", tick() is False)
+write_text(_lect, "edited in Preview|pages")
+check("the same file edited outside Klaus does", tick() is True)
+ph.record_stat(ufg, "Lecture", ph.file_stat(_lect))
+putg("New.pdf", "new")
+check("a new PDF does", tick() is True)
+os.remove(os.path.join(rootg, "New.pdf"))
+check("back to the last scan's names: skipped again", tick() is False)
+os.rename(os.path.join(rootg, "Gone.pdf"), os.path.join(rootg, ".Gone.pdf.away"))
+check("a mapped file gone does", tick() is True)
+os.rename(os.path.join(rootg, ".Gone.pdf.away"), os.path.join(rootg, "Gone.pdf"))
+os.rename(os.path.join(rootg, "Gone.pdf"), os.path.join(rootg, "gone.pdf"))
+check("a case-only rename does", tick() is True)
+os.rename(os.path.join(rootg, "gone.pdf"), os.path.join(rootg, "Gone.pdf"))
+write_text(os.path.join(rootg, "notes.md"), "mine")
+check("a new non-PDF entry does (the scan decides what it is)", tick() is True)
+os.remove(os.path.join(rootg, "notes.md"))
+check("a directory the last scan never listed does", tick(os.path.join(rootg, "Unknown")) is True)
+pdg._fs_watcher.directoryChanged.emit(rootg)  # an event lands while the scan is applying...
+os.makedirs(os.path.join(rootg, "Week 9"))
+pdg._rearm_watcher(rootg)  # ...and the re-arm walks after it, before the debounce fires
+check("a change still waiting for its tick is not folded into the new baseline", tick() is True)
+
+pdg.start_library_rescan = _real_start
+if _had_pv[0] is not None:
+    sys.modules["klausmate.pdf_viewer"] = _had_pv[0]
+else:
+    sys.modules.pop("klausmate.pdf_viewer", None)
+if _had_pv[1] is not None:
+    sys.modules["klausmate"].pdf_viewer = _had_pv[1]
+else:
+    delattr(sys.modules["klausmate"], "pdf_viewer")
+_unsub()
+ds5.resync = _real_resync
+iq.request_pdf = _real_request_pdf
+ph.extract_pages, ph.repair_garbled_pages = _stub_extract, _stub_repair
+ps5.ensure_records = _real_ensure
+
 raise SystemExit(report())

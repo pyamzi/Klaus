@@ -199,14 +199,19 @@ def wrap_sidebar(sidebar) -> None:
 NOT_EMBEDDED = "Not in the search index yet. Right-click › Re-embed."
 STALE = "Needs re-embedding: the embedding model or the file changed. Right-click › Re-embed."
 INDEXING = "Indexing…"
+MISSING = "Missing from your Library folder"
 
 
-def pdf_status(safes, pending: set, index_status: Callable) -> dict[str, str]:
+def pdf_status(safes, pending: set, index_status: Callable, missing=()) -> dict[str, str]:
     """``{safe: reason}`` for PDFs that need attention. Pure: the caller
-    passes ``index_status(safe) -> (indexed, stale)``. A failed index
-    run is not here: the runner reports failures without a PDF name."""
+    passes ``index_status(safe) -> (indexed, stale)`` and the rescan's
+    ``missing`` set, which wins. A failed index run is not here: the
+    runner reports failures without a PDF name."""
     out: dict[str, str] = {}
     for safe in safes:
+        if safe in missing:
+            out[safe] = MISSING
+            continue
         if safe in pending:
             out[safe] = INDEXING
             continue
@@ -429,10 +434,18 @@ def refresh_status() -> None:
             set(library_index()["safes"].values()),
             index_queue.pending_names(),
             lambda safe: retention.index_status(safe, sig),
+            missing=_missing(),
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] library status failed: {exc}")
     _repaint()
+
+
+def _missing() -> set:
+    """Safe names the last folder scan could not find."""
+    from . import pdf_handler, pdf_source
+
+    return pdf_handler.load_missing(pdf_source.user_files_dir())
 
 
 # ------------------------------------------------------------ menus
@@ -465,6 +478,13 @@ def on_context_menu(sidebar, menu, item, index) -> None:
         _add(menu, "Match Sensitivity…", lambda: act.sensitivity(parent, safe))
         _add(menu, "Retention History…", lambda: act.history(parent, safe))
         _add(menu, "Show in Finder", lambda: act.show_in_finder(safe))
+        if safe in _missing():
+            from . import pdf_drive, pdf_handler, pdf_source
+
+            # Only while its file is really gone: a file back on disk
+            # before the next scan would go to the Trash with it.
+            if pdf_handler.pdf_path_for(pdf_source.user_files_dir(), safe) is None:
+                _add(menu, "Remove from Library", lambda: pdf_drive.delete_pdf(safe))
     elif key in lib["folders"]:
         folder = lib["folders"][key]
         menu.addSeparator()

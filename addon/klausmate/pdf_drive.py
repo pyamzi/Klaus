@@ -169,6 +169,44 @@ def delete_folder(folder: str) -> None:
 
 _fs_watcher: Any = None
 _fs_debounce: Any = None
+_fs_changed: set = set()  # directories that fired since the last tick
+_dir_names: dict = {}  # directory -> its visible entry names at the last re-arm
+
+
+def _visible(names) -> set:
+    return {n for n in names if not n.startswith(".")}
+
+
+def _tick_needs_rescan(dirs) -> bool:
+    """The watcher's pre-check: False only when every changed entry is
+    hidden (a bake's ``.x.pdf.<uuid>.tmp``) or a mapped PDF whose stat is
+    the one recorded (Klaus's own bake). A directory whose visible names
+    differ from the last re-arm, an unmapped or edited PDF, or anything
+    unreadable rescans."""
+    try:
+        from . import pdf_source
+
+        root = pdf_handler._live_library_root()
+        if not dirs or not root:
+            return True
+        uf = pdf_source.user_files_dir()
+        by_path = {os.path.join(root, rel): safe for safe, rel in pdf_handler.load_library_map(uf).items()}
+        recorded = pdf_handler.load_library_stats(uf)
+        for d in dirs:
+            names = _visible(os.listdir(d))
+            if names != _dir_names.get(d):
+                return True
+            for name in names:
+                path = os.path.join(d, name)
+                if not name.lower().endswith(".pdf") or not os.path.isfile(path):
+                    continue
+                safe, st = by_path.get(path), pdf_handler.file_stat(path)
+                if safe is None or st is None or recorded.get(safe) != pdf_handler._stat_entry(st):
+                    return True
+        return False
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] library watcher pre-check failed, rescanning: {e}")
+        return True
 
 
 def _on_fs_tick() -> None:
@@ -176,9 +214,13 @@ def _on_fs_tick() -> None:
     on disk. A VISIBLE Library repaints via the full refresh path
     (``_refresh_rows`` rescans first, then rebuilds); otherwise a bare
     rescan keeps mapping/tree/tags in step while nothing is showing, and
-    any hidden screen is marked to refresh on its next show."""
+    any hidden screen is marked to refresh on its next show. A tick that
+    saw only Klaus's own writes skips the rescan (``_tick_needs_rescan``)."""
+    dirs = set(_fs_changed)
+    _fs_changed.clear()
     try:
-        start_library_rescan()
+        if _tick_needs_rescan(dirs):
+            start_library_rescan()
     except Exception as e:  # noqa: BLE001
         print(f"[klausmate] library watcher rescan failed: {e}")
     # After the rescan settled the mapping: any open viewer showing a
@@ -210,7 +252,7 @@ def _rearm_watcher(root: str | None) -> None:
             _fs_debounce.setInterval(350)
             _fs_debounce.timeout.connect(_on_fs_tick)
             _fs_watcher.directoryChanged.connect(
-                lambda _p: _fs_debounce.start()
+                lambda p: (_fs_changed.add(p), _fs_debounce.start())
             )
         old = list(_fs_watcher.directories())
         if old:
@@ -218,10 +260,18 @@ def _rearm_watcher(root: str | None) -> None:
         if not root or not os.path.isdir(root):
             return
         paths = [root]
-        for dirpath, dirnames, _files in os.walk(root):
+        names = {}
+        for dirpath, dirnames, files in os.walk(root):
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]
             paths.extend(os.path.join(dirpath, d) for d in dirnames)
+            names[dirpath] = _visible(dirnames + files)
         _fs_watcher.addPaths(paths)
+        # The pre-check's baseline. Not while a tick is pending: its
+        # change may postdate the scan that just ran, and folding it in
+        # here would let that tick skip it.
+        if not _fs_debounce.isActive():
+            _dir_names.clear()
+            _dir_names.update(names)
     except Exception as e:  # noqa: BLE001
         print(f"[klausmate] library watcher re-arm failed: {e}")
 
@@ -264,7 +314,7 @@ def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -
         summary = rescan_library_root(prepared)
         if summary and summary.get("ingested"):
             _after_ingest(summary["ingested"])
-        if summary and (summary.get("moved") or summary.get("ingested") or summary.get("tree_changed")):
+        if summary and any(summary.get(k) for k in ("moved", "ingested", "tree_changed", "missing", "back")):
             _library_changed()
         if on_done:
             on_done(summary)
@@ -344,6 +394,7 @@ def rescan_library_root(prepared: dict | None = None) -> dict | None:
             # no match cache yet are skipped inside tag_sync (cold-cache
             # rule) and pick their tag up on first indexing.
             tag_sync.sync_after_folder_rename(mw, touched)
+        _tell_readers(uf, root, summary)
         # Every rescan re-arms the live watcher: directories that moved
         # or appeared since the last pass must fire the next one.
         _rearm_watcher(root)
@@ -351,6 +402,33 @@ def rescan_library_root(prepared: dict | None = None) -> dict | None:
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] library rescan failed: {exc}")
         return None
+
+
+def _tell_readers(uf: str, root: str, summary: dict) -> None:
+    """After the mapping is applied, never before: open readers follow a
+    move, hear a delete or a return (doc_sync), the watches are re-synced,
+    and a closed PDF whose text changed outside Klaus is re-indexed."""
+    try:
+        from . import doc_sync
+
+        for safe, path in (summary.get("moved") or {}).items():
+            doc_sync.repoint(safe, path)
+        for safe in summary.get("missing") or []:
+            doc_sync.mark_missing(safe)
+        mapping = pdf_handler.load_library_map(uf) if summary.get("back") else {}
+        for safe in summary.get("back") or []:
+            if safe in mapping:
+                doc_sync.mark_back(safe, os.path.join(root, mapping[safe]))
+        doc_sync.resync()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] rescan: telling readers failed: {exc}")
+    for safe in summary.get("changed_text") or []:
+        try:
+            from . import index_queue
+
+            index_queue.request_pdf(safe)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] re-index of changed {safe!r} failed: {exc}")
 
 
 def _library_changed() -> None:

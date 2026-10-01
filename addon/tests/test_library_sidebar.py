@@ -240,6 +240,51 @@ check("an empty folder can be renamed and removed here (Anki's own items skip em
       == ["New Folder…", "Import PDFs Here…", "Rename Folder…", "Remove Folder"])
 check("any other tag gets nothing extra", menu_for("Hematology::Anemia") == ["Anki's own item"])
 
+section("a PDF missing from the Library folder")
+_ph5 = importlib.import_module("klausmate.pdf_handler")
+_uf5 = importlib.import_module("klausmate.pdf_source").user_files_dir()  # what the sidebar reads, HEAD or seam
+_cbc = "!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC"
+st = ls.pdf_status(["a", "d"], {"d"}, {"a": (False, False), "d": (True, False)}.get, missing={"a", "d"})
+check("missing wins over every other reason", st == {"a": ls.MISSING, "d": ls.MISSING}, str(st))
+check("...and its words", ls.MISSING == "Missing from your Library folder")
+_ph5.set_missing(_uf5, {"Intro_to_CBC"})
+_real_status = (ls._sidebars, retention.index_status)
+_idx_q = importlib.import_module("klausmate.index_queue")
+_real_pending = _idx_q.pending_names
+_idx_q.pending_names = lambda: set()
+retention.index_status = lambda safe, sig: (True, False)
+ls._sidebars = {tree}
+ls.refresh_status()
+check("the sidebar reads the rescan's missing set", ls._state["status"] == {"Intro_to_CBC": ls.MISSING},
+      str(ls._state["status"]))
+opt = QtWidgets.QStyleOptionViewItem()
+opt.widget = tree
+delegate.initStyleOption(opt, model.index(0, 0))
+check("its row carries the warning icon", not opt.icon.isNull())
+ls._sidebars, retention.index_status = _real_status
+_idx_q.pending_names = _real_pending
+_pd5 = importlib.import_module("klausmate.pdf_drive")
+_removed = []
+_real_delete = _pd5.delete_pdf
+_pd5.delete_pdf = lambda safe: _removed.append(safe)
+menu = QtWidgets.QMenu()
+ls.on_context_menu(types.SimpleNamespace(browser=None), menu, Item(_cbc), None)
+_acts = [a for a in menu.actions() if a.text() == "Remove from Library"]
+check("its menu offers Remove from Library", len(_acts) == 1, str([a.text() for a in menu.actions()]))
+_acts[0].trigger()
+check("...which deletes it from the Library (no file to trash)", _removed == ["Intro_to_CBC"], str(_removed))
+_back = os.path.join(_uf5, "pdfs", "Intro_to_CBC.pdf")
+os.makedirs(os.path.dirname(_back), exist_ok=True)
+open(_back, "wb").close()
+check("a flagged PDF whose file is back before the rescan is not offered (it would be trashed)",
+      "Remove from Library" not in menu_for(_cbc))
+os.remove(_back)
+_ph5.set_missing(_uf5, ())
+check("a PDF that is not missing has no such item",
+      "Remove from Library" not in menu_for(_cbc))
+_pd5.delete_pdf = _real_delete
+ls._state["status"] = {}
+
 section("a single click only shows the cards; a double-click opens the viewer")
 viewer = importlib.import_module("klausmate.library_viewer")
 calls = []
