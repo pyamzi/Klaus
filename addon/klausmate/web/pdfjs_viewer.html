@@ -410,6 +410,8 @@ const state = {
   userZoomed: false,
   pageDivs: [],
   rendered: new Map(),   // pageNum -> {canvas, textLayer, spans[]}
+  lru: new Set(),        // rendered pages, least recently visible first
+  inZone: new Set(),     // pages the observer has in its render zone
   observer: null,
   thumbObserver: null,
   currentPage: 0,
@@ -419,7 +421,9 @@ const state = {
   task: null,            // its getDocument loading task
   keepZoom: false,       // a reload of the same document keeps a user zoom
   annots: [],            // canonical records, pushed from Python
-  pageTexts: null,       // [{str, items:[{start,len}]}] lazily built for find
+  annotsPrev: null,      // last push's records; null = redraw every page
+  pendingRepaint: new Set(),  // pages awaiting a push to redraw (K-150)
+  pageTexts: null,       // sparse [{str, items:[{start,len}]}] per page0, for find
   find: { query: "", matches: [], index: -1 },
   marquee: null,         // {page, x0, y0} while alt-dragging
   persistMarquee: null,  // {page0,x,y,w,h,dataUrl} kept after release (K-100)
@@ -627,17 +631,34 @@ function observePages() {
   scroll.addEventListener("scroll", scheduleScrollReport, { passive: true });
 }
 
+/* Pages leaving the zone stay rendered: only the least recently
+   visible beyond KEEP_RENDERED out-of-zone pages are torn down. */
 function onIntersect(entries) {
   for (const en of entries) {
     const idx = parseInt(en.target.dataset.page, 10);
-    if (en.isIntersecting) renderPage(idx, en.target);
-    else teardownPage(idx, en.target);
+    touchPage(idx);
+    if (en.isIntersecting) {
+      state.inZone.add(idx);
+      renderPage(idx, en.target);
+    } else {
+      state.inZone.delete(idx);
+    }
   }
+  for (const n of evictable([...state.lru], state.inZone, KEEP_RENDERED)) {
+    teardownPage(n, state.pageDivs[n - 1]);
+  }
+}
+
+function touchPage(num) {
+  if (!state.rendered.has(num)) return;
+  state.lru.delete(num);
+  state.lru.add(num);
 }
 
 async function renderPage(num, div) {
   if (state.rendered.has(num) || !state.doc) return;
   state.rendered.set(num, {});   // claim before await (re-entrancy)
+  touchPage(num);
   try {
     const page = await state.doc.getPage(num);
     const viewport = page.getViewport({ scale: state.scale });
@@ -694,12 +715,14 @@ async function renderPage(num, div) {
 
 function teardownPage(num, div) {
   const r = state.rendered.get(num);
-  if (!r || !r.canvas) return;   // never tear down a mid-render claim
+  if (!r) state.lru.delete(num);  // a failed render left it behind
+  if (!r || !r.canvas || !div) return;   // never tear down a mid-render claim
   for (const cls of ["canvas.pg", ".textLayer", ".hlLayer", ".noteLayer"]) {
     const el = div.querySelector(cls);
     if (el) { try { div.removeChild(el); } catch (e) {} }
   }
   state.rendered.delete(num);
+  state.lru.delete(num);
 }
 
 async function teardown() {
@@ -708,8 +731,12 @@ async function teardown() {
   state.task = null;
   if (state.observer) state.observer.disconnect();
   state.rendered.clear();
+  state.lru.clear();
+  state.inZone.clear();
   state.pageDivs = [];
   state.annots = [];
+  state.annotsPrev = null;
+  state.pendingRepaint.clear();
   state.pageTexts = null;
   state.persistMarquee = null;   // its overlay dies with #pages below
   state.textEdit = null;         // so does the editor box (K-150)
@@ -750,10 +777,19 @@ function scheduleScrollReport() {
 }
 
 /* ==== annotations (records owned by Python) ======================== */
+/* Only pages whose records changed are redrawn — plus every page on
+   the first push after a load, and any page whose text editor closed
+   waiting for this push (closeTextEdit(false): an untouched box comes
+   back as identical records, yet its static twin must reappear). */
 window.klausSetAnnotations = function (records) {
   state.annots = Array.isArray(records) ? records : [];
+  const changed = state.annotsPrev
+    ? changedPages(state.annotsPrev, state.annots) : null;
+  state.annotsPrev = state.annots;
+  for (const n of state.pendingRepaint) if (changed) changed.add(n);
+  state.pendingRepaint.clear();
   for (const [num, r] of state.rendered) {
-    if (r && r.canvas) {
+    if (r && r.canvas && (!changed || changed.has(num))) {
       renderAnnotLayers(num, state.pageDivs[num - 1]);
     }
   }
@@ -1040,8 +1076,8 @@ async function copyRegionImage(page0, xPt, yPt, wPt, hPt) {
 }
 
 async function copyPageText(page0) {
-  const texts = await ensurePageTexts();
-  const t = (texts[page0] && texts[page0].str) || "";
+  const text = await pageText(page0);
+  const t = (text && text.str) || "";
   /* toast: menu-driven page capture confirms like the native viewer;
      plain selection copy stays silent (Preview-style). */
   postB64("copy-text", { text: t, toast: true });
@@ -1910,6 +1946,7 @@ function closeTextEdit(repaint) {
     try { te.el.parentNode.removeChild(te.el); } catch (e) {}
   }
   if (te && repaint !== false) repaintAnnotPage(te.page0);
+  else if (te) state.pendingRepaint.add(te.page0 + 1);
   syncAnnobarMode();
 }
 
@@ -2006,23 +2043,34 @@ document.getElementById("abTszUp").addEventListener(
   "click", () => stepTextSize(1));
 
 /* ==== find ========================================================= */
-async function ensurePageTexts() {
-  if (state.pageTexts) return state.pageTexts;
-  const out = [];
-  for (let i = 1; i <= state.doc.numPages; i++) {
-    const page = await state.doc.getPage(i);
-    const tc = await page.getTextContent();
-    let str = "";
-    const items = [];
-    for (const it of tc.items) {
-      items.push({ start: str.length, len: it.str.length });
-      str += it.str;
-      if (it.hasEOL) str += "\n";
-    }
-    out.push({ str, items });
+/* One page's find text, extracted once per document (teardown drops
+   the cache). null when the document went away meanwhile. */
+async function pageText(page0) {
+  const doc = state.doc;
+  if (!doc) return null;
+  if (state.pageTexts && state.pageTexts[page0]) return state.pageTexts[page0];
+  const page = await doc.getPage(page0 + 1);
+  const tc = await page.getTextContent();
+  if (state.doc !== doc) return null;
+  let str = "";
+  const items = [];
+  for (const it of tc.items) {
+    items.push({ start: str.length, len: it.str.length });
+    str += it.str;
+    if (it.hasEOL) str += "\n";
   }
-  state.pageTexts = out;
-  return out;
+  if (!state.pageTexts) state.pageTexts = [];
+  state.pageTexts[page0] = { str, items };
+  return state.pageTexts[page0];
+}
+
+/* Pages intersecting the scroll viewport, top to bottom. */
+function visiblePages() {
+  const scrollEl = document.getElementById("scroll");
+  const top = scrollEl.scrollTop, bot = top + scrollEl.clientHeight;
+  return state.pageDivs
+    .filter((d) => d.offsetTop < bot && d.offsetTop + d.offsetHeight > top)
+    .map((d) => parseInt(d.dataset.page, 10));
 }
 
 function showFindBar() {
@@ -2050,37 +2098,59 @@ document.getElementById("findinput").addEventListener("keydown", (ev) => {
   else if (ev.key === "Escape") { ev.preventDefault(); hideFindBar(); }
 });
 
+/* Visible pages are searched first, the rest in idle-time batches of 5;
+   matches are appended as found and the first is shown at once. A new
+   search, hideFindBar or a teardown replaces state.find, which stops
+   the running one. */
+const FIND_BATCH = 5;
+const idle = window.requestIdleCallback
+  ? (cb) => window.requestIdleCallback(cb, { timeout: 250 })  // busy scrolling never starves find
+  : (cb) => setTimeout(cb, 0);
+
 async function runFind() {
   const q = document.getElementById("findinput").value.trim().toLowerCase();
   clearFindHighlight();
-  state.find = { query: q, matches: [], index: -1 };
+  const f = state.find = { query: q, matches: [], index: -1 };
   const countEl = document.getElementById("findcount");
   if (!q || !state.doc) { countEl.textContent = ""; return; }
-  const texts = await ensurePageTexts();
-  const matches = [];
-  for (let p = 0; p < texts.length; p++) {
-    const hay = texts[p].str.toLowerCase();
-    let at = hay.indexOf(q);
-    while (at !== -1) {
-      // owning text item = the one whose range contains the match start
-      let itemIdx = 0;
-      const items = texts[p].items;
-      for (let k = 0; k < items.length; k++) {
-        if (items[k].start <= at && at < items[k].start + Math.max(1, items[k].len)) {
-          itemIdx = k; break;
-        }
-        if (items[k].start > at) break;
-        itemIdx = k;
-      }
-      /* start/len (page-string coords) drive the exact-substring paint
-         (K-100); itemIdx stays the scroll anchor + ring fallback. */
-      matches.push({ page0: p, itemIdx, start: at, len: q.length });
-      at = hay.indexOf(q, at + Math.max(1, q.length));
+  const order = findOrder(visiblePages(), state.doc.numPages);
+  for (let i = 0; i < order.length; i += FIND_BATCH) {
+    if (i) await new Promise((r) => idle(r));
+    for (const num of order.slice(i, i + FIND_BATCH)) {
+      if (state.find !== f) return;
+      const text = await pageText(num - 1);
+      if (state.find !== f || !text) return;
+      f.matches.push(...pageMatches(num - 1, text, q));
+    }
+    if (f.matches.length) {
+      countEl.textContent = `${f.index < 0 ? 1 : f.index + 1} / ${f.matches.length}`;
+      if (f.index < 0) { f.index = 0; jumpToMatch(); }
     }
   }
-  state.find.matches = matches;
-  countEl.textContent = matches.length ? `1 / ${matches.length}` : "0 matches";
-  if (matches.length) { state.find.index = 0; jumpToMatch(); }
+  if (!f.matches.length) countEl.textContent = "0 matches";
+}
+
+function pageMatches(p, text, q) {
+  const matches = [];
+  const hay = text.str.toLowerCase();
+  let at = hay.indexOf(q);
+  while (at !== -1) {
+    // owning text item = the one whose range contains the match start
+    let itemIdx = 0;
+    const items = text.items;
+    for (let k = 0; k < items.length; k++) {
+      if (items[k].start <= at && at < items[k].start + Math.max(1, items[k].len)) {
+        itemIdx = k; break;
+      }
+      if (items[k].start > at) break;
+      itemIdx = k;
+    }
+    /* start/len (page-string coords) drive the exact-substring paint
+       (K-100); itemIdx stays the scroll anchor + ring fallback. */
+    matches.push({ page0: p, itemIdx, start: at, len: q.length });
+    at = hay.indexOf(q, at + Math.max(1, q.length));
+  }
+  return matches;
 }
 
 function stepFind(dir) {
@@ -2306,6 +2376,7 @@ async function relayout() {
     d.style.height = Math.floor(base.height * state.scale) + "px";
   }
   state.rendered.clear();
+  state.lru.clear();
   /* teardownPage never touches the editor (it is not one of the four
      layers it removes), so a panel resize mid-sentence leaves the box
      alive — at the OLD scale until this lands it again (K-150). */
