@@ -52,10 +52,16 @@ def _addon_version() -> str:
         return ""
 
 
+# The sidebar k's height as a share of the wordmark-plus-version block:
+# a touch smaller than the text it sits beside (Pouya, 2026-10-01).
+LOGO_SCALE = 0.8
+
+
 def _logo_pixmap(size: int, dpr: float = 2.0) -> Any:
     """The Klaus k for the Preferences sidebar, the same SVG as the toolbar
-    (top_bar.logo_svg, evenodd and all), filled in the current accent on
-    a transparent ground, never inside a tile.
+    (top_bar.logo_svg, evenodd and all), filled in the text colour so it
+    matches the KlausMate wordmark beside it, on a transparent ground,
+    never inside a tile.
 
     ``dpr`` comes from the label that will show it, so the mark is crisp
     on whatever screen the dialog opened on; 2.0 is only the fallback
@@ -71,7 +77,7 @@ def _logo_pixmap(size: int, dpr: float = 2.0) -> Any:
         px.setDevicePixelRatio(dpr)
         px.fill(QColor(0, 0, 0, 0))
         c = _theme.palette(_theme.night_mode())
-        colour = QColor(c["blue_accent"]).name()
+        colour = QColor(c["text"]).name()
         renderer = QSvgRenderer(_top_bar.logo_svg(colour).encode("utf-8"))
         painter = QPainter(px)
         try:
@@ -454,9 +460,10 @@ def manage_models_dialog(*_args: Any) -> None:
     logo_px = [24]  # the pixmap's square; fit_logo sets it once laid out
 
     def fit_logo() -> None:
-        """Make the k as tall as the wordmark and version together: their
-        laid-out height (so any font or platform fits), over the share of
-        its square the k fills (measured, so a new logo still fits)."""
+        """Make the k LOGO_SCALE of the wordmark and version's height
+        together: their laid-out height (so any font or platform fits),
+        over the share of its square the k fills (measured, so a new logo
+        still fits)."""
         try:
             last = ver_lbl if _ver else app_name_lbl
             block = last.geometry().bottom() - app_name_lbl.geometry().top() + 1
@@ -467,7 +474,7 @@ def manage_models_dialog(*_args: Any) -> None:
             rows = [y for y in range(img.height())
                     if any(img.pixelColor(x, y).alpha() > 0 for x in range(img.width()))]
             frac = (rows[-1] - rows[0] + 1) / img.height() if rows else 1.0
-            logo_px[0] = max(24, round(block / frac))
+            logo_px[0] = max(20, round(block * LOGO_SCALE / frac))
             new = _logo_pixmap(logo_px[0], logo_lbl.devicePixelRatioF())
             if new is not None:
                 # The label is the text block's height; the square pixmap
@@ -2113,8 +2120,8 @@ def manage_models_dialog(*_args: Any) -> None:
             # The swatches carry their own inline QSS, so the dialog
             # sheet swap above wipes them — repaint from the state.
             sync_accent_swatches()
-            # The sidebar k is a baked pixmap filled in blue_accent;
-            # re-render it or it keeps the old accent until reopen.
+            # The sidebar k is a baked pixmap in the text colour; re-render
+            # it so a theme change reaches it before reopen.
             _new_logo = _logo_pixmap(logo_px[0], logo_lbl.devicePixelRatioF())
             if _new_logo is not None:
                 logo_lbl.setPixmap(_new_logo)
