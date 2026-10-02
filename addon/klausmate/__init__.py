@@ -777,6 +777,15 @@ except Exception as _e:
     print(f"[klausmate] bottom row setup failed: {type(_e).__name__}: {_e}")
 
 try:
+    # Automatic sync: quiet background syncs, Sync button hidden or Log In
+    # (spec 2026-10-02-auto-sync-design.md).
+    from . import auto_sync as _auto_sync
+
+    _auto_sync.setup()
+except Exception as _e:
+    print(f"[klausmate] auto sync setup failed: {type(_e).__name__}: {_e}")
+
+try:
     # Other add-ons' top-level menus (AMBOSS, AnkiHub, …) go under Add-ons.
     from . import addons_menu as _addons_menu
 

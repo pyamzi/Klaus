@@ -86,4 +86,234 @@ check("disabled: no", not A.standing_down(Mgr({"x": ("Auto Sync", False)})))
 check("missing folder (isEnabled True, not in allAddons): no", not A.standing_down(Mgr({})))
 check("other add-ons: no", not A.standing_down(Mgr({"y": ("AnkiHub", True)})))
 
+# ── glue, on a fake mw ───────────────────────────────────────────────────
+import concurrent.futures  # noqa: E402
+import types  # noqa: E402
+from enum import Enum  # noqa: E402
+
+from PyQt6 import QtCore, QtGui, QtWidgets  # noqa: E402
+
+shim = types.ModuleType("aqt.qt")
+
+
+def _ga(name):
+    for m in (QtWidgets, QtCore, QtGui):
+        if hasattr(m, name):
+            return getattr(m, name)
+    if name == "qconnect":
+        return lambda sig, fn: sig.connect(fn)
+    raise AttributeError(name)
+
+
+shim.__getattr__ = _ga
+sys.modules["aqt.qt"] = shim
+app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
+
+
+class SyncErrorKind(Enum):
+    AUTH = 1
+    NETWORK = 2
+
+
+class SyncError(Exception):
+    def __init__(self, kind):
+        super().__init__(str(kind))
+        self.kind = kind
+
+
+class Interrupted(Exception):
+    pass
+
+
+errors = types.ModuleType("anki.errors")
+errors.SyncError, errors.SyncErrorKind, errors.Interrupted = SyncError, SyncErrorKind, Interrupted
+sys.modules["anki.errors"] = errors
+sys.modules["anki"].errors = errors
+
+fired: list = []
+
+
+class Hook(list):
+    def __init__(self, name):
+        super().__init__()
+        self.name = name
+
+    def __call__(self, *args):
+        fired.append({"sync_will_start": "will", "sync_did_finish": "did"}.get(self.name, self.name))
+        for fn in list(self):
+            fn(*args)
+
+
+class Hooks:
+    def __getattr__(self, name):
+        h = Hook(name)
+        setattr(self, name, h)
+        return h
+
+
+hooks = Hooks()
+sys.modules["aqt"].gui_hooks = hooks
+shown: list = []
+utils = types.ModuleType("aqt.utils")
+utils.showText = lambda *a, **k: shown.append(a)
+utils.tooltip = lambda *a, **k: shown.append(a)
+sys.modules["aqt.utils"] = utils
+
+auth = ["AUTH"]
+starts: list = []
+draws: list = []
+clicked: list = []
+resets_box = [0]
+out = types.SimpleNamespace(required=0, NO_CHANGES=0, host_number=3, new_endpoint="", server_message="")
+raise_with = None
+
+
+def _sync_collection(a, media):
+    if raise_with is not None:
+        raise raise_with
+    return out
+
+
+def _run_in_background(task, on_done=None, **_kw):
+    fut = concurrent.futures.Future()
+    try:
+        fut.set_result(task())
+    except BaseException as exc:  # noqa: BLE001
+        fut.set_exception(exc)
+    if on_done:
+        on_done(fut)
+    return fut
+
+
+def _clear_auth():
+    auth[0] = None
+
+
+mw = types.SimpleNamespace(
+    pm=types.SimpleNamespace(
+        sync_auth=lambda: auth[0], media_syncing_enabled=lambda: True,
+        set_host_number=lambda n: None, set_current_sync_url=lambda u: None,
+        clear_sync_auth=_clear_auth),
+    col=types.SimpleNamespace(
+        sync_collection=_sync_collection, _load_scheduler=lambda: None,
+        models=types.SimpleNamespace(_clear_cache=lambda: None),
+        db=types.SimpleNamespace(scalar=lambda q: 600_000)),
+    taskman=types.SimpleNamespace(run_in_background=_run_in_background),
+    toolbar=types.SimpleNamespace(draw=lambda: draws.append("draw"),
+                                  update_sync_status=lambda: draws.append("update")),
+    media_syncer=types.SimpleNamespace(is_syncing=lambda: False, start_monitoring=lambda: starts.append("media")),
+    reset=lambda: resets_box.__setitem__(0, resets_box[0] + 1),
+    state="deckBrowser",
+    _can_sync_unattended=lambda: bool(auth[0]),
+    safeMode=False,
+    on_sync_button_clicked=lambda: clicked.append(1),
+    addonManager=Mgr({}),
+)
+sys.modules["aqt"].mw = mw
+A.setup()
+A._enabled = True
+
+section("quiet sync")
+A._last_input = A.clock() - 999
+A._last_attempt = -1e9
+A._tick()
+check("idle tick runs one quiet sync, no window",
+      fired == ["will", "did"] and starts == ["media"] and resets_box[0] == 1, repr((fired, starts, resets_box)))
+check("no dialog or tooltip", shown == [])
+check("Anki's own sync_will_start handler ignores our run", not A._anki_running)
+check("entry says Synced", A.entry_state()["text"].startswith("Synced") and not A.entry_state()["red"],
+      repr(A.entry_state()))
+A._tick()
+check("the 5-minute gap holds", fired == ["will", "did"], repr(fired))
+
+out.required = 2  # anything but NO_CHANGES
+A._last_attempt = -1e9
+A._tick()
+check("full sync result: pending, red, no full sync started",
+      A.entry_state()["text"] == "Full sync needed — click to choose" and A.entry_state()["red"])
+A._last_attempt = -1e9
+A._tick()
+check("pending blocks further quiet syncs", fired.count("will") == 2, repr(fired))
+A._on_anki_sync_start()
+A._on_anki_sync_finish()  # the user pressed y / clicked the entry
+check("Anki's own sync clears pending", not A._full_pending)
+out.required = 0
+
+raise_with = SyncError(SyncErrorKind.NETWORK)
+for i in range(3):
+    A._last_attempt = -1e9
+    A._tick()
+    if i == 1:
+        check("2 failures: still quiet", not A.entry_state()["red"])
+check("3 failures: red retry",
+      A.entry_state() == {"visible": True, "text": "Sync failed — click to retry", "red": True}, repr(A.entry_state()))
+check("still no dialog", shown == [])
+
+raise_with = SyncError(SyncErrorKind.AUTH)
+A._last_attempt = -1e9
+d0 = len(draws)
+A._tick()
+check("auth error logs out silently and redraws as Log In",
+      mw.pm.sync_auth() is None and "draw" in draws[d0:] and A.entry_state()["visible"] is False and shown == [],
+      repr((auth, draws[d0:], A.entry_state())))
+A._last_attempt = -1e9
+n = fired.count("will")
+A._tick()
+check("logged out: nothing runs", fired.count("will") == n)
+
+raise_with = Interrupted()
+auth[0] = "AUTH"
+A._failures = 0
+A._last_attempt = -1e9
+A._tick()
+check("interrupted: no failure counted", A._failures == 0)
+raise_with = None
+
+section("toolbar follows login")
+auth[0] = None
+d0 = len(draws)
+A._tick()
+check("logout elsewhere → draw() within a tick", "draw" in draws[d0:])
+auth[0] = "AUTH"
+n = draws.count("draw")
+A._on_anki_sync_start()
+A._on_anki_sync_finish()
+check("login via Log In → draw(), since redraw() keeps the link", draws.count("draw") == n + 1)
+links = [ANKI, OTHER]
+A._on_links(links, mw.toolbar)
+check("logged in: link hidden in place", "display:none" in links[0] and links[1] == OTHER)
+A.set_enabled(False)
+links = [ANKI]
+A._on_links(links, mw.toolbar)
+check("switch off: Anki's button back", links == [ANKI])
+A._last_attempt = -1e9
+A._last_input = A.clock() - 999
+n = fired.count("will")
+A._tick()
+check("switch off: tick does nothing", fired.count("will") == n)
+A.set_enabled(True)
+
+section("review")
+mw.state = "review"
+A._last_attempt = -1e9
+n = fired.count("will")
+A._tick()
+check("never in review", fired.count("will") == n)
+A._on_state("overview", "review")
+mw.state = "overview"
+check("leaving review records the time", A._review_left_at is not None)
+
+section("listeners")
+got: list = []
+A.add_listener(got.append)
+A._tick()
+check("a tick notifies listeners with entry_state", got and got[-1] == A.entry_state())
+A.remove_listener(got.append)
+
+section("sync_now")
+A.sync_now()
+check("deferred: nothing inside the call", clicked == [])
+app.processEvents()
+check("...Anki's own sync a tick later", clicked == [1])
+
 raise SystemExit(report())
