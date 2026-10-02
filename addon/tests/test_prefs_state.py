@@ -141,4 +141,13 @@ check("turning it off patches the key and emits its effect",
       _c.patch.get("hand_drawn") is False and ("hand_drawn", False) in _c.effects, repr(_c))
 check("an unchanged value emits nothing", not any(e[0] == "hand_drawn" for e in ps.PrefsState.from_config({}).commit().effects))
 
+section("auto_sync (Sync automatically)")
+_as = ps.PrefsState.from_config({})
+check("auto_sync defaults on", _as.get("auto_sync") is True)
+check("a corrupt value reads on", ps.PrefsState.from_config({"auto_sync": None}).get("auto_sync") is True)
+_as.set("auto_sync", False)
+_c = _as.commit()
+check("off saves and emits the effect", _c.patch.get("auto_sync") is False and ("auto_sync", False) in _c.effects, repr(_c))
+check("unchanged emits nothing", not any(e[0] == "auto_sync" for e in ps.PrefsState.from_config({}).commit().effects))
+
 raise SystemExit(report())

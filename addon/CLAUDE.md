@@ -456,7 +456,7 @@ same reason.
   (`index_queue._report_task`, key `index`, ✕ = `cancel_all`), folder
   scan FAILURES only (`rescan`; the running scan is silent by request),
   the Browse retention % (`retention`), Anki's collection and media sync
-  hooks (`sync`, `media`), and Preferences' Ollama install/pull
+  hooks (`sync`, `media`; `auto_sync`'s quiet syncs fire the same hooks), and Preferences' Ollama install/pull
   (`ollama`). An end message lingers `LINGER_S` (4 s); `end(...,
   error=True)` stays, in red, until the next `begin`. Tasks younger than
   `SHOW_DELAY_S` (0.5 s) aren't drawn (no flashing). The QSS goes on Qt's
@@ -478,6 +478,35 @@ same reason.
   every bar. Live: Preferences previews it (appearance preview →
   `top_bar.refresh` redraws both webviews; `set_scale` the strips) and
   reverts on Cancel.
+- `auto_sync.py` (aqt-free above its "aqt glue" divider; spec
+  [auto-sync](docs/superpowers/specs/2026-10-02-auto-sync-design.md),
+  config `auto_sync`, default on): Klaus syncs with AnkiWeb by itself —
+  after `IDLE_S` (120 s) without a key, click or scroll (an app-wide
+  filter that only records), or `AFTER_REVIEW_S` (30 s) after leaving a
+  review once input has been quiet `AFTER_REVIEW_QUIET_S`; at most every
+  `MIN_GAP_S` (300 s); never in review; a `TICK_MS` timer per profile.
+  **The quiet sync calls `mw.col.sync_collection` itself, never
+  `aqt.sync.sync_collection`**: Anki's opens its progress window on every
+  run, a warning dialog on every error and the upload/download question
+  for a full sync. Klaus fires `sync_will_start`/`sync_did_finish` around
+  it (its own handlers ignore that fire via `_quiet_running`), counts
+  errors silently (red entry at `FAIL_LIMIT` 3), clears auth on an AUTH
+  error, and on any result but NO_CHANGES only marks **full sync
+  pending** — the entry ("Full sync needed — click to choose") runs
+  Anki's own sync, which asks. Anki's own syncs (Y, the entry, Log In,
+  profile open/close — untouched) reset failures and pending. **Anki's
+  Sync link is hidden, never removed** (`link_html` in
+  `top_toolbar_did_init_links`): `set_sync_active`/`updateSyncColor`
+  look up `id="sync"`/`sync-spinner`; logged out it reads **Log In**
+  (same `sync` pycmd: Anki logs in, then syncs). **`toolbar.redraw()`
+  does not rebuild links** — only `draw()` re-runs that hook — so a
+  login-state change draws through `_redraw_if_login_changed` (tick,
+  sync end). The entry (`entry_state()`: last sync from `select ls from
+  col`, ms) renders in `bottom_row` (`#klaus-sync`, `SYNC_CMD`) and
+  `StatusBar.sync_label`, hidden while logged out. Stands down whole
+  (nothing scheduled, toolbar untouched, the Preferences switch disabled
+  and saying why) while an enabled add-on is named like "Auto Sync"
+  (`standing_down`; matched by name, its AnkiWeb id is unverified).
 - `addons_menu.py`: every top-level menu bar entry that isn't Anki's own
   (`MAIN_MENUS`/`BROWSE_MENUS`, the `window.form` names from main.ui and
   browser.ui) moves whole under ONE "Add-ons" menu before Help, in the main

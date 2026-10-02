@@ -186,6 +186,13 @@ removed. Use the external MCP client setup below.
   text boxes and notes in Excalifont, like Excalidraw; each mark keeps the
   same wobble every time. `false` draws today's clean shapes in Helvetica.
   The PDF file is written the same way either way.
+- **auto_sync**: Default `true` (Preferences → General → "Sync
+  automatically"). Klaus syncs with AnkiWeb in the background — after 2
+  idle minutes or 30 s after a review, at most every 5 minutes, never
+  during review — and hides Anki's Sync button (it reads **Log In** while
+  logged out). Press Y or click the sync status to sync now. A full sync
+  is never started automatically. `false` brings Anki's Sync button back.
+  Ignored while the Auto Sync add-on is installed and enabled.
 - **browse_highlight_default**: Default `true`. Whether Browse's "Highlight
   Search Results" is on by default in a fresh Browser window — while
   searching, matched terms are highlighted in the editor pane of the

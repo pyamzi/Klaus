@@ -967,6 +967,26 @@ def manage_models_dialog(*_args: Any) -> None:
         image_crop_cb,
     )
 
+    # Sync automatically (spec 2026-10-02-auto-sync-design.md). With the
+    # Auto Sync add-on on, Klaus stands down and the switch says why.
+    auto_sync_cb = Md3Switch()
+    auto_sync_cb.setObjectName("auto_sync")
+    try:
+        from . import auto_sync as _auto_sync_mod
+
+        _auto_sync_off = bool(_auto_sync_mod.standing_down_now())
+    except Exception:  # noqa: BLE001
+        _auto_sync_off = False
+    _row(
+        general_layout,
+        "Sync automatically",
+        "The Auto Sync add-on is installed and handles syncing." if _auto_sync_off else
+        "Sync with AnkiWeb in the background and hide the Sync button. "
+        "Press Y or click the sync status to sync now.",
+        auto_sync_cb,
+    )
+    auto_sync_cb.setEnabled(not _auto_sync_off)
+
     # Library folder (K-070, part A of K-057) — where Library PDFs live
     # on disk. "Change…" re-runs the same guarded migration the
     # per-profile-open setup prompt uses (setup_flow._library_root_check),
@@ -2255,6 +2275,13 @@ def manage_models_dialog(*_args: Any) -> None:
                 pdfjs_viewer.set_hand_drawn_all(bool(effect[1]))
             except Exception as _exc:
                 print(f"[klausmate] hand-drawn push failed: {_exc}")
+        elif kind == "auto_sync":
+            try:
+                from . import auto_sync
+
+                auto_sync.set_enabled(bool(effect[1]))
+            except Exception as _exc:
+                print(f"[klausmate] auto sync switch failed: {_exc}")
         elif kind == "appearance":
             # Paint through the same one path as every live edit, THEN
             # drop the override: stored config now holds identical
@@ -2571,6 +2598,8 @@ def manage_models_dialog(*_args: Any) -> None:
                  image_crop_cb.toggled, refresh_dirty),
         _Binding(state, "hand_drawn", hand_drawn_cb.isChecked, hand_drawn_cb.setChecked,
                  hand_drawn_cb.toggled, refresh_dirty),
+        _Binding(state, "auto_sync", auto_sync_cb.isChecked, auto_sync_cb.setChecked,
+                 auto_sync_cb.toggled, refresh_dirty),
         _Binding(state, "endpoint", endpoint_edit.text, endpoint_edit.setText, endpoint_edit.textEdited, refresh_dirty),
         _Binding(state, "embedding_model", embed_model_edit.text, embed_model_edit.setText,
                  embed_model_edit.textEdited, refresh_dirty),

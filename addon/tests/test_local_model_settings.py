@@ -562,4 +562,27 @@ check('…the edit is still pending and the baseline moved to the saved endpoint
       _st.pending().get('endpoint') == 'http://127.0.0.1:11499' and _st.view() and (_st.discard() or _st.get('endpoint') == 'http://127.0.0.1:11435'),
       str(_st.view().get('endpoint')))
 dlg.accept(); drain()
+
+# Sync automatically (docs/superpowers/specs/2026-10-02-auto-sync-design.md)
+_as_calls = []
+_auto = importlib.import_module('klausmate.auto_sync')
+_auto.set_enabled = lambda on: _as_calls.append(on)
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_as_sw = dlg.findChild(QtWidgets.QAbstractButton, 'auto_sync')
+check('General has "Sync automatically", on by default',
+      _as_sw is not None and _as_sw.isChecked() and _as_sw.isEnabled()
+      and any(l.text() == 'Sync automatically' for l in dlg.findChildren(QtWidgets.QLabel)))
+if _as_sw is not None:
+    _as_sw.setChecked(False)
+    save_preferences()
+check('Save with it off stores it and tells auto_sync', store.get('auto_sync') is False and _as_calls == [False],
+      repr((store.get('auto_sync'), _as_calls)))
+dlg.accept(); drain()
+_auto.standing_down_now = lambda: True
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_as_sw = dlg.findChild(QtWidgets.QAbstractButton, 'auto_sync')
+check('with the Auto Sync add-on on, the switch is disabled and says why',
+      _as_sw is not None and not _as_sw.isEnabled()
+      and any(l.text() == 'The Auto Sync add-on is installed and handles syncing.' for l in dlg.findChildren(QtWidgets.QLabel)))
+dlg.accept(); drain()
 raise SystemExit(report())
