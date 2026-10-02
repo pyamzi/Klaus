@@ -23,6 +23,7 @@ from . import tasks
 PREFS_CMD = "klausmate_row_prefs"
 TASKS_CMD = "klausmate_row_tasks"
 SYNC_CMD = "klausmate_row_sync"
+SYNC_ICON_PX = 16
 ROW_CONTEXTS = {"DeckBrowserBottomBar", "OverviewBottomBar"}
 ROW_STATES = {"deckBrowser", "overview"}
 GEAR_PX = 16
@@ -81,9 +82,10 @@ function klausFit() {
 }
 function klausSync(s) {
   var e = document.getElementById('klaus-sync'); if (!e) return;
-  e.textContent = s.text; e.title = s.text;
+  e.innerHTML = s.svg; e.title = s.tip; e.setAttribute('aria-label', s.tip);
   e.style.display = s.visible ? '' : 'none';
   e.classList.toggle('kr-sync-red', !!s.red);
+  e.classList.toggle('kr-sync-spin', s.state === 'syncing');
   klausFit();
 }
 window.addEventListener('resize', klausFit);
@@ -122,15 +124,22 @@ def row_html(state: dict, night: bool, sync: dict | None = None) -> str:
 @keyframes kr-slide {{ from {{ left: -30%; }} to {{ left: 100%; }} }}
 #klaus-status .kr-text {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 #klaus-status.kr-error .kr-text {{ color: {c['red_text']}; }}
-#klaus-sync {{ white-space: nowrap; cursor: default; padding: 2px 4px; border-radius: 5px; }}
+#klaus-sync {{ display: flex; padding: 3px; border-radius: 5px; cursor: default; }}
 #klaus-sync:hover, #klaus-sync:focus-visible {{ background: {c['hover_subtle']}; outline: none; }}
 #klaus-sync.kr-sync-red {{ color: {c['red_text']}; }}
+#klaus-sync.kr-sync-spin svg {{ animation: kr-spin 1s linear infinite; }}
+body.reduce-motion #klaus-sync.kr-sync-spin svg {{ animation: none; }}
+@keyframes kr-spin {{ to {{ transform: rotate(360deg); }} }}
 """
     import html as _html
 
-    sync = sync or {"visible": False, "text": "", "red": False}
-    sync_text = _html.escape(sync.get("text", ""))
-    sync_attrs = (' class="kr-sync-red"' if sync.get("red") else "") + (
+    from .auto_sync import icon_svg
+
+    sync = sync or {"visible": False, "state": "never", "tip": "", "red": False}
+    sync_tip = _html.escape(sync.get("tip", ""), quote=True)
+    classes = " ".join(c for c, on in (("kr-sync-red", sync.get("red")),
+                                       ("kr-sync-spin", sync.get("state") == "syncing")) if on)
+    sync_attrs = (f' class="{classes}"' if classes else "") + (
         "" if sync.get("visible") else ' style="display:none"')
     return (
         f"<style>{css}</style>"
@@ -139,11 +148,13 @@ def row_html(state: dict, night: bool, sync: dict | None = None) -> str:
         f'onclick=\'pycmd("{PREFS_CMD}")\' onkeydown=\'klausKey(event, "{PREFS_CMD}")\'>{gear_svg()}</div>'
         "</div>"
         '<div id="klaus-status" class="klaus-edge">'
-        f'<div id="klaus-sync"{sync_attrs} role="button" tabindex="0" title="{sync_text}" '
-        f'onclick=\'pycmd("{SYNC_CMD}")\' onkeydown=\'klausKey(event, "{SYNC_CMD}")\'>{sync_text}</div>'
         f'<div class="kr-readout" role="button" tabindex="0" onclick=\'pycmd("{TASKS_CMD}")\' '
         f'onkeydown=\'klausKey(event, "{TASKS_CMD}")\'>'
         '<span class="kr-text"></span><div class="kr-track"><div class="kr-fill"></div></div></div>'
+        # The sync icon, at the far right; its tooltip says what it means.
+        f'<div id="klaus-sync"{sync_attrs} role="button" tabindex="0" title="{sync_tip}" aria-label="{sync_tip}" '
+        f'onclick=\'pycmd("{SYNC_CMD}")\' onkeydown=\'klausKey(event, "{SYNC_CMD}")\'>'
+        f'{icon_svg(sync.get("state", "never"), SYNC_ICON_PX)}</div>'
         "</div>"
         f"<script>{_JS}klausStatus({json.dumps(state)});</script>"
     )
@@ -240,6 +251,9 @@ def _push_sync(state: dict) -> None:
         from aqt import mw
 
         if getattr(mw, "state", "") in ROW_STATES:
+            from .auto_sync import icon_svg
+
+            state = dict(state, svg=icon_svg(state.get("state", "never"), SYNC_ICON_PX))
             mw.bottomWeb.eval(f"window.klausSync && klausSync({json.dumps(state)});")
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] bottom row sync update failed: {exc}")

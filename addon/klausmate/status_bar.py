@@ -220,6 +220,70 @@ class _GearButton(QToolButton):
             painter.end()
 
 
+class _SyncIcon(_GearButton):
+    """The auto-sync icon: auto_sync's state drawn from the same SVG the
+    deck row uses, spinning while a sync runs; the tooltip explains it."""
+
+    SPIN_STEP = 30  # degrees per frame, ~1 turn a second at SPIN_MS
+    SPIN_MS = 83
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent)
+        self.state = "never"
+        self.red = False
+        self.angle = 0
+        self._spin = QTimer(self)
+        self._spin.setInterval(self.SPIN_MS)
+        self._spin.timeout.connect(self._turn)
+        self.setToolTip("")
+        self.setAccessibleName("")
+
+    def _turn(self) -> None:
+        self.angle = (self.angle + self.SPIN_STEP) % 360
+        self.update()
+
+    def set_state(self, state: str, tip: str, red: bool) -> None:
+        self.state, self.red = state, red
+        self.setToolTip(tip)
+        self.setAccessibleName(tip)
+        if state == "syncing":
+            if not self._spin.isActive():
+                self._spin.start()
+        else:
+            self._spin.stop()
+            self.angle = 0
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt override
+        if self.width() <= 0 or self.height() <= 0:
+            return
+        painter = QPainter(self)
+        try:
+            from PyQt6.QtSvg import QSvgRenderer
+
+            from . import theme
+            from .auto_sync import icon_svg
+            from .browse_toggles import CHIP_RADIUS, icon_size
+
+            c = theme.palette(theme.night_mode())
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            w, h = float(self.width()), float(self.height())
+            if self.isDown() or self.underMouse() or self.show_focus():
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(c["hover_subtle"]))
+                painter.drawRoundedRect(QRectF(0.0, 0.0, w, h), CHIP_RADIUS, CHIP_RADIUS)
+            size = icon_size(w, h)
+            colour = c["red_text"] if self.red else c["text_muted"]
+            renderer = QSvgRenderer(icon_svg(self.state, 24, colour).encode("utf-8"))
+            painter.translate(w / 2.0, h / 2.0)
+            painter.rotate(self.angle)
+            renderer.render(painter, QRectF(-size / 2.0, -size / 2.0, size, size))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] status bar sync icon paint failed: {exc}")
+        finally:
+            painter.end()
+
+
 class StatusBar(QWidget):
     def __init__(self, window, browser=None) -> None:
         super().__init__(window)
@@ -246,13 +310,6 @@ class StatusBar(QWidget):
             row.setSpacing(2)
             self._add_toggles(row, browser)
         row.addStretch(1)
-        # The auto-sync entry ("Synced 4 min ago"), left of the task text;
-        # a click is Anki's own sync (auto_sync.sync_now).
-        self.sync_label = QLabel("", self)
-        self.sync_label.hide()
-        self.sync_label.installEventFilter(_ClickFilter(self, lambda: _sync_now()))
-        row.addWidget(self.sync_label)
-        row.addSpacing(10)
         self.progress = QProgressBar(self)
         self.progress.setFixedWidth(PROGRESS_PX)
         self.progress.setTextVisible(False)
@@ -266,6 +323,12 @@ class StatusBar(QWidget):
         row.addWidget(self.label)
         row.addSpacing(6)
         row.addWidget(self.progress)
+        # The auto-sync icon at the far right; a click is Anki's own sync.
+        self.sync_label = _SyncIcon(self)
+        self.sync_label.hide()
+        self.sync_label.clicked.connect(lambda *_a: _sync_now())
+        row.addSpacing(4)
+        row.addWidget(self.sync_label)
         self.apply_theme()
 
         # The listener must not keep a deleted bar alive, nor touch one:
@@ -309,13 +372,7 @@ class StatusBar(QWidget):
             print(f"[klausmate] status bar sync entry failed: {exc}")
 
     def refresh_sync(self, state: dict) -> None:
-        self.sync_label.setText(state.get("text", ""))
-        self.sync_label.setToolTip(state.get("text", ""))
-        red = bool(state.get("red"))
-        if self.sync_label.property("error") is not red:
-            self.sync_label.setProperty("error", red)
-            self.sync_label.style().unpolish(self.sync_label)
-            self.sync_label.style().polish(self.sync_label)
+        self.sync_label.set_state(state.get("state", "never"), state.get("tip", ""), bool(state.get("red")))
         self.sync_label.setVisible(bool(state.get("visible")))
 
     def _add_toggles(self, row, browser) -> None:
@@ -468,7 +525,7 @@ def _size(bar: StatusBar) -> None:
         native.setFixedHeight(strip_height())
     bar.setFixedHeight(strip_height() - STRIP_INSET)
     n = scaled(BUTTON_SIZE)
-    for btn in (bar.gear, bar.sidebar_btn, bar.editor_btn):
+    for btn in (bar.gear, bar.sidebar_btn, bar.editor_btn, getattr(bar, "sync_label", None)):
         if btn is not None:
             btn.setFixedSize(n, n)
     bar.progress.setFixedWidth(scaled(PROGRESS_PX))
@@ -572,14 +629,6 @@ def _report(fn) -> None:
         print(f"[klausmate] status bar report failed: {exc}")
 
 
-def on_sync_will_start() -> None:
-    _report(lambda: tasks.begin("sync", "Syncing…"))
-
-
-def on_sync_did_finish() -> None:
-    _report(lambda: tasks.end("sync"))
-
-
 def on_media_sync_did_start_or_stop(running: bool) -> None:
     _report(lambda: tasks.begin("media", "Syncing media…") if running else tasks.end("media"))
 
@@ -621,8 +670,6 @@ def setup() -> None:
 
     browse_toggles.setup_top_bar()
     for name, fn in (
-        ("sync_will_start", on_sync_will_start),
-        ("sync_did_finish", on_sync_did_finish),
         ("media_sync_did_start_or_stop", on_media_sync_did_start_or_stop),
         ("media_sync_did_progress", on_media_sync_did_progress),
     ):

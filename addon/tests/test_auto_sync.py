@@ -40,13 +40,22 @@ check("after review still respects the gap", not d(1000, last_input=995, review_
 section("copy")
 check("ago", [A.ago(s) for s in (0, 59, 60, 240, 3599, 3600, 7200, 86400 * 3)] ==
       ["just now", "just now", "1 min ago", "4 min ago", "59 min ago", "1 h ago", "2 h ago", "3 d ago"])
-check("synced", A.entry_text(1240, 1000, 0, False) == ("Synced 4 min ago", False))
-check("never", A.entry_text(1000, None, 0, False) == ("Not synced yet", False))
-check("never (0)", A.entry_text(1000, 0, 0, False) == ("Not synced yet", False))
-check("2 failures stay quiet", A.entry_text(1240, 1000, 2, False) == ("Synced 4 min ago", False))
-check("3 failures: red", A.entry_text(1240, 1000, 3, False) == ("Sync failed — click to retry", True))
-check("full pending beats failures",
-      A.entry_text(1240, 1000, 5, True) == ("Full sync needed — click to choose", True))
+E = A.entry
+check("synced", E(1240, 1000, 0, False, False) == ("synced", "Synced with AnkiWeb 4 min ago. Click to sync now."))
+check("never", E(1000, None, 0, False, False) == ("never", "Not synced with AnkiWeb yet. Click to sync now."))
+check("never (0)", E(1000, 0, 0, False, False)[0] == "never")
+check("2 failures stay quiet", E(1240, 1000, 2, False, False)[0] == "synced")
+check("3 failures: failed", E(1240, 1000, 3, False, False) ==
+      ("failed", "Couldn't sync with AnkiWeb. Klaus keeps retrying; click to try now."))
+check("full pending beats failures", E(1240, 1000, 5, True, False) ==
+      ("full", "AnkiWeb needs a full sync. Click to choose whether to upload or download."))
+check("running beats everything", E(1240, 1000, 5, True, True) == ("syncing", "Syncing with AnkiWeb…"))
+for st in A.STATES:
+    svg = A.icon_svg(st, 16)
+    check(f"icon {st}: one 16px stroked svg in currentColor",
+          svg.startswith("<svg") and 'width="16"' in svg and 'stroke="currentColor"' in svg and svg.count("<path") >= 1, svg)
+check("icons differ per state", len({A.icon_svg(s, 16) for s in A.STATES}) == len(A.STATES))
+check("a colour can be baked in for Qt", 'stroke="#ff0000"' in A.icon_svg("failed", 16, "#ff0000"))
 
 section("link")
 ANKI = ('<a class=hitem tabindex="-1" aria-label="Synchroniser" title="Raccourci : Y" id="sync" '
@@ -250,7 +259,7 @@ check("idle tick runs one quiet sync, no window",
       fired == ["will", "did"] and starts == ["media"] and resets_box[0] == 1, repr((fired, starts, resets_box)))
 check("no dialog or tooltip", shown == [])
 check("Anki's own sync_will_start handler ignores our run", not A._anki_running)
-check("entry says Synced", A.entry_state()["text"].startswith("Synced") and not A.entry_state()["red"],
+check("entry says Synced", A.entry_state()["state"] == "synced" and not A.entry_state()["red"],
       repr(A.entry_state()))
 A._tick()
 check("the 5-minute gap holds", fired == ["will", "did"], repr(fired))
@@ -259,7 +268,7 @@ out.required = 2  # anything but NO_CHANGES
 A._last_attempt = -1e9
 A._tick()
 check("full sync result: pending, red, no full sync started",
-      A.entry_state()["text"] == "Full sync needed — click to choose" and A.entry_state()["red"])
+      A.entry_state()["state"] == "full" and A.entry_state()["red"])
 A._last_attempt = -1e9
 A._tick()
 check("pending blocks further quiet syncs", fired.count("will") == 2, repr(fired))
@@ -275,7 +284,9 @@ for i in range(3):
     if i == 1:
         check("2 failures: still quiet", not A.entry_state()["red"])
 check("3 failures: red retry",
-      A.entry_state() == {"visible": True, "text": "Sync failed — click to retry", "red": True}, repr(A.entry_state()))
+      A.entry_state() == {"visible": True, "state": "failed",
+                          "tip": "Couldn't sync with AnkiWeb. Klaus keeps retrying; click to try now.", "red": True},
+      repr(A.entry_state()))
 check("still no dialog", shown == [])
 
 raise_with = SyncError(SyncErrorKind.AUTH)
@@ -356,7 +367,8 @@ A._last_input = A.clock() - 999
 A._tick()
 check("a no-change sync does not reset the main window", resets_box[0] == r0, str(resets_box))
 check("...but still fires sync_did_finish", fired[-1] == "did")
-check("...and the entry says Synced just now", A.entry_state()["text"] == "Synced just now", repr(A.entry_state()))
+check("...and the entry says Synced just now",
+      A.entry_state()["tip"] == "Synced with AnkiWeb just now. Click to sync now.", repr(A.entry_state()))
 out.changed = True
 A._last_attempt = -1e9
 A._tick()
@@ -388,6 +400,23 @@ mw.col = real_col
 A._quiet_running = False
 A._on_profile_close()
 check("no abort when nothing runs", aborted == [1])
+
+section("the icon spins while a sync runs")
+seen: list = []
+A.add_listener(seen.append)
+A._on_anki_sync_start()
+check("Anki's own sync start notifies: syncing", seen and seen[-1]["state"] == "syncing", repr(seen[-1:]))
+A._on_anki_sync_finish()
+check("...and its end stops the spin", seen[-1]["state"] != "syncing")
+during: list = []
+real_sc = mw.col.sync_collection
+mw.col.sync_collection = lambda a, m: (during.append(A.entry_state()["state"]), real_sc(a, m))[1]
+A._last_attempt = -1e9
+A._last_input = A.clock() - 999
+A._tick()
+check("a quiet sync shows syncing while it runs", during == ["syncing"], repr(during))
+mw.col.sync_collection = real_sc
+A.remove_listener(seen.append)
 
 section("sync_now")
 A.sync_now()

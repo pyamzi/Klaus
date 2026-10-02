@@ -982,7 +982,7 @@ def manage_models_dialog(*_args: Any) -> None:
         "Sync automatically",
         "The Auto Sync add-on is installed and handles syncing." if _auto_sync_off else
         "Sync with AnkiWeb in the background and hide the Sync button. "
-        "Press Y or click the sync status to sync now.",
+        "Press Y or click the sync icon to sync now.",
         auto_sync_cb,
     )
     auto_sync_cb.setEnabled(not _auto_sync_off)

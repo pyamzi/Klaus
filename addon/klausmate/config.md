@@ -190,7 +190,7 @@ removed. Use the external MCP client setup below.
   automatically"). Klaus syncs with AnkiWeb in the background — after 2
   idle minutes or 30 s after a review, at most every 5 minutes, never
   during review — and hides Anki's Sync button (it reads **Log In** while
-  logged out). Press Y or click the sync status to sync now. A full sync
+  logged out). Press Y or click the sync icon (bottom right; hover it for what it means) to sync now. A full sync
   is never started automatically. `false` brings Anki's Sync button back.
   Ignored while the Auto Sync add-on is installed and enabled.
 - **browse_highlight_default**: Default `true`. Whether Browse's "Highlight

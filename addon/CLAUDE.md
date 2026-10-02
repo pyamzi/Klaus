@@ -456,7 +456,7 @@ same reason.
   (`index_queue._report_task`, key `index`, ✕ = `cancel_all`), folder
   scan FAILURES only (`rescan`; the running scan is silent by request),
   the Browse retention % (`retention`), Anki's collection and media sync
-  hooks (`sync`, `media`; `auto_sync`'s quiet syncs fire the same hooks), and Preferences' Ollama install/pull
+  hook (`media`; a collection sync is the sync icon's spin, not a task), and Preferences' Ollama install/pull
   (`ollama`). An end message lingers `LINGER_S` (4 s); `end(...,
   error=True)` stays, in red, until the next `begin`. Tasks younger than
   `SHOW_DELAY_S` (0.5 s) aren't drawn (no flashing). The QSS goes on Qt's
@@ -502,8 +502,13 @@ same reason.
   does not rebuild links** — only `draw()` re-runs that hook — so a
   login-state change draws through `_redraw_if_login_changed` (tick,
   sync end). The entry (`entry_state()`: last sync from `select ls from
-  col`, ms) renders in `bottom_row` (`#klaus-sync`, `SYNC_CMD`) and
-  `StatusBar.sync_label`, hidden while logged out. Stands down whole
+  col`, ms) is an ICON at the far bottom right — `entry()` gives a state
+  (`synced`/`syncing`/`never`/`failed`/`full`) and a tooltip saying what
+  it means and what a click does; `icon_svg` draws it (24-unit outline
+  paths, `currentColor`) for both `bottom_row` (`#klaus-sync`,
+  `SYNC_CMD`, CSS spin off under `body.reduce-motion`) and
+  `status_bar._SyncIcon` (`sync_label`, QSvgRenderer, timer spin) —
+  hidden while logged out. Stands down whole
   (nothing scheduled, toolbar untouched, the Preferences switch disabled
   and saying why) while an enabled add-on is named like "Auto Sync"
   (`standing_down`; matched by name, its AnkiWeb id is unverified).

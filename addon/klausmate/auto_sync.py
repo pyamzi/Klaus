@@ -38,16 +38,40 @@ def ago(seconds: float) -> str:
     return f"{s // 86400} d ago"
 
 
-def entry_text(now: float, last_sync: float | None, failures: int,
-               full_pending: bool) -> tuple[str, bool]:
-    """The sync entry's text and whether it is red."""
+STATES = ("synced", "syncing", "never", "failed", "full")
+RED_STATES = ("failed", "full")
+
+
+def entry(now: float, last_sync: float | None, failures: int,
+          full_pending: bool, running: bool) -> tuple[str, str]:
+    """The sync icon's state and its tooltip, which says what the icon
+    means and what a click does."""
+    if running:
+        return "syncing", "Syncing with AnkiWeb…"
     if full_pending:
-        return "Full sync needed — click to choose", True
+        return "full", "AnkiWeb needs a full sync. Click to choose whether to upload or download."
     if failures >= FAIL_LIMIT:
-        return "Sync failed — click to retry", True
+        return "failed", "Couldn't sync with AnkiWeb. Klaus keeps retrying; click to try now."
     if not last_sync:
-        return "Not synced yet", False
-    return f"Synced {ago(now - last_sync)}", False
+        return "never", "Not synced with AnkiWeb yet. Click to sync now."
+    return "synced", f"Synced with AnkiWeb {ago(now - last_sync)}. Click to sync now."
+
+
+# 24-unit outline icons, drawn here (no icon font in Anki's webviews or Qt).
+_CLOUD = "M7 18h10a4 4 0 0 0 .6-7.96A5.5 5.5 0 0 0 7 9.05A4.5 4.5 0 0 0 7 18z"
+_ICON_PATHS = {
+    "synced": (_CLOUD, "M9.5 14l2 2l3.5-3.5"),
+    "never": (_CLOUD,),
+    "failed": (_CLOUD, "M10 12l4 4M14 12l-4 4"),
+    "syncing": ("M20 11A8.1 8.1 0 0 0 4.5 9M4 5v4h4", "M4 13a8.1 8.1 0 0 0 15.5 2M20 19v-4h-4"),
+    "full": ("M7 3v18M4 6l3-3l3 3", "M17 21V3M14 18l3 3l3-3"),
+}
+
+
+def icon_svg(state: str, px: int, color: str = "currentColor") -> str:
+    paths = "".join(f'<path d="{d}"/>' for d in _ICON_PATHS.get(state, _ICON_PATHS["never"]))
+    return (f'<svg width="{px}" height="{px}" viewBox="0 0 24 24" fill="none" stroke="{color}" '
+            f'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{paths}</svg>')
 
 
 def is_sync_link(html: str) -> bool:
@@ -158,8 +182,9 @@ def _read_last_sync() -> None:
 
 
 def entry_state() -> dict:
-    text, red = entry_text(time.time(), _last_sync, _failures, _full_pending)
-    return {"visible": _logged_in(), "text": text, "red": red}
+    state, tip = entry(time.time(), _last_sync, _failures, _full_pending,
+                       _quiet_running or _anki_running)
+    return {"visible": _logged_in(), "state": state, "tip": tip, "red": state in RED_STATES}
 
 
 def add_listener(fn: Callable[[dict], None]) -> None:
@@ -253,6 +278,7 @@ def _run_quiet() -> None:
     _last_attempt = clock()
     _review_left_at = None
     _quiet_running = True
+    _notify()  # the icon spins
     try:
         gui_hooks.sync_will_start()
         auth = mw.pm.sync_auth()
@@ -346,6 +372,7 @@ def _on_anki_sync_start() -> None:
     global _anki_running
     if not _quiet_running:
         _anki_running = True
+        _notify()  # the icon spins
 
 
 def _on_anki_sync_finish() -> None:

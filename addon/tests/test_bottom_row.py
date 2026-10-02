@@ -183,13 +183,19 @@ section("the sync entry (auto sync)")
 auto = importlib.import_module("klausmate.auto_sync")
 synced: list = []
 auto.sync_now = lambda: synced.append(1)
-html = br.row_html(br.row_state([], 1000.0), False, {"visible": True, "text": "Synced 4 min ago", "red": False})
-check("the entry sits in the right edge, before the readout",
-      'id="klaus-sync"' in html and html.index('id="klaus-sync"') < html.index('class="kr-readout"')
-      and "Synced 4 min ago" in html and br.SYNC_CMD in html, html[-900:])
-red = br.row_html(br.row_state([], 1000.0), False, {"visible": True, "text": "Sync failed — click to retry", "red": True})
+TIP = "Synced with AnkiWeb 4 min ago. Click to sync now."
+html = br.row_html(br.row_state([], 1000.0), False, {"visible": True, "state": "synced", "tip": TIP, "red": False})
+check("the icon sits at the far right, after the readout",
+      'id="klaus-sync"' in html and html.index('id="klaus-sync"') > html.index('class="kr-readout"')
+      and br.SYNC_CMD in html, html[-900:])
+check("...an icon, no text; the tooltip explains it",
+      auto.icon_svg("synced", br.SYNC_ICON_PX) in html and f'title="{TIP}"' in html and f'aria-label="{TIP}"' in html
+      and ">Synced" not in html)
+red = br.row_html(br.row_state([], 1000.0), False, {"visible": True, "state": "failed", "tip": "x", "red": True})
 check("red state carries the error class", "kr-sync-red" in red)
-off = br.row_html(br.row_state([], 1000.0), False, {"visible": False, "text": "", "red": False})
+spin = br.row_html(br.row_state([], 1000.0), False, {"visible": True, "state": "syncing", "tip": "x", "red": False})
+check("syncing spins (and stops under reduce-motion)", "kr-sync-spin" in spin and "reduce-motion" in spin)
+off = br.row_html(br.row_state([], 1000.0), False, {"visible": False, "state": "never", "tip": "", "red": False})
 check("hidden when logged out", 'id="klaus-sync"' in off and 'style="display:none"' in off)
 check("the sync click is deferred a tick",
       br._on_js_message((False, None), br.SYNC_CMD, None) == (True, None) and synced == [])
@@ -197,11 +203,12 @@ app.processEvents()
 check("...then runs sync_now", synced == [1], str(synced))
 evals.clear()
 mw.state = "overview"
-br._push_sync({"visible": True, "text": "Synced just now", "red": False})
-check("live update evals klausSync on the deck screens", any("klausSync(" in e for e in evals), str(evals))
+br._push_sync({"visible": True, "state": "full", "tip": "t", "red": True})
+check("live update evals klausSync with the icon on the deck screens",
+      any("klausSync(" in e and "svg" in e for e in evals), str(evals))
 evals.clear()
 mw.state = "review"
-br._push_sync({"visible": True, "text": "Synced just now", "red": False})
+br._push_sync({"visible": True, "state": "synced", "tip": "t", "red": False})
 check("...never during review", evals == [])
 mw.state = "deckBrowser"
 check("setup listens to auto sync", br._push_sync in auto._listeners)

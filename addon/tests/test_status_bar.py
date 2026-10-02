@@ -217,10 +217,8 @@ check("the main window gets no Qt bar: its row is Anki's own (bottom_row)",
 
 section("sync and media sync report")
 tasks.run_on_main = lambda fn: fn()
-sb.on_sync_will_start()
-check("a sync shows while it runs", tasks.snapshot()[0].key == "sync")
-sb.on_sync_did_finish()
-check("...and goes when it finishes", all(t.key != "sync" for t in tasks.snapshot()))
+check("a collection sync is the sync icon's spin, not a readout task",
+      not hasattr(sb, "on_sync_will_start") and not hasattr(sb, "on_sync_did_finish"))
 sb.on_media_sync_did_start_or_stop(True)
 sb.on_media_sync_did_progress("12 of 40")
 check("media sync shows Anki's own progress line",
@@ -355,23 +353,30 @@ section("the sync entry (auto sync)")
 auto = importlib.import_module("klausmate.auto_sync")
 host5 = QtWidgets.QWidget()
 bar5 = sb.StatusBar(host5)
-bar5.refresh_sync({"visible": True, "text": "Full sync needed — click to choose", "red": True})
-check("strip shows the entry left of the task text",
-      bar5.sync_label.isVisibleTo(bar5) and bar5.sync_label.text() == "Full sync needed — click to choose"
-      and bar5.layout().indexOf(bar5.sync_label) < bar5.layout().indexOf(bar5.label))
-check("red uses the error property", bar5.sync_label.property("error") is True)
-bar5.refresh_sync({"visible": True, "text": "Synced 4 min ago", "red": False})
-check("plain again", bar5.sync_label.property("error") is False and bar5.sync_label.text() == "Synced 4 min ago")
-bar5.refresh_sync({"visible": False, "text": "", "red": False})
+FULL = "AnkiWeb needs a full sync. Click to choose whether to upload or download."
+bar5.refresh_sync({"visible": True, "state": "full", "tip": FULL, "red": True})
+lay = bar5.layout()
+check("the icon is the strip's last item, at the far right",
+      bar5.sync_label.isVisibleTo(bar5) and lay.indexOf(bar5.sync_label) == lay.count() - 1
+      and lay.indexOf(bar5.sync_label) > lay.indexOf(bar5.progress))
+check("an icon, no text; the tooltip explains it",
+      bar5.sync_label.text() == "" and bar5.sync_label.toolTip() == FULL and bar5.sync_label.state == "full")
+img = bar5.sync_label.grab().toImage()
+check("it draws something", any(img.pixelColor(x, y).alpha() > 0 for x in range(img.width()) for y in range(img.height())))
+bar5.refresh_sync({"visible": True, "state": "syncing", "tip": "Syncing with AnkiWeb…", "red": False})
+a0 = bar5.sync_label.angle
+bar5.sync_label._spin.timeout.emit()
+check("syncing spins", bar5.sync_label._spin.isActive() and bar5.sync_label.angle != a0)
+bar5.refresh_sync({"visible": True, "state": "synced", "tip": "t", "red": False})
+check("...and stops", not bar5.sync_label._spin.isActive() and bar5.sync_label.angle == 0)
+bar5.refresh_sync({"visible": False, "state": "never", "tip": "", "red": False})
 check("hidden when logged out", not bar5.sync_label.isVisibleTo(bar5))
 clicked5: list = []
 auto.sync_now = lambda: clicked5.append(1)
-bar5.refresh_sync({"visible": True, "text": "Synced 4 min ago", "red": False})
-QtWidgets.QApplication.sendEvent(bar5.sync_label, QtGui.QMouseEvent(
-    QtCore.QEvent.Type.MouseButtonRelease, QtCore.QPointF(2, 2), QtCore.QPointF(2, 2),
-    QtCore.Qt.MouseButton.LeftButton, QtCore.Qt.MouseButton.NoButton, QtCore.Qt.KeyboardModifier.NoModifier))
+bar5.refresh_sync({"visible": True, "state": "synced", "tip": "t", "red": False})
+bar5.sync_label.click()
 app.processEvents()
-check("a click syncs now", clicked5 == [1], str(clicked5))
+check("a click syncs now, and the button is not left pressed", clicked5 == [1] and not bar5.sync_label.isDown(), str(clicked5))
 check("the bar listens to auto sync", len(auto._listeners) >= 1)
 
 raise SystemExit(report())
