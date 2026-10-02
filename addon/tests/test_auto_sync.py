@@ -155,11 +155,28 @@ hooks = Hooks()
 sys.modules["aqt"].gui_hooks = hooks
 shown: list = []
 utils = types.ModuleType("aqt.utils")
-utils.showText = lambda *a, **k: shown.append(a)
+class _Diag:
+    def __init__(self):
+        self.showed = False
+
+    def show(self):
+        self.showed = True
+
+
+def _show_text(*a, **k):
+    shown.append(a)
+    d = _Diag()
+    text_calls.append((k.get("run", True), d))
+    return d, None
+
+
+text_calls: list = []
+utils.showText = _show_text
 utils.tooltip = lambda *a, **k: shown.append(a)
 sys.modules["aqt.utils"] = utils
 
 auth = ["AUTH"]
+aborted: list = []
 starts: list = []
 draws: list = []
 clicked: list = []
@@ -168,9 +185,20 @@ out = types.SimpleNamespace(required=0, NO_CHANGES=0, host_number=3, new_endpoin
 raise_with = None
 
 
+ls = [600_000]
+db_reads: list = []
+
+
+def _scalar(q):
+    db_reads.append(q)
+    return ls[0]
+
+
 def _sync_collection(a, media):
     if raise_with is not None:
         raise raise_with
+    if getattr(out, "changed", False):
+        ls[0] += 1
     return out
 
 
@@ -197,7 +225,7 @@ mw = types.SimpleNamespace(
     col=types.SimpleNamespace(
         sync_collection=_sync_collection, _load_scheduler=lambda: None,
         models=types.SimpleNamespace(_clear_cache=lambda: None),
-        db=types.SimpleNamespace(scalar=lambda q: 600_000)),
+        db=types.SimpleNamespace(scalar=_scalar), abort_sync=lambda: aborted.append(1)),
     taskman=types.SimpleNamespace(run_in_background=_run_in_background),
     toolbar=types.SimpleNamespace(draw=lambda: draws.append("draw"),
                                   update_sync_status=lambda: draws.append("update")),
@@ -214,6 +242,7 @@ A.setup()
 A._enabled = True
 
 section("quiet sync")
+out.changed = True
 A._last_input = A.clock() - 999
 A._last_attempt = -1e9
 A._tick()
@@ -309,6 +338,56 @@ A.add_listener(got.append)
 A._tick()
 check("a tick notifies listeners with entry_state", got and got[-1] == A.entry_state())
 A.remove_listener(got.append)
+
+section("fix pass: no main-thread collection reads, no needless reset")
+db_reads.clear()
+A.entry_state()
+check("entry_state never reads the collection (the sync holds its lock)", db_reads == [], str(db_reads))
+out.changed = False
+out.required = 0
+raise_with = None
+mw.state = "deckBrowser"
+auth[0] = "AUTH"
+A._failures = 0
+A._full_pending = False
+r0 = resets_box[0]
+A._last_attempt = -1e9
+A._last_input = A.clock() - 999
+A._tick()
+check("a no-change sync does not reset the main window", resets_box[0] == r0, str(resets_box))
+check("...but still fires sync_did_finish", fired[-1] == "did")
+check("...and the entry says Synced just now", A.entry_state()["text"] == "Synced just now", repr(A.entry_state()))
+out.changed = True
+A._last_attempt = -1e9
+A._tick()
+check("a sync that changed something resets", resets_box[0] == r0 + 1)
+out.changed = False
+
+section("fix pass: server message never exec()s")
+out.server_message = "AnkiWeb says hi"
+text_calls.clear()
+A._last_attempt = -1e9
+A._tick()
+check("showText with run=False, then show()", text_calls and text_calls[-1][0] is False and text_calls[-1][1].showed,
+      repr(text_calls))
+out.server_message = ""
+
+section("fix pass: profile close mid-sync")
+A._quiet_running = True
+A._on_profile_close()
+check("closing the profile aborts a running quiet sync", aborted == [1])
+real_col = mw.col
+mw.col = None
+n = len(fired)
+f = concurrent.futures.Future()
+f.set_exception(Interrupted())
+A._on_done(f)
+check("a result after the collection closed fires no hooks and clears the flag",
+      len(fired) == n and not A._quiet_running, repr(fired[n:]))
+mw.col = real_col
+A._quiet_running = False
+A._on_profile_close()
+check("no abort when nothing runs", aborted == [1])
 
 section("sync_now")
 A.sync_now()

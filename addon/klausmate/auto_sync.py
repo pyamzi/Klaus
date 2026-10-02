@@ -115,7 +115,12 @@ _full_pending = False
 _quiet_running = False
 _anki_running = False
 _drawn_logged_in: bool | None = None
+# Last sync, wall seconds. Cached: a sync holds the collection lock for its
+# whole run, so a main-thread read (every tick, every entry) would freeze the
+# UI. Read from the collection only when nothing syncs.
+_last_sync: float | None = None
 _listeners: list = []
+_dialogs: list = []  # shown server-message dialogs, kept until closed
 _timer: list = []   # the tick QTimer, once a profile is open
 _activity: list = []  # the app-wide input filter, installed once
 
@@ -137,16 +142,23 @@ def _logged_in() -> bool:
         return False
 
 
-def entry_state() -> dict:
-    from aqt import mw
-
-    last = None
+def _read_last_sync() -> None:
+    """Refresh ``_last_sync`` from the collection (main thread, no sync running)."""
+    global _last_sync
+    if _quiet_running or _anki_running:
+        return
     try:
+        from aqt import mw
+
         ms = mw.col.db.scalar("select ls from col")
-        last = ms / 1000 if ms else None
+        if ms:
+            _last_sync = max(_last_sync or 0, ms / 1000)
     except Exception:  # noqa: BLE001
         pass
-    text, red = entry_text(time.time(), last, _failures, _full_pending)
+
+
+def entry_state() -> dict:
+    text, red = entry_text(time.time(), _last_sync, _failures, _full_pending)
     return {"visible": _logged_in(), "text": text, "red": red}
 
 
@@ -244,17 +256,31 @@ def _run_quiet() -> None:
     try:
         gui_hooks.sync_will_start()
         auth = mw.pm.sync_auth()
-        mw.taskman.run_in_background(
-            lambda: mw.col.sync_collection(auth, mw.pm.media_syncing_enabled()), _on_done)
+        col, media = mw.col, mw.pm.media_syncing_enabled()
+
+        def task():
+            # ls moves only when something was transferred (finalize_sync);
+            # read on the worker, which already holds the collection.
+            before = col.db.scalar("select ls from col")
+            result = col.sync_collection(auth, media)
+            return result, before, col.db.scalar("select ls from col")
+
+        mw.taskman.run_in_background(task, _on_done)
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] auto sync start failed: {exc}")
         _quiet_running = False
 
 
 def _on_done(fut) -> None:
-    global _failures, _full_pending, _quiet_running
+    global _failures, _full_pending, _quiet_running, _last_sync
     from aqt import gui_hooks, mw
 
+    if getattr(mw, "col", None) is None:
+        # The profile closed under the sync: no collection for the finish
+        # steps, and a listener that throws is dropped from the hook for good.
+        _quiet_running = False
+        return
+    changed = False
     try:
         try:
             mw.col._load_scheduler()  # the scheduler version may have changed
@@ -263,7 +289,7 @@ def _on_done(fut) -> None:
         from anki.errors import Interrupted, SyncError, SyncErrorKind
 
         try:
-            out = fut.result()
+            out, before, after = fut.result()
         except Interrupted:
             pass
         except SyncError as err:
@@ -276,13 +302,22 @@ def _on_done(fut) -> None:
             _failures += 1
         else:
             _failures = 0
+            _last_sync = time.time()
+            changed = before != after
             mw.pm.set_host_number(out.host_number)
             if out.new_endpoint:
                 mw.pm.set_current_sync_url(out.new_endpoint)
             if out.server_message:
                 from aqt.utils import showText
 
-                showText(out.server_message, parent=mw, type="rich")
+                # run=False: showText's default exec()s (app-modal, K-114).
+                diag, _box = showText(out.server_message, parent=mw, type="rich", run=False)
+                _dialogs.append(diag)
+                try:
+                    diag.finished.connect(lambda *_a, d=diag: _dialogs.remove(d) if d in _dialogs else None)
+                except Exception:  # noqa: BLE001
+                    pass
+                diag.show()
             if out.required == out.NO_CHANGES:
                 mw.media_syncer.start_monitoring()
             else:
@@ -290,10 +325,14 @@ def _on_done(fut) -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] auto sync result failed: {exc}")
     finally:
-        for step in (lambda: mw.col.models._clear_cache(),
-                     gui_hooks.sync_did_finish,  # while _quiet_running: our own fire
-                     mw.reset,
-                     mw.toolbar.update_sync_status):
+        # Reset only when the sync changed the collection: mw.reset() reloads
+        # Browse's table and editor, and Add's notetype, every time it runs.
+        steps = [lambda: mw.col.models._clear_cache()] if changed else []
+        steps.append(gui_hooks.sync_did_finish)  # while _quiet_running: our own fire
+        if changed:
+            steps.append(mw.reset)
+        steps.append(mw.toolbar.update_sync_status)
+        for step in steps:
             try:
                 step()
             except Exception as exc:  # noqa: BLE001
@@ -317,6 +356,7 @@ def _on_anki_sync_finish() -> None:
     _last_attempt = clock()
     _failures = 0  # Anki's own flow already showed any error
     _full_pending = False
+    _read_last_sync()
     _redraw_if_login_changed()
     _notify()
 
@@ -358,7 +398,7 @@ def _install_activity() -> None:
 
 def _on_profile_open() -> None:
     global _enabled, _last_input, _last_attempt, _review_left_at, _failures
-    global _full_pending, _quiet_running, _anki_running, _drawn_logged_in
+    global _full_pending, _quiet_running, _anki_running, _drawn_logged_in, _last_sync
     try:
         from aqt import mw
         from aqt.qt import QTimer
@@ -369,6 +409,8 @@ def _on_profile_open() -> None:
         _last_input, _last_attempt, _review_left_at = clock(), float("-inf"), None
         _failures, _full_pending, _quiet_running, _anki_running = 0, False, False, False
         _drawn_logged_in = _logged_in()
+        _last_sync = None  # another profile's time must not carry over
+        _read_last_sync()
         _install_activity()
         if not _timer:
             t = QTimer(mw)
@@ -380,6 +422,13 @@ def _on_profile_open() -> None:
 
 
 def _on_profile_close() -> None:
+    if _quiet_running:
+        try:
+            from aqt import mw
+
+            mw.col.abort_sync()  # takes no collection lock; the result is Interrupted
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] auto sync abort failed: {exc}")
     if _timer:
         try:
             _timer[0].stop()
