@@ -246,6 +246,13 @@ class StatusBar(QWidget):
             row.setSpacing(2)
             self._add_toggles(row, browser)
         row.addStretch(1)
+        # The auto-sync entry ("Synced 4 min ago"), left of the task text;
+        # a click is Anki's own sync (auto_sync.sync_now).
+        self.sync_label = QLabel("", self)
+        self.sync_label.hide()
+        self.sync_label.installEventFilter(_ClickFilter(self, lambda: _sync_now()))
+        row.addWidget(self.sync_label)
+        row.addSpacing(10)
         self.progress = QProgressBar(self)
         self.progress.setFixedWidth(PROGRESS_PX)
         self.progress.setTextVisible(False)
@@ -276,6 +283,40 @@ class StatusBar(QWidget):
         tasks.add_listener(listener)
         self.destroyed.connect(forget)
         self.refresh(tasks.snapshot())
+
+        sync_box = [self]
+
+        def sync_listener(state) -> None:
+            if sync_box[0] is not None:
+                sync_box[0].refresh_sync(state)
+
+        def sync_forget(*_a) -> None:
+            sync_box[0] = None
+            try:
+                from . import auto_sync
+
+                auto_sync.remove_listener(sync_listener)
+            except Exception:  # noqa: BLE001
+                pass
+
+        try:
+            from . import auto_sync
+
+            auto_sync.add_listener(sync_listener)
+            self.destroyed.connect(sync_forget)
+            self.refresh_sync(auto_sync.entry_state())
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] status bar sync entry failed: {exc}")
+
+    def refresh_sync(self, state: dict) -> None:
+        self.sync_label.setText(state.get("text", ""))
+        self.sync_label.setToolTip(state.get("text", ""))
+        red = bool(state.get("red"))
+        if self.sync_label.property("error") is not red:
+            self.sync_label.setProperty("error", red)
+            self.sync_label.style().unpolish(self.sync_label)
+            self.sync_label.style().polish(self.sync_label)
+        self.sync_label.setVisible(bool(state.get("visible")))
 
     def _add_toggles(self, row, browser) -> None:
         from .browse_toggles import _PaneToggle, _VisibilityWatcher
@@ -513,6 +554,15 @@ def install_browser(browser) -> StatusBar | None:
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] status bar (Browse) failed: {exc}")
         return None
+
+
+def _sync_now() -> None:
+    try:
+        from . import auto_sync
+
+        auto_sync.sync_now()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] status bar sync failed: {exc}")
 
 
 def _report(fn) -> None:

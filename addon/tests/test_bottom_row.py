@@ -148,7 +148,7 @@ check("the row has no dock toggle and no DOCK_CMD", "klausmate_row_dock" not in 
 check("a mouse press never leaves focus on a row button (Space would re-fire it)",
       "addEventListener('mousedown'" in html and ".klaus-edge [role=button]" in html
       and "preventDefault" in html.split("addEventListener('mousedown'", 1)[-1][:200])
-check("…while Tab still reaches them", html.count('tabindex="0"') == html.count('role="button"') == 2)
+check("…while Tab still reaches them", html.count('tabindex="0"') == html.count('role="button"') == 3)  # gear, sync entry, readout
 check("an unknown command is left alone", br._on_js_message((False, None), "klausmate_row_dock", None) == (False, None))
 css = html.split("<style>", 1)[-1]
 gear_rule = [r for r in css.split("}") if ".kr-gear:hover" in r]
@@ -178,5 +178,32 @@ br._report_height(web)
 mw.state = "deckBrowser"
 check("reported on a deck screen, never from the taller review row", heights == [41], str(heights))
 sb.set_row_height = real_set
+
+section("the sync entry (auto sync)")
+auto = importlib.import_module("klausmate.auto_sync")
+synced: list = []
+auto.sync_now = lambda: synced.append(1)
+html = br.row_html(br.row_state([], 1000.0), False, {"visible": True, "text": "Synced 4 min ago", "red": False})
+check("the entry sits in the right edge, before the readout",
+      'id="klaus-sync"' in html and html.index('id="klaus-sync"') < html.index('class="kr-readout"')
+      and "Synced 4 min ago" in html and br.SYNC_CMD in html, html[-900:])
+red = br.row_html(br.row_state([], 1000.0), False, {"visible": True, "text": "Sync failed — click to retry", "red": True})
+check("red state carries the error class", "kr-sync-red" in red)
+off = br.row_html(br.row_state([], 1000.0), False, {"visible": False, "text": "", "red": False})
+check("hidden when logged out", 'id="klaus-sync"' in off and 'style="display:none"' in off)
+check("the sync click is deferred a tick",
+      br._on_js_message((False, None), br.SYNC_CMD, None) == (True, None) and synced == [])
+app.processEvents()
+check("...then runs sync_now", synced == [1], str(synced))
+evals.clear()
+mw.state = "overview"
+br._push_sync({"visible": True, "text": "Synced just now", "red": False})
+check("live update evals klausSync on the deck screens", any("klausSync(" in e for e in evals), str(evals))
+evals.clear()
+mw.state = "review"
+br._push_sync({"visible": True, "text": "Synced just now", "red": False})
+check("...never during review", evals == [])
+mw.state = "deckBrowser"
+check("setup listens to auto sync", br._push_sync in auto._listeners)
 
 raise SystemExit(report())

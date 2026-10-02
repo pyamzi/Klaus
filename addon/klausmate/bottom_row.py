@@ -22,6 +22,7 @@ from . import tasks
 
 PREFS_CMD = "klausmate_row_prefs"
 TASKS_CMD = "klausmate_row_tasks"
+SYNC_CMD = "klausmate_row_sync"
 ROW_CONTEXTS = {"DeckBrowserBottomBar", "OverviewBottomBar"}
 ROW_STATES = {"deckBrowser", "overview"}
 GEAR_PX = 16
@@ -78,6 +79,13 @@ function klausFit() {
       z = parseFloat(getComputedStyle(document.body).zoom) || 1;
   if (r && b) r.style.maxWidth = Math.max(0, (window.innerWidth - b.getBoundingClientRect().right) / z - 8 - 24) + 'px';
 }
+function klausSync(s) {
+  var e = document.getElementById('klaus-sync'); if (!e) return;
+  e.textContent = s.text; e.title = s.text;
+  e.style.display = s.visible ? '' : 'none';
+  e.classList.toggle('kr-sync-red', !!s.red);
+  klausFit();
+}
 window.addEventListener('resize', klausFit);
 function klausKey(e, cmd) {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pycmd(cmd); }
@@ -91,9 +99,10 @@ document.addEventListener('mousedown', function (e) {
 """
 
 
-def row_html(state: dict, night: bool) -> str:
+def row_html(state: dict, night: bool, sync: dict | None = None) -> str:
     """The gear, pinned to the row's left edge, and the readout, pinned to
-    its right edge. Divs with ``role=button``, never ``<button>``: Anki's
+    its right edge, the sync entry (``auto_sync.entry_state()``) just before
+    the readout; ``None`` or not visible hides it. Divs with ``role=button``, never ``<button>``: Anki's
     bottom-bar CSS frames every button, and this gear is a quiet icon."""
     from . import theme
 
@@ -113,7 +122,16 @@ def row_html(state: dict, night: bool) -> str:
 @keyframes kr-slide {{ from {{ left: -30%; }} to {{ left: 100%; }} }}
 #klaus-status .kr-text {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 #klaus-status.kr-error .kr-text {{ color: {c['red_text']}; }}
+#klaus-sync {{ white-space: nowrap; cursor: default; padding: 2px 4px; border-radius: 5px; }}
+#klaus-sync:hover, #klaus-sync:focus-visible {{ background: {c['hover_subtle']}; outline: none; }}
+#klaus-sync.kr-sync-red {{ color: {c['red_text']}; }}
 """
+    import html as _html
+
+    sync = sync or {"visible": False, "text": "", "red": False}
+    sync_text = _html.escape(sync.get("text", ""))
+    sync_attrs = (' class="kr-sync-red"' if sync.get("red") else "") + (
+        "" if sync.get("visible") else ' style="display:none"')
     return (
         f"<style>{css}</style>"
         '<div id="klaus-row" class="klaus-edge">'
@@ -121,6 +139,8 @@ def row_html(state: dict, night: bool) -> str:
         f'onclick=\'pycmd("{PREFS_CMD}")\' onkeydown=\'klausKey(event, "{PREFS_CMD}")\'>{gear_svg()}</div>'
         "</div>"
         '<div id="klaus-status" class="klaus-edge">'
+        f'<div id="klaus-sync"{sync_attrs} role="button" tabindex="0" title="{sync_text}" '
+        f'onclick=\'pycmd("{SYNC_CMD}")\' onkeydown=\'klausKey(event, "{SYNC_CMD}")\'>{sync_text}</div>'
         f'<div class="kr-readout" role="button" tabindex="0" onclick=\'pycmd("{TASKS_CMD}")\' '
         f'onkeydown=\'klausKey(event, "{TASKS_CMD}")\'>'
         '<span class="kr-text"></span><div class="kr-track"><div class="kr-fill"></div></div></div>'
@@ -145,13 +165,16 @@ def _on_webview_content(web_content, context) -> None:
     if type(context).__name__ not in ROW_CONTEXTS:
         return
     try:
-        web_content.body += row_html(row_state(tasks.snapshot(), tasks.clock()), _night())
+        from . import auto_sync
+
+        web_content.body += row_html(row_state(tasks.snapshot(), tasks.clock()), _night(),
+                                     auto_sync.entry_state())
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] bottom row injection failed: {exc}")
 
 
 def _on_js_message(handled, message: str, context):
-    if message not in (PREFS_CMD, TASKS_CMD):
+    if message not in (PREFS_CMD, TASKS_CMD, SYNC_CMD):
         return handled
     # Both open a tick later, never inside the webchannel call (the
     # deferral rule, tests/test_bridge_reentrancy.py).
@@ -162,6 +185,10 @@ def _on_js_message(handled, message: str, context):
 
         if message == PREFS_CMD:
             QTimer.singleShot(0, status_bar._open_anki_settings)
+        elif message == SYNC_CMD:
+            from . import auto_sync
+
+            QTimer.singleShot(0, lambda: auto_sync.sync_now())
         else:
             QTimer.singleShot(0, _open_task_list)
     except Exception as exc:  # noqa: BLE001
@@ -205,6 +232,17 @@ def _push(snap: list) -> None:
             QTimer.singleShot(int(wait * 1000) + 20, lambda: _push(tasks.snapshot()))
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] bottom row update failed: {exc}")
+
+
+def _push_sync(state: dict) -> None:
+    """Follow ``auto_sync`` live on the deck screens."""
+    try:
+        from aqt import mw
+
+        if getattr(mw, "state", "") in ROW_STATES:
+            mw.bottomWeb.eval(f"window.klausSync && klausSync({json.dumps(state)});")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] bottom row sync update failed: {exc}")
 
 
 _height_filter: list = []
@@ -255,3 +293,6 @@ def setup() -> None:
     gui_hooks.webview_will_set_content.append(_on_webview_content)
     gui_hooks.webview_did_receive_js_message.append(_on_js_message)
     tasks.add_listener(_push)
+    from . import auto_sync
+
+    auto_sync.add_listener(_push_sync)

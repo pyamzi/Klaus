@@ -225,9 +225,10 @@ for qualified in sorted(_registered | _bridge_methods):
 section("bottom_row: the main window row's gear and readout")
 _BR = _func_src("bottom_row", "_on_js_message")
 check("the row's handler was found in the source", bool(_BR))
-check("Preferences and the task-list popup both open a tick later, never inside the webchannel call",
-      _BR.count("QTimer.singleShot(0,") == 2
+check("Preferences, the task-list popup and the sync entry all open a tick later, never inside the webchannel call",
+      _BR.count("QTimer.singleShot(0,") == 3
       and "\n            status_bar._open_anki_settings()" not in _BR
+      and "\n            auto_sync.sync_now()" not in _BR
       and "toggle_dock" not in _BR, _BR[-400:])
 
 section("heatmap: a clicked day opens Browse")

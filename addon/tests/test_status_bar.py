@@ -351,4 +351,27 @@ check("a pane click is handled, a tick later", bt._on_js_message((False, None), 
       and len(fired) == 1)
 check("other messages pass through", bt._on_js_message((False, None), "klausmate:settings", None) == (False, None))
 
+section("the sync entry (auto sync)")
+auto = importlib.import_module("klausmate.auto_sync")
+host5 = QtWidgets.QWidget()
+bar5 = sb.StatusBar(host5)
+bar5.refresh_sync({"visible": True, "text": "Full sync needed — click to choose", "red": True})
+check("strip shows the entry left of the task text",
+      bar5.sync_label.isVisibleTo(bar5) and bar5.sync_label.text() == "Full sync needed — click to choose"
+      and bar5.layout().indexOf(bar5.sync_label) < bar5.layout().indexOf(bar5.label))
+check("red uses the error property", bar5.sync_label.property("error") is True)
+bar5.refresh_sync({"visible": True, "text": "Synced 4 min ago", "red": False})
+check("plain again", bar5.sync_label.property("error") is False and bar5.sync_label.text() == "Synced 4 min ago")
+bar5.refresh_sync({"visible": False, "text": "", "red": False})
+check("hidden when logged out", not bar5.sync_label.isVisibleTo(bar5))
+clicked5: list = []
+auto.sync_now = lambda: clicked5.append(1)
+bar5.refresh_sync({"visible": True, "text": "Synced 4 min ago", "red": False})
+QtWidgets.QApplication.sendEvent(bar5.sync_label, QtGui.QMouseEvent(
+    QtCore.QEvent.Type.MouseButtonRelease, QtCore.QPointF(2, 2), QtCore.QPointF(2, 2),
+    QtCore.Qt.MouseButton.LeftButton, QtCore.Qt.MouseButton.NoButton, QtCore.Qt.KeyboardModifier.NoModifier))
+app.processEvents()
+check("a click syncs now", clicked5 == [1], str(clicked5))
+check("the bar listens to auto sync", len(auto._listeners) >= 1)
+
 raise SystemExit(report())
