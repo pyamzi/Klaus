@@ -1,0 +1,313 @@
+"""One save pipeline for annotation bakes (PDF reader 1/5).
+
+Both viewers write the annotations JSON, then call ``pipeline().request(name)``.
+This debounces (``DEBOUNCE_MS``, restarted on every request) and bakes the JSON
+into the real PDF on a background worker: at most ONE worker per PDF at a time
+(a request that lands mid-bake sets an "again" flag, so the next bake starts
+only after the first returns and sees the newer JSON); different PDFs bake
+concurrently. Each successful bake's bookkeeping runs on the main thread
+through ``run_on_main``.
+
+Everything above the "Qt glue" divider is aqt-free: timers, the main-thread
+hop and the fingerprint pin are injected, so tests drive it with fakes.
+"""
+from __future__ import annotations
+
+import threading
+import time
+from typing import Callable, Optional
+
+DEBOUNCE_MS = 500  # defined once; K-085 (KlausNote edits reach the file in <1s)
+# Both viewers toast this on a "failed" event for their document.
+SAVE_FAILED_COPY = "Marks couldn't be saved into the file yet; they're kept and will retry."
+# The reader toasts this once, when it opens a PDF whose marks file it
+# cannot read (nothing is written over that file until it reads again).
+UNREADABLE_MARKS_COPY = (
+    "KlausNote can't read this PDF's saved marks, so new marks won't be saved "
+    "until that file is fixed or removed."
+)
+
+
+class SavePipeline:
+    def __init__(
+        self,
+        ufd: str,
+        run_on_main: Callable[[Callable], None],
+        start_timer: Callable[[str, int, Callable], None],
+        pin: Callable[[str, Optional[tuple]], None],
+    ) -> None:
+        self._ufd = ufd
+        self._run_on_main = run_on_main
+        self._start_timer = start_timer
+        self._pin = pin
+        self._cond = threading.Condition()
+        self._gen: dict = {}  # name -> debounce generation (last request wins)
+        self._pending: set = set()  # requested, timer not yet fired
+        self._running: set = set()  # names with a live worker
+        self._again: set = set()  # requested again while running
+        self._failed: set = set()
+        self._done: list = []  # (name, report or None, ok) awaiting the main thread
+        self._subs: list = []
+
+    # ---- public ---------------------------------------------------------
+
+    def request(self, name: str) -> None:
+        """(Re)start the debounce for ``name``. Safe to call often."""
+        with self._cond:
+            gen = self._gen.get(name, 0) + 1
+            self._gen[name] = gen
+            self._pending.add(name)
+        try:
+            self._start_timer(name, DEBOUNCE_MS, lambda: self._fire(name, gen))
+        except Exception as exc:
+            print(f"[klaus_note] could not schedule bake for {name}: {exc}")
+            self._fire(name, gen)
+
+    def flush(self, name: Optional[str] = None, timeout: float = 10.0) -> bool:
+        """Run pending bakes now and wait (up to ``timeout`` s) for the
+        named PDF — or every PDF — to go idle, then run the queued
+        post-steps. Call it on the MAIN thread (profile close): it drains
+        them itself, because main-thread callbacks queued through
+        ``run_on_main`` cannot run while main is blocked here. True when
+        idle."""
+        with self._cond:
+            names = {name} if name is not None else self._pending | self._running
+            due = [(n, self._gen.get(n, 0)) for n in names if n in self._pending]
+        for n, gen in due:
+            self._fire(n, gen)
+        deadline = time.monotonic() + timeout
+        with self._cond:
+            while any(n in self._pending or n in self._running for n in names):
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    self._drain()
+                    return False
+                self._cond.wait(left)
+        self._drain()
+        return True
+
+    def subscribe(self, cb: Callable[[str, str], None]) -> Callable[[], None]:
+        """``cb(event, name)`` for "saved", "failed" and "records" (marks the
+        bake dropped were removed; reload them). Returns an unsubscriber."""
+        self._subs.append(cb)
+
+        def _unsubscribe() -> None:
+            try:
+                self._subs.remove(cb)
+            except ValueError:
+                pass
+
+        return _unsubscribe
+
+    def failed_names(self) -> set:
+        with self._cond:
+            return set(self._failed)
+
+    def retry(self, name: str) -> None:
+        self.request(name)
+
+    def forget(self, name: str) -> None:
+        """``name`` left the Library: drop its pending save and its failed
+        flag, so nothing bakes it or toasts for it afterwards. A bake
+        already running finishes."""
+        with self._cond:
+            self._pending.discard(name)
+            self._again.discard(name)
+            self._failed.discard(name)
+            self._cond.notify_all()
+
+    # ---- internals ------------------------------------------------------
+
+    def _fire(self, name: str, gen: int) -> None:
+        with self._cond:
+            if self._gen.get(name) != gen or name not in self._pending:
+                return  # superseded by a newer request, or already run
+            self._pending.discard(name)
+            if name in self._running:
+                self._again.add(name)  # the live worker loops once more
+                return
+            self._running.add(name)
+        try:
+            threading.Thread(
+                target=self._work, args=(name,), name="klaus-note-bake", daemon=True
+            ).start()
+        except Exception as exc:
+            print(f"[klaus_note] bake thread failed to start: {exc}")
+            with self._cond:
+                self._failed.add(name)
+                self._done.append((name, None, False))
+            self._finish(name)
+            self._run_on_main(self._drain)
+
+    def _finish(self, name: str) -> None:
+        with self._cond:
+            self._running.discard(name)
+            self._cond.notify_all()
+
+    def _work(self, name: str) -> None:
+        try:
+            while True:
+                self._bake_once(name)
+                with self._cond:
+                    if name in self._again:
+                        self._again.discard(name)
+                        continue
+                    self._running.discard(name)
+                    self._cond.notify_all()
+                    return
+        except BaseException:
+            with self._cond:
+                self._again.discard(name)
+            self._finish(name)
+            raise
+
+    def _bake_once(self, name: str) -> None:
+        from . import pdf_handler
+
+        rep: dict = {}
+        try:
+            print(f"[klaus_note] bake started: {name}")
+            ok = pdf_handler.bake_annotations(self._ufd, name, report=rep)
+            print(f"[klaus_note] bake finished: {name} ({'ok' if ok else 'FAILED'})")
+        except Exception as exc:
+            print(f"[klaus_note] bake worker error for {name}: {exc}")
+            ok = False
+        if ok:
+            stat = rep.get("stat")
+            if stat is not None:
+                # Pinned and recorded here, not in the main-thread
+                # post-step: doc_sync must classify Klaus's own write as
+                # "own" from the moment it lands, and a bake the worker
+                # runs next ("again") must see it as its own, or it drops
+                # a good pristine. Pin first: recording can be slow.
+                try:
+                    self._pin(name, stat)
+                except Exception as exc:
+                    print(f"[klaus_note] pin failed for {name}: {exc}")
+                try:
+                    pdf_handler.record_stat(self._ufd, name, stat)
+                except Exception as exc:
+                    print(f"[klaus_note] record_stat failed for {name}: {exc}")
+            with self._cond:
+                self._failed.discard(name)
+                self._done.append((name, dict(rep), True))
+        else:
+            # JSON is untouched; it stays the source of truth and the next
+            # request() retries.
+            with self._cond:
+                self._failed.add(name)
+                self._done.append((name, None, False))
+        self._run_on_main(self._drain)
+
+    def _drain(self) -> None:
+        """Main thread: run the post-step (or emit "failed") for every
+        finished bake. Idempotent — entries are popped under the lock."""
+        with self._cond:
+            done, self._done = self._done, []
+        for name, rep, ok in done:
+            if ok:
+                self._post(name, rep)
+            else:
+                self._emit("failed", name)
+
+    def _post(self, name: str, rep: dict) -> None:
+        """Main thread, per successful bake (the worker already pinned and
+        recorded the fingerprint of the file WE wrote): drop records for
+        marks the bake omitted as externally deleted (K-085 resurrection
+        race), then the native-baked ledger."""
+        from . import pdf_handler as ph
+
+        # The fingerprint was pinned and recorded on the worker (no stat:
+        # nothing pinned, so a good fingerprint is never overwritten).
+        omitted = rep.get("omitted_native") or []
+        removed = 0
+        if omitted:
+            try:
+                removed = ph.remove_records(self._ufd, name, omitted)
+            except Exception as exc:
+                print(f"[klaus_note] remove_records failed for {name}: {exc}")
+        try:
+            ph.mark_native_baked(self._ufd, name, rep.get("native_ids") or [])
+        except Exception as exc:
+            print(f"[klaus_note] mark_native_baked failed for {name}: {exc}")
+        if removed:
+            self._emit("records", name)
+        self._emit("saved", name)
+
+    def _emit(self, event: str, name: str) -> None:
+        for cb in list(self._subs):
+            try:
+                cb(event, name)
+            except Exception as exc:
+                print(f"[klaus_note] save subscriber failed on {event}: {exc}")
+
+
+# ---- Qt glue ---------------------------------------------------------------
+
+_PIPELINE: Optional[SavePipeline] = None
+
+
+def _run_on_main(cb: Callable[[], None]) -> None:
+    try:
+        from aqt import mw
+
+        if mw is not None:
+            mw.taskman.run_on_main(cb)
+            return
+    except Exception:
+        pass
+    try:
+        cb()  # headless: no other thread to conflict with
+    except Exception as exc:
+        print(f"[klaus_note] main-thread callback failed: {exc}")
+
+
+def _start_timer(_name: str, ms: int, cb: Callable[[], None]) -> None:
+    # Restarts are handled by SavePipeline's generation check, so a plain
+    # singleShot per request is enough (stale ones return at once). The
+    # timer is armed on the main thread: singleShot from a worker thread
+    # never fires, and request()/retry() may be called from any thread.
+    def _arm() -> None:
+        from aqt.qt import QTimer
+
+        QTimer.singleShot(ms, cb)
+
+    _run_on_main(_arm)
+
+
+def _pin(name: str, stat: Optional[tuple]) -> None:
+    from . import doc_sync
+
+    doc_sync.pin_own_write(name, stat)
+
+
+def _wire_doc_sync(pipe: SavePipeline) -> None:
+    """A PDF that failed to save retries its bake when the rescan finds it
+    again: "back" (it returned) or "moved" (a rename the save ran into)."""
+    try:
+        from . import doc_sync
+    except Exception as exc:
+        print(f"[klaus_note] doc_sync unavailable, no retry on return: {exc}")
+        return
+
+    def _on_doc(event: str, safe: str, _path: Optional[str]) -> None:
+        if event in ("back", "moved") and safe in pipe.failed_names():
+            pipe.retry(safe)
+
+    doc_sync.subscribe(_on_doc)
+
+
+def pipeline() -> SavePipeline:
+    global _PIPELINE
+    if _PIPELINE is None:
+        from . import settings
+
+        _PIPELINE = SavePipeline(settings.user_files(), _run_on_main, _start_timer, _pin)
+        _wire_doc_sync(_PIPELINE)
+    return _PIPELINE
+
+
+def flush_all() -> None:
+    """profile_will_close: bake whatever is still debouncing."""
+    if _PIPELINE is not None:
+        _PIPELINE.flush()

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(klaus_note/user_files/**)",
+      "Write(klaus_note/user_files/**)",
+      "Read(klaus_note/meta.json)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/klaus-note-compile.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+# ─── Never commit: personal data and secrets ──────────────────────────────
+# 459 MB of real lecture PDFs, annotations, embeddings, and the card index.
+klaus_note/user_files/
+# Live addon config — holds claude_api_key / embedding_api_key_* once set.
+# The glob also covers meta.json.bak-* backups, which `**/meta.json` misses.
+klaus_note/meta.json*
+**/meta.json
+
+# ─── Separate projects / vendored reference material ──────────────────────
+SynapsePro-main/
+addon-docs-main/
+References/
+scripts/vscode-main/
+
+# ─── Build output ─────────────────────────────────────────────────────────
+dist/
+*.ankiaddon
+
+# ─── Board runtime ────────────────────────────────────────────────────────
+board/.lock
+board/*.tmp
+board/attachments/*.part
+
+# ─── Service venv ────────────────────────────────────────────────────────────
+service/.venv/
+
+# ─── Noise ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.DS_Store
+.claude/worktrees/
+.cursor/
+service/klausplus.egg-info/
+graphify-out/

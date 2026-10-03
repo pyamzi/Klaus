@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "source_of_truth": "KlausBook-Context/docs/reference/design-tokens.json is canonical. A byte-identical copy lives at the same relative path in klaus-note-addon. After editing this file in either repo, run scripts/check-token-sync.sh (in either repo) to diff the two copies, then copy the change across.",
+  "status": {
+    "colors": "Implemented by KlausBook's extensions/klaus-pdf/webview-src/viewer.css today (:root = dark, body.vscode-light = light). This is the TARGET palette for klaus_note/theme.py, not yet implemented there — board card KB-012 ('klaus_note: re-skin library + viewer to the Obsidian look') is the work of porting klaus_note's palette() from its old Quiet Clinic tokens (see klaus_note DESIGN.md, pre-KB-012) to these values, and updating DESIGN.md's frontmatter to match.",
+    "highlightInks": "Implemented identically today in both: klaus_note/theme.py HIGHLIGHT_INKS and KlausBook's extensions/klaus-pdf/webview-src/highlights.ts HIGHLIGHT_INKS. These deliberately never theme-fork (light/dark/accent) because they bake into the PDF's own annotation color.",
+    "typeScale_radii": "klaus_note's existing scale (DESIGN.md 'Scale-Or-Drift Rule', enforced there by tests/test_theme.py scanning emitted QSS). KlausBook does not yet validate against this scale — treat as the target scale for any new KlausBook UI, not yet an enforced contract there."
+  },
+  "colors": {
+    "dark": {
+      "bgPrimary": "#1e1e1e",
+      "bgSecondary": "#262626",
+      "border": "#363636",
+      "textNormal": "#dadada",
+      "textMuted": "#9e9e9e",
+      "textFaint": "#6e6e6e",
+      "accent": "#7f6df2",
+      "accentTint": "rgba(127, 109, 242, 0.25)",
+      "veilHover": "rgba(255, 255, 255, 0.055)",
+      "veilPress": "rgba(255, 255, 255, 0.1)",
+      "danger": "#e06c75"
+    },
+    "light": {
+      "bgPrimary": "#ffffff",
+      "bgSecondary": "#f6f6f6",
+      "border": "#e0e0e0",
+      "textNormal": "#222222",
+      "textMuted": "#808080",
+      "textFaint": "#b3b3b3",
+      "accent": "#705dcf",
+      "accentTint": "rgba(112, 93, 207, 0.18)",
+      "veilHover": "rgba(0, 0, 0, 0.05)",
+      "veilPress": "rgba(0, 0, 0, 0.09)",
+      "danger": "#c0392b"
+    }
+  },
+  "highlightInks": [
+    { "name": "yellow", "hex": "#FADC50", "default": true },
+    { "name": "green", "hex": "#8AE08C" },
+    { "name": "blue", "hex": "#7FC6F2" },
+    { "name": "pink", "hex": "#F79AC8" },
+    { "name": "orange", "hex": "#F7B267" }
+  ],
+  "highlightAlpha": { "numerator": 110, "denominator": 255 },
+  "typeScale": {
+    "micro": 10,
+    "caption": 11,
+    "subtitle": 12,
+    "body": 13,
+    "heading": 14,
+    "wordmark": 18,
+    "pageTitle": 24
+  },
+  "radii": {
+    "groove": 2,
+    "bar": 4,
+    "small": 6,
+    "handle": 7,
+    "control": 8,
+    "container": 12
+  }
+}

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" width="400" height="300">
+ <g>
+  <title>Labels</title>
+  <text id="lbl" x="40" y="30" font-size="24" fill="#000000">Aorta</text>
+ </g>
+ <g>
+  <title>Masks</title>
+  
+  
+ </g>
+</svg>

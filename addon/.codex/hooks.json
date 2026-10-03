@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/Users/pyamzi/Documents/Github/Klaus/klaus-note/addon/.codex/hooks/klaus-note-compile.sh'"
+          }
+        ]
+      }
+    ]
+  }
+}

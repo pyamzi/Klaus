@@ -1,0 +1,10 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "_comment": "Attach-only: start the server yourself with `python3 board/serve.py --port 8766`, then this opens the preview. Port moved off 8765 on 2026-08-31: an unrelated long-running stream_server.py owns that port on this machine, so the board could not bind and the preview showed its WebSocket error page instead. A launching config (runtimeExecutable) is refused here — the preview sandbox cannot exec files under the project directory.",
+      "name": "board-dashboard",
+      "url": "http://localhost:8766"
+    }
+  ]
+}

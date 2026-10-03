@@ -1,0 +1,1433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Board — klaus_note</title>
+<style>
+/* A supervisor's workspace for unattended agent work, in Notion's idiom:
+   warm neutral paper, ink rather than black, quiet chrome, and cards that
+   float on a shadow instead of sitting in a box. Structure is still an app
+   — toolbar, sidebar, columns, a page peek — and each pane owns its own
+   scroll, so the window never grows a nine-thousand-pixel page.
+   Colour carries meaning: every tag gets its own hue, and the hue is
+   derived from the tag's name, so the same label looks the same on every
+   card without anybody maintaining a mapping. */
+
+:root {
+  color-scheme: light dark;
+
+  --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  /* Mono is for things that ARE code — paths, ids, the verify command.
+     Never for prose, and never as decoration. */
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  --page:        #ffffff;
+  --sidebar:     #fbfbfa;
+  --card:        #ffffff;
+  --hover:       rgba(55, 53, 47, .06);
+  --hover-2:     rgba(55, 53, 47, .11);
+  --fill:        rgba(55, 53, 47, .05);
+
+  --sep:         rgba(55, 53, 47, .09);
+  --sep-faint:   rgba(55, 53, 47, .05);
+  --sep-strong:  rgba(55, 53, 47, .22);
+
+  --ink:         rgb(55, 53, 47);
+  /* Notion's own secondary inks sit at .65 and .5, which measure 4.2:1 and
+     2.8:1 on this paper — under the floor. Darkened until every step of the
+     ramp clears 4.5:1 while the three levels stay visibly apart. */
+  --ink-2:       rgba(55, 53, 47, .78);
+  --ink-3:       rgba(55, 53, 47, .71);
+
+  --accent:      #2383e2;
+  --accent-ink:  #0b6bcb;
+  --accent-soft: rgba(35, 131, 226, .14);
+
+  --shadow-card: rgba(15, 15, 15, .1) 0 0 0 1px, rgba(15, 15, 15, .1) 0 2px 4px;
+  --shadow-lift: rgba(15, 15, 15, .1) 0 0 0 1px, rgba(15, 15, 15, .2) 0 3px 6px;
+  --shadow-pop:  rgba(15, 15, 15, .05) -3px 0 6px, rgba(15, 15, 15, .1) -9px 0 24px;
+
+  --r-s: 3px;
+  --r-m: 4px;
+  --r-l: 6px;
+
+  --toolbar-h: 45px;
+
+  /* Notion's select palette. Nine hues, each a paper and an ink that hold
+     contrast on it — these are what give the board its variety. */
+  --t-gray-bg:   rgb(227, 226, 224); --t-gray-ink:   rgb(50, 48, 44);
+  --t-brown-bg:  rgb(238, 224, 218); --t-brown-ink:  rgb(68, 42, 30);
+  --t-orange-bg: rgb(250, 222, 201); --t-orange-ink: rgb(73, 41, 14);
+  --t-yellow-bg: rgb(253, 236, 200); --t-yellow-ink: rgb(64, 44, 27);
+  --t-green-bg:  rgb(219, 237, 219); --t-green-ink:  rgb(28, 56, 41);
+  --t-blue-bg:   rgb(211, 229, 239); --t-blue-ink:   rgb(24, 51, 71);
+  --t-purple-bg: rgb(232, 222, 238); --t-purple-ink: rgb(65, 36, 84);
+  --t-pink-bg:   rgb(245, 224, 233); --t-pink-ink:   rgb(76, 35, 55);
+  --t-red-bg:    rgb(255, 226, 221); --t-red-ink:    rgb(93, 23, 21);
+
+  --t-orange-dot: #d9730d;
+  --t-blue-dot:   #2383e2;
+  --t-green-dot:  #448361;
+  --t-red-dot:    #d44c47;
+  --t-gray-dot:   #9b9a97;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page:        #191919;
+    --sidebar:     #202020;
+    --card:        #252525;
+    --hover:       rgba(255, 255, 255, .055);
+    --hover-2:     rgba(255, 255, 255, .1);
+    --fill:        rgba(255, 255, 255, .055);
+
+    --sep:         rgba(255, 255, 255, .11);
+    --sep-faint:   rgba(255, 255, 255, .06);
+    --sep-strong:  rgba(255, 255, 255, .26);
+
+    --ink:         rgba(255, 255, 255, .88);
+    --ink-2:       rgba(255, 255, 255, .62);
+    --ink-3:       rgba(255, 255, 255, .5);
+
+    --accent:      #2383e2;
+    --accent-ink:  #6aa9e9;
+    --accent-soft: rgba(35, 131, 226, .22);
+
+    --shadow-card: rgba(255, 255, 255, .09) 0 0 0 1px, rgba(0, 0, 0, .3) 0 2px 4px;
+    --shadow-lift: rgba(255, 255, 255, .13) 0 0 0 1px, rgba(0, 0, 0, .4) 0 3px 6px;
+    --shadow-pop:  rgba(0, 0, 0, .3) -3px 0 8px, rgba(0, 0, 0, .4) -12px 0 28px;
+
+    --t-gray-bg:   #3f3f3f; --t-gray-ink:   #d0cfcd;
+    --t-brown-bg:  #4a352c; --t-brown-ink:  #e5c5b3;
+    --t-orange-bg: #5c3b1e; --t-orange-ink: #ffcc96;
+    --t-yellow-bg: #564620; --t-yellow-ink: #f5da8e;
+    --t-green-bg:  #24422f; --t-green-ink:  #a3dcb2;
+    --t-blue-bg:   #1f3a4d; --t-blue-ink:   #a7d2ea;
+    --t-purple-bg: #3d2d4d; --t-purple-ink: #cfb5e3;
+    --t-pink-bg:   #4a2a38; --t-pink-ink:   #f0b5c9;
+    --t-red-bg:    #522725; --t-red-ink:    #ffb2aa;
+
+    --t-orange-dot: #ffa344;
+    --t-blue-dot:   #529cca;
+    --t-green-dot:  #4dab9a;
+    --t-red-dot:    #ff7369;
+    --t-gray-dot:   #979a9b;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;            /* panes scroll, the window does not */
+  overscroll-behavior: none;
+}
+h1, h2, h3, h4 { margin: 0; font-weight: 600; }
+button { font: inherit; color: inherit; cursor: pointer; background: none; border: none; padding: 0; }
+input, textarea { font: inherit; color: inherit; }
+::selection { background: var(--accent-soft); }
+input, textarea { caret-color: var(--accent); }
+* { scrollbar-width: thin; scrollbar-color: var(--sep-strong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--sep-strong); border-radius: 5px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--r-m);
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px;
+  padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.skip {
+  position: absolute; left: 12px; top: -60px; z-index: 200;
+  background: var(--card); color: var(--ink); box-shadow: var(--shadow-card);
+  border-radius: var(--r-m); padding: 10px 14px; font-size: 14px; text-decoration: none;
+}
+.skip:focus { top: 8px; }
+
+.sprite { display: none; }
+.i { width: 16px; height: 16px; display: block; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ── window chrome ─────────────────────────────────────────────────── */
+.app {
+  display: grid;
+  grid-template-columns: clamp(200px, 24vw, 252px) minmax(0, 1fr);
+  grid-template-rows: var(--toolbar-h) minmax(0, 1fr);
+  height: 100dvh;
+}
+
+.toolbar {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 10px;
+  background: var(--page);
+  border-bottom: 1px solid var(--sep);
+  position: relative; z-index: 30;
+}
+.titles { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.titles h1 { font-size: 14px; font-weight: 600; }
+.titles .subtitle {
+  margin: 0; font-size: 12px; color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.tb-spacer { flex: 1; }
+
+.tb-icon {
+  width: 28px; height: 28px; border-radius: var(--r-m); flex: none;
+  display: grid; place-items: center; color: var(--ink-2);
+}
+.tb-icon:hover { background: var(--hover); color: var(--ink); }
+.tb-icon:active { background: var(--hover-2); }
+/* Nothing to toggle at desktop or half-desktop widths — the sidebar
+   is a persistent pane there (see the width tiers below); this button
+   only does anything once the sidebar goes off-canvas. */
+#sidebar-toggle { display: none; }
+#sidebar-toggle[aria-expanded="true"] { background: var(--hover); color: var(--ink); }
+
+/* Counts read as one quiet line, the way Notion states a view's filters —
+   no container, no segmented control, just coloured dots and numbers. */
+.counts { flex: none; display: flex; align-items: center; gap: 2px; }
+.count {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border-radius: var(--r-m); font-size: 12px; color: var(--ink-2);
+  white-space: nowrap;
+}
+.count b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--t-gray-dot); flex: none; }
+.dot.flight { background: var(--t-orange-dot); }
+.dot.review { background: var(--t-blue-dot); }
+.dot.human { background: var(--t-red-dot); }
+.dot.done { background: var(--t-green-dot); }
+.dot.idle { background: transparent; box-shadow: inset 0 0 0 1.5px var(--sep-strong); }
+/* The two toggles share .count's look at rest so they read as part of the
+   same badge row, and only announce themselves as buttons on hover/press —
+   quiet until you need them, same as every other control here. */
+.count.toggle {
+  appearance: none; background: transparent; border: 1px solid transparent;
+  font: inherit; cursor: pointer;
+}
+.count.toggle:hover { background: var(--hover); }
+.count.toggle[aria-pressed="true"] {
+  background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent);
+}
+.count.toggle[aria-pressed="true"] b { color: var(--accent-ink); }
+
+/* ── sidebar ───────────────────────────────────────────────────────── */
+.sidebar {
+  background: var(--sidebar);
+  border-right: 1px solid var(--sep);
+  overflow-y: auto; overscroll-behavior: contain;
+  padding: 8px 8px 24px;
+}
+/* Who you are, where Notion keeps the account: top of the sidebar, quiet,
+   an ordinary line of text until you click it. It still has to be here —
+   a claim and a comment are attributed to whoever this says. */
+.identity {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px; border-radius: var(--r-m); margin-bottom: 10px;
+}
+.identity:hover { background: var(--hover); }
+.identity input {
+  flex: 1; min-width: 0; background: transparent; border: 1px solid transparent;
+  border-radius: var(--r-m); padding: 2px 5px; font-size: 14px; font-weight: 500;
+  color: var(--ink);
+}
+.identity input:hover { background: var(--card); border-color: var(--sep); }
+.identity input:focus { outline: none; background: var(--card); border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+
+.sb-title {
+  font-size: 12px; font-weight: 500; color: var(--ink-3);
+  padding: 0 6px; margin: 16px 0 4px;
+}
+.sb-empty { font-size: 13px; color: var(--ink-3); padding: 2px 6px 6px; line-height: 1.45; }
+
+.worker { margin-bottom: 6px; }
+.worker-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px; border-radius: var(--r-m);
+}
+.avatar {
+  width: 20px; height: 20px; border-radius: 50%; flex: none;
+  display: grid; place-items: center;
+  background: var(--t-orange-bg); color: var(--t-orange-ink);
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+}
+.worker-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worker-n { margin-left: auto; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.worker-card {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  text-align: left; padding: 4px 8px 4px 34px; border-radius: var(--r-m);
+  font-size: 13px; color: var(--ink-2);
+}
+.worker-card:hover { background: var(--hover); color: var(--ink); }
+.worker-card .wc-id { font-family: var(--mono); font-size: 11px; color: var(--ink-3); flex: none; }
+.worker-card .wc-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Age is the one thing you cannot infer from a still board: a worker wedged
+   since Tuesday looks exactly like one that started a minute ago. */
+.age {
+  margin-left: auto; flex: none; font-size: 11px; font-variant-numeric: tabular-nums;
+  color: var(--t-gray-ink); background: var(--t-gray-bg);
+  padding: 1px 6px; border-radius: var(--r-s);
+}
+.age.stale { color: var(--t-red-ink); background: var(--t-red-bg); }
+
+.region { padding: 5px 6px 7px; border-radius: var(--r-m); }
+.region:hover { background: var(--hover); }
+.region-name { font-size: 13px; font-weight: 500; font-family: var(--mono); }
+.region.contested .region-name { color: var(--t-red-ink); }
+.meter { height: 3px; border-radius: 2px; background: var(--fill); margin: 6px 0; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--t-orange-dot); }
+.region.contested .meter i { background: var(--t-red-dot); }
+.holds { display: flex; flex-direction: column; gap: 3px; }
+/* A path stacked over its owner, not squeezed onto one row fighting the
+   owner name for space — a truncated path ("klauspl...") tells you
+   nothing, where a wrapped one still names the exact file. This is what
+   lets the sidebar narrow (down to the point the off-canvas tier takes
+   over) without ever losing that information, rather than clipping it. */
+.hold {
+  font-size: 12px; color: var(--ink-2); font-family: var(--mono);
+  display: flex; flex-direction: column; gap: 1px; padding: 2px 0;
+}
+.hold span { overflow-wrap: anywhere; line-height: 1.35; }
+.hold b {
+  font-weight: 500; color: var(--t-orange-ink); font-family: var(--font);
+  font-size: 11px;
+}
+.hold.clash b { color: var(--t-red-ink); }
+.region-idle { font-size: 12px; color: var(--ink-3); }
+
+.notice {
+  display: flex; gap: 8px; align-items: flex-start;
+  background: var(--t-red-bg); color: var(--t-red-ink);
+  border-radius: var(--r-l); padding: 10px 11px; margin-bottom: 10px;
+  font-size: 13px; line-height: 1.45;
+}
+.notice .i { flex: none; margin-top: 2px; }
+.notice code { font-family: var(--mono); font-size: 12px; }
+
+/* ── board ─────────────────────────────────────────────────────────── */
+.board { overflow: hidden; background: var(--page); }
+.cols {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(210px, 1fr)) 60px;
+  height: 100%;
+}
+.cols[data-done="open"] { grid-template-columns: repeat(5, minmax(200px, 1fr)); }
+
+.col { display: flex; flex-direction: column; min-height: 0; }
+.col + .col { border-left: 1px solid var(--sep-faint); }
+.col-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 12px 8px;
+}
+/* A column header is a select option, the way a Notion board names its
+   groups: the value in its own colour, the count beside it in grey. */
+.col-pill {
+  font-size: 12px; font-weight: 500; padding: 2px 8px; border-radius: var(--r-s);
+  background: var(--t-gray-bg); color: var(--t-gray-ink);
+}
+.col[data-col="Ready"]  .col-pill { background: var(--t-blue-bg);   color: var(--t-blue-ink); }
+.col[data-col="Doing"]  .col-pill { background: var(--t-orange-bg); color: var(--t-orange-ink); }
+.col[data-col="Review"] .col-pill { background: var(--t-purple-bg); color: var(--t-purple-ink); }
+.col[data-col="Done"]   .col-pill { background: var(--t-green-bg);  color: var(--t-green-ink); }
+.col-head .n { font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+.col-btn {
+  width: 24px; height: 24px; border-radius: var(--r-m); color: var(--ink-3);
+  display: grid; place-items: center; flex: none;
+}
+.col-btn:hover { background: var(--hover); color: var(--ink); }
+.col-head .spacer { flex: 1; }
+.sweep {
+  border-radius: var(--r-m); padding: 3px 8px; font-size: 12px; color: var(--ink-2);
+}
+.sweep:hover { background: var(--hover); color: var(--ink); }
+.sweep.armed { background: var(--t-red-bg); color: var(--t-red-ink); }
+
+.drop {
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 4px 10px 24px;
+}
+.drop.over { background: var(--accent-soft); }
+
+/* Done rests collapsed: a finished card is history, and history should not
+   own a fifth of the window. */
+.col.collapsed .drop { display: none; }
+.col.collapsed .col-head {
+  flex-direction: column; gap: 8px; height: 100%; align-items: center;
+  padding: 12px 6px;
+}
+.col.collapsed .col-pill { writing-mode: vertical-rl; padding: 8px 2px; }
+.col.collapsed .col-head .spacer, .col.collapsed .sweep { display: none; }
+.col.collapsed .drop-hint { flex: 1; width: 100%; border-radius: var(--r-l); }
+.col.collapsed .drop-hint.over { background: var(--accent-soft); }
+
+.empty { color: var(--ink-3); font-size: 13px; padding: 2px 2px 4px; }
+
+/* ── cards ─────────────────────────────────────────────────────────── */
+.card {
+  background: var(--card); border-radius: var(--r-s);
+  box-shadow: var(--shadow-card);
+  padding: 8px 10px 9px; cursor: pointer; text-align: left; width: 100%; display: block;
+  transition: box-shadow .1s ease, background .1s ease;
+}
+.card:hover { background: var(--hover); box-shadow: var(--shadow-lift); }
+.card.dragging { opacity: .45; }
+.card-top { display: flex; align-items: center; gap: 6px; }
+.card .id { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.card .title { display: block; font-size: 14px; line-height: 1.35; margin: 2px 0 0; color: var(--ink); }
+.card .meta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 7px; }
+.card .meta:empty { display: none; }
+.col[data-col="Done"] .card { box-shadow: none; background: var(--fill); }
+.col[data-col="Done"] .card:hover { background: var(--hover-2); }
+.col[data-col="Done"] .card .title { color: var(--ink-2); }
+
+/* Every tag paints itself. The hue comes from the tag's own name, so one
+   label reads the same on every card and nobody keeps a table. */
+.tag {
+  font-size: 12px; line-height: 1.4; padding: 1px 7px; border-radius: var(--r-s);
+  background: var(--t-gray-bg); color: var(--t-gray-ink);
+}
+.tag.c-brown  { background: var(--t-brown-bg);  color: var(--t-brown-ink); }
+.tag.c-orange { background: var(--t-orange-bg); color: var(--t-orange-ink); }
+.tag.c-yellow { background: var(--t-yellow-bg); color: var(--t-yellow-ink); }
+.tag.c-green  { background: var(--t-green-bg);  color: var(--t-green-ink); }
+.tag.c-blue   { background: var(--t-blue-bg);   color: var(--t-blue-ink); }
+.tag.c-purple { background: var(--t-purple-bg); color: var(--t-purple-ink); }
+.tag.c-pink   { background: var(--t-pink-bg);   color: var(--t-pink-ink); }
+.tag.c-red    { background: var(--t-red-bg);    color: var(--t-red-ink); }
+
+.owner { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 5px; }
+.warn { font-size: 12px; padding: 1px 7px; border-radius: var(--r-s); background: var(--t-red-bg); color: var(--t-red-ink); }
+
+/* One motion cue, and it earns its place: it answers "did something change
+   while I was not looking?" for work that runs unattended. */
+@keyframes settle {
+  from { background: var(--accent-soft); }
+  to   { }
+}
+.card.changed { animation: settle 1.5s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .card.changed { animation: none; box-shadow: var(--shadow-lift), 0 0 0 2px var(--accent); }
+}
+
+.quick-add input {
+  width: 100%; background: var(--card); color: var(--ink);
+  border: none; border-radius: var(--r-s); box-shadow: var(--shadow-card), 0 0 0 2px var(--accent-soft);
+  padding: 9px 10px; font-size: 14px;
+}
+.quick-add input:focus { outline: none; box-shadow: var(--shadow-card), 0 0 0 2px var(--accent); }
+.quick-add input::placeholder { color: var(--ink-3); }
+
+/* ── page peek ─────────────────────────────────────────────────────── */
+.scrim { position: fixed; inset: 0; background: rgba(15,15,15,.3); opacity: 0; pointer-events: none; transition: opacity .18s ease; z-index: 40; }
+.scrim.open { opacity: 1; pointer-events: auto; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(480px, 100%);
+  background: var(--page); overflow-y: auto; overscroll-behavior: contain; z-index: 50;
+  transform: translateX(100%); transition: transform .2s cubic-bezier(.32,.72,0,1);
+  box-shadow: var(--shadow-pop);
+}
+.drawer.open { transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .drawer { transition: none; }
+  .scrim { transition: none; }
+}
+.dw-head {
+  position: sticky; top: 0; z-index: 2; background: var(--page);
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-bottom: 1px solid var(--sep);
+}
+.dw-head .id { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+.dw-head .close { margin-left: auto; width: 28px; height: 28px; border-radius: var(--r-m); display: grid; place-items: center; color: var(--ink-2); flex: none; }
+.dw-head .close:hover { background: var(--hover); color: var(--ink); }
+.dw-body { padding: 22px 30px 40px; }
+.dw-body h3 { font-size: 26px; line-height: 1.25; font-weight: 700; letter-spacing: -.01em; margin-bottom: 14px; }
+
+/* Actions ride at the top. Sign-off is the reason this panel gets opened;
+   it has no business below a comment thread. */
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+.btn {
+  border-radius: var(--r-m); padding: 5px 11px; font-size: 13px; min-height: 28px;
+  background: var(--fill); color: var(--ink);
+}
+.btn:hover:not(:disabled) { background: var(--hover-2); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.primary { background: var(--accent); color: #fff; }
+.btn.primary:hover:not(:disabled) { background: var(--accent-ink); }
+.btn.quiet { background: transparent; color: var(--ink-2); }
+.btn.quiet:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.btn.danger { background: transparent; color: var(--t-red-ink); }
+.btn.danger:hover:not(:disabled) { background: var(--t-red-bg); }
+.btn.danger.armed { background: var(--t-red-bg); color: var(--t-red-ink); box-shadow: inset 0 0 0 1px var(--t-red-dot); }
+
+/* Properties, Notion-style: a grey label, a value that only looks like a
+   field once you reach for it. */
+.group { margin-bottom: 14px; }
+.field { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px; align-items: center; padding: 1px 0; }
+.field > label { font-size: 13px; color: var(--ink-3); padding-left: 6px; }
+.field input, .field textarea {
+  width: 100%; background: transparent; border: 1px solid transparent;
+  border-radius: var(--r-m); padding: 5px 7px; font-size: 13px; color: var(--ink);
+  min-height: 28px;
+}
+.field input:hover, .field textarea:hover { background: var(--hover); }
+.field input:focus, .field textarea:focus { outline: none; background: var(--card); border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.field.code input, .field.code textarea { font-family: var(--mono); font-size: 12px; }
+.field textarea { resize: vertical; min-height: 34px; line-height: 1.5; }
+.field.tall { align-items: start; }
+.field.tall > label { padding-top: 7px; }
+
+.save-row { display: flex; align-items: center; gap: 6px; margin-bottom: 20px; }
+.save-row .status { font-size: 12px; color: var(--ink-3); }
+
+.section-title { font-size: 12px; font-weight: 500; color: var(--ink-3); margin: 22px 0 6px; border-top: 1px solid var(--sep); padding-top: 14px; }
+.prose { font-size: 14px; line-height: 1.6; white-space: pre-wrap; color: var(--ink-2); }
+.cmt { font-size: 14px; line-height: 1.55; color: var(--ink-2); padding: 9px 0; border-bottom: 1px solid var(--sep-faint); }
+.cmt:last-child { border-bottom: none; }
+.shot { display: block; margin: 8px 0; }
+.shot img { max-width: 100%; max-height: 260px; border-radius: var(--r-m); box-shadow: var(--shadow-card); display: block; }
+.shot:hover img { box-shadow: var(--shadow-lift); }
+
+.composer { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.composer textarea {
+  width: 100%; min-height: 66px; resize: vertical;
+  background: var(--card); color: var(--ink);
+  border: 1px solid var(--sep); border-radius: var(--r-l); padding: 9px 11px;
+  font-size: 14px; line-height: 1.5;
+}
+.composer textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.composer textarea.dropping { border-color: var(--accent); background: var(--accent-soft); }
+.composer .send { display: flex; align-items: center; gap: 9px; }
+.composer .send .hint { font-size: 12px; color: var(--ink-3); }
+
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(8px);
+  background: var(--t-red-bg); color: var(--t-red-ink); padding: 10px 15px;
+  border-radius: var(--r-l); font-size: 14px; z-index: 60; max-width: min(520px, 86vw);
+  box-shadow: var(--shadow-lift);
+  opacity: 0; pointer-events: none; transition: opacity .16s ease, transform .16s ease;
+}
+.toast.show { opacity: 1; transform: translateX(-50%); }
+
+.sidebar-scrim { display: none; }
+
+/* ── half desktop and narrower: columns stack, cards tile ───────────
+   Four columns at their 210px floor plus the Done rail need ~900px, so
+   side-by-side columns stop fitting well before the window is actually
+   narrow. Below that, each column becomes its own full-width section —
+   Backlog, then Ready, then Doing, stacked top to bottom — and instead
+   of a tall vertical list, a section's OWN cards tile left-to-right in
+   a wrapping grid (repeat(auto-fill, ...) sizes the row itself; no
+   further breakpoint needed as the window keeps narrowing). One
+   continuous vertical scroll down the page is the only navigation:
+   nothing to swipe, nothing to scroll sideways, and no per-section
+   scrollbar competing with the page's own. The sidebar has no such
+   floor problem — it keeps its own two-pane grid slot much further
+   down (see the clamp() above and the narrower tier below it) — so
+   this tier is about the BOARD's columns only. */
+@media (max-width: 1099px) {
+  .board { overflow-y: auto; overflow-x: hidden; scroll-snap-type: none; }
+  .cols {
+    display: block; height: auto;
+  }
+  .col {
+    display: block; min-height: 0; width: 100%;
+  }
+  .col + .col { border-left: none; border-top: 1px solid var(--sep-faint); }
+  .drop {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    align-items: start; gap: 8px;
+    overflow: visible; padding: 4px 10px 18px;
+  }
+  .drop:empty { display: none; }
+  .empty, .quick-add { grid-column: 1 / -1; }
+  .card { width: auto; }
+  /* A collapsed Done still reads as a normal section header, full
+     width — the narrow vertical rail was built for a column sitting in
+     a horizontal strip, which no longer exists at this width. */
+  .col.collapsed { width: auto; }
+  .col.collapsed .col-head { flex-direction: row; height: auto; padding: 12px 12px 8px; }
+  .col.collapsed .col-pill { writing-mode: horizontal-tb; padding: 2px 8px; }
+  .col.collapsed .col-head .spacer { display: flex; }
+  .col.collapsed .drop-hint { display: none; }
+}
+
+/* ── narrow: the sidebar becomes a panel ─────────────────────────────
+   Below this the clamp() above would squeeze the sidebar under ~200px,
+   which is where its own rows start wrapping — that is the real signal
+   to switch shape, not an arbitrary tablet-sized number. */
+@media (max-width: 719px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  #sidebar-toggle { display: grid; }
+  .sidebar {
+    position: fixed; top: var(--toolbar-h); left: 0; bottom: 0; width: 292px;
+    z-index: 45; background: var(--sidebar);
+    transform: translateX(-101%); transition: transform .2s cubic-bezier(.32,.72,0,1);
+    box-shadow: rgba(15, 15, 15, .1) 3px 0 12px;
+  }
+  .sidebar.open { transform: none; }
+  .sidebar-scrim { display: block; position: fixed; inset: var(--toolbar-h) 0 0; background: rgba(15,15,15,.24); z-index: 44; opacity: 0; pointer-events: none; transition: opacity .18s ease; }
+  .sidebar-scrim.open { opacity: 1; pointer-events: auto; }
+  @media (prefers-reduced-motion: reduce) { .sidebar, .sidebar-scrim { transition: none; } }
+}
+
+@media (max-width: 599px) {
+  /* One card per row at phone width — minmax(190px,1fr) already lands
+     there naturally on a ~375px viewport, this just makes it explicit
+     rather than relying on the arithmetic to always work out. */
+  .drop { grid-template-columns: minmax(0, 1fr); }
+  .drawer { width: 100%; }
+  .dw-body { padding: 20px 18px 40px; }
+  .dw-body h3 { font-size: 22px; }
+  .titles .subtitle { display: none; }
+  .counts .count span:not(.dot) { display: none; }
+  .counts .count { padding-left: 7px; padding-right: 7px; }
+  .field { grid-template-columns: 82px minmax(0, 1fr); }
+}
+
+/* Touch: a small target is a small target on a 13-inch tablet too. */
+@media (pointer: coarse) {
+  .btn, .sweep { min-height: 40px; padding-left: 14px; padding-right: 14px; font-size: 14px; }
+  .tb-icon, .col-btn { width: 40px; height: 40px; }
+  .dw-head .close { width: 40px; height: 40px; }
+  .identity input { min-height: 36px; }
+  .card { padding: 12px; }
+  .card:hover { background: var(--card); box-shadow: var(--shadow-card); }
+  .worker-card { min-height: 38px; }
+  .composer textarea { min-height: 80px; }
+  .field input, .field textarea { min-height: 38px; background: var(--hover); }
+}
+</style>
+</head>
+<body>
+
+<a class="skip" href="#board">Skip to the board</a>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-sidebar" viewBox="0 0 16 16"><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2"/><line x1="6.4" y1="2.8" x2="6.4" y2="13.2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.75"/><polyline points="13.4,2.4 13.4,5 10.8,5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16"><line x1="8" y1="3.4" x2="8" y2="12.6"/><line x1="3.4" y1="8" x2="12.6" y2="8"/></symbol>
+  <symbol id="i-close" viewBox="0 0 16 16"><line x1="4.2" y1="4.2" x2="11.8" y2="11.8"/><line x1="11.8" y1="4.2" x2="4.2" y2="11.8"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 16 16"><path d="M8 2.2 14.4 13.4H1.6Z"/><line x1="8" y1="6.6" x2="8" y2="9.6"/><line x1="8" y1="11.4" x2="8" y2="11.5"/></symbol>
+  <symbol id="i-left" viewBox="0 0 16 16"><polyline points="10,3.4 5.4,8 10,12.6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 16 16"><polyline points="6,3.4 10.6,8 6,12.6"/></symbol>
+</svg>
+
+<div class="app">
+  <header class="toolbar">
+    <button class="tb-icon" id="sidebar-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Show workers and territory">
+      <svg class="i" aria-hidden="true"><use href="#i-sidebar"></use></svg>
+    </button>
+    <div class="titles">
+      <h1>Board</h1>
+      <p class="subtitle" id="subtitle">Connecting…</p>
+    </div>
+    <div class="tb-spacer"></div>
+    <div class="counts">
+      <span class="count flight"><span class="dot idle" id="pulse"></span><b id="n-doing">0</b> <span>in flight</span></span>
+      <span class="count"><span class="dot idle"></span><b id="n-ready">0</b> <span>ready</span></span>
+      <span class="count review"><span class="dot review"></span><b id="n-review">0</b> <span>in review</span></span>
+      <button class="count toggle" id="filter-human" aria-pressed="false">
+        <span class="dot human"></span><b id="n-human">0</b> <span>need you</span>
+      </button>
+      <button class="count toggle" id="toggle-done-vis" aria-pressed="false">
+        <span class="dot done"></span><b id="n-done-tb">0</b> <span id="done-vis-label">Done</span>
+      </button>
+    </div>
+    <button class="tb-icon" id="refresh" aria-label="Refresh the board now">
+      <svg class="i" aria-hidden="true"><use href="#i-refresh"></use></svg>
+    </button>
+  </header>
+
+  <aside class="sidebar" id="sidebar" aria-label="Workers and territory">
+    <div class="identity">
+      <span class="avatar" id="me-avatar" aria-hidden="true">h</span>
+      <input id="me" spellcheck="false" aria-label="Your name on this board — claims and comments are filed under it">
+    </div>
+    <div id="conflicts"></div>
+    <h2 class="sb-title">In flight</h2>
+    <div id="workers"></div>
+    <h2 class="sb-title">Territory</h2>
+    <div id="regions"></div>
+  </aside>
+  <div class="sidebar-scrim" id="sidebar-scrim"></div>
+
+  <main class="board" id="board" tabindex="-1" aria-label="Board columns">
+    <div class="cols" id="cols" data-done="collapsed"></div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dw-title" inert></aside>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<p class="sr-only" id="live" aria-live="polite"></p>
+
+<script>
+"use strict";
+const COLS = ["Backlog", "Ready", "Doing", "Review", "Done"];
+let board = null, lastMtime = 0, openId = null, prevSig = {}, draft = "";
+let addingCol = null, addDraft = "", addShots = [];
+let doneOpen = false, humanOnly = false, returnFocus = null, lastSpoken = "";
+const ADDABLE = ["Backlog", "Ready"];
+
+/* Who is acting. Persisted, because claiming needs a name and a per-claim
+   dialog would interrupt a drag — and window.prompt is not even available
+   in every browser view this dashboard gets opened in. */
+function me() {
+  const el = document.getElementById("me");
+  const v = (el && el.value.trim()) || localStorage.getItem("klaus.me") || "human";
+  return v;
+}
+
+const $ = id => document.getElementById(id);
+
+/* Notion's select palette, assigned by the tag's own name rather than by a
+   table somebody has to keep: one label reads the same on every card, a new
+   label gets a colour the first time it is used, and nothing needs editing
+   here to add one. The two that carry meaning are pinned. */
+const TAG_HUES = ["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red"];
+const TAG_PINNED = { "needs-human": "red", design: "purple" };
+const COL_HUE = { Backlog: "gray", Ready: "blue", Doing: "orange", Review: "purple", Done: "green" };
+function tagHue(t) {
+  if (TAG_PINNED[t]) return TAG_PINNED[t];
+  let h = 0;
+  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0;
+  return TAG_HUES[h % TAG_HUES.length];
+}
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
+  c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+const icon = name => `<svg class="i" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+
+// ---- images -------------------------------------------------------------
+// Text with ![](attachments/x.png) rendered as real images. ORDER MATTERS:
+// escape everything first, THEN match. The path charset below is strict
+// enough that only paths this dashboard itself generated can match, so no
+// pasted text can smuggle markup through an attribute.
+const IMG_MD = /!\[([^\]]*)\]\((attachments\/[A-Za-z0-9._-]+)\)/g;
+const escImg = s => esc(s).replace(IMG_MD,
+  (_m, alt, path) => `<a href="${path}" target="_blank" rel="noopener"` +
+                     ` class="shot"><img src="${path}" alt="${alt}"></a>`);
+
+// Upload one File/Blob, return its markdown. Throws with a readable
+// message so callers can toast it rather than failing silently.
+async function uploadImage(file) {
+  if (file.size > 8 * 1024 * 1024)
+    throw new Error(`image is ${(file.size / 1048576).toFixed(1)} MB; limit is 8 MB`);
+  const b64 = await new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onerror = () => rej(new Error("could not read the image"));
+    fr.onload = () => res(String(fr.result).split(",")[1] || "");
+    fr.readAsDataURL(file);
+  });
+  const r = await fetch("/api/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: file.type, b64 }),
+  });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(out.error || `upload failed (${r.status})`);
+  return `![](${out.path})`;
+}
+
+// Pull images out of a paste/drop event. Returns [] for ordinary text so
+// callers can fall through to the browser's own handling.
+function imagesFrom(ev) {
+  const dt = ev.clipboardData || ev.dataTransfer;
+  if (!dt) return [];
+  return Array.from(dt.files || []).filter(f => f.type.startsWith("image/"));
+}
+
+// Wire a textarea so pasting or dropping a screenshot inserts its markdown
+// at the caret. Text pastes are left entirely alone.
+function attachImagePaste(el, after) {
+  const insert = async (ev, files) => {
+    ev.preventDefault();
+    for (const f of files) {
+      try {
+        const md = await uploadImage(f);
+        const a = el.selectionStart ?? el.value.length;
+        const b = el.selectionEnd ?? el.value.length;
+        const pad = a > 0 && !/\s$/.test(el.value.slice(0, a)) ? "\n" : "";
+        el.value = el.value.slice(0, a) + pad + md + "\n" + el.value.slice(b);
+        el.selectionStart = el.selectionEnd = a + pad.length + md.length + 1;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        if (after) after();
+      } catch (e) { toast(e.message); }
+    }
+  };
+  el.addEventListener("paste", ev => {
+    const f = imagesFrom(ev);
+    if (f.length) insert(ev, f);
+  });
+  el.addEventListener("dragover", ev => {
+    if (imagesFrom(ev).length || (ev.dataTransfer || {}).types?.includes("Files")) {
+      ev.preventDefault();
+      el.classList.add("dropping");
+    }
+  });
+  el.addEventListener("dragleave", () => el.classList.remove("dropping"));
+  el.addEventListener("drop", ev => {
+    el.classList.remove("dropping");
+    const f = imagesFrom(ev);
+    if (f.length) insert(ev, f);
+  });
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove("show"), 4200);
+}
+
+async function api(path, payload) {
+  const r = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(data.error || ("request failed: " + r.status)); return null; }
+  await load(true);
+  return data;
+}
+
+async function load(force) {
+  let data;
+  try {
+    data = await (await fetch("/api/board")).json();
+  } catch (e) {
+    $("subtitle").textContent = "Server not responding";
+    return;
+  }
+  if (!force && data.mtime === lastMtime) { markSynced(); return; }
+  lastMtime = data.mtime;
+  board = data;
+  render();
+  markSynced();
+}
+
+function markSynced() {
+  const n = cardsIn("Doing").length;
+  $("subtitle").textContent =
+    (n ? `${n} card${n === 1 ? "" : "s"} in flight · ` : "Idle · ")
+    + "synced " + new Date().toLocaleTimeString();
+}
+
+function cardsIn(name) {
+  const c = (board.columns || []).find(x => x.name === name);
+  return c ? c.cards : [];
+}
+
+/* Age in days. board.py stamps dates, not clock times, so a card claimed
+   this morning reads as new — the signal here is the worker that has been
+   holding files since Tuesday, which is exactly the one you cannot see by
+   looking at a still board. */
+function ageDays(stamp) {
+  if (!stamp) return null;
+  const t = Date.parse(stamp + "T00:00:00");
+  if (Number.isNaN(t)) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.round((today - t) / 86400000));
+}
+function ageHTML(stamp) {
+  const d = ageDays(stamp);
+  if (d === null || d < 1) return "";
+  return `<span class="age${d >= 2 ? " stale" : ""}" title="Claimed ${esc(stamp)}">${d}d</span>`;
+}
+
+/* ── source list ────────────────────────────────────────────────────── */
+/* Real collisions, computed by the same check-disjoint the CLI refuses a
+   claim with — not a guess made in the browser. */
+function renderConflicts() {
+  const list = board.conflicts || [];
+  $("conflicts").innerHTML = list.length
+    ? `<div class="notice">${icon("alert")}<div>
+         <b>${list.length} file collision${list.length === 1 ? "" : "s"}.</b>
+         ${list.map(c => `${esc(c.a)} and ${esc(c.b)} both declare <code>${esc(c.path)}</code>.`).join(" ")}
+         Claiming will be refused until one of them gives the path up.
+       </div></div>`
+    : "";
+}
+
+/* Who is holding what. A swarm is people-shaped at this level: the question
+   is "is anyone stuck", not "what is in column three". */
+function renderWorkers() {
+  const doing = cardsIn("Doing");
+  const by = {};
+  doing.forEach(c => {
+    const who = c.owner && c.owner !== "-" ? c.owner : "unclaimed";
+    (by[who] = by[who] || []).push(c);
+  });
+  const names = Object.keys(by).sort();
+  $("workers").innerHTML = names.length
+    ? names.map(who => `
+        <div class="worker">
+          <div class="worker-head">
+            <span class="avatar" aria-hidden="true">${esc(who.slice(0, 1))}</span>
+            <span class="worker-name">${esc(who)}</span>
+            <span class="worker-n">${by[who].length}</span>
+          </div>
+          ${by[who].map(c => `
+            <button class="worker-card" data-open="${c.id}">
+              <span class="wc-id">${c.id}</span>
+              <span class="wc-title">${esc(c.title)}</span>
+              ${ageHTML(c.claimed)}
+            </button>`).join("")}
+        </div>`).join("")
+    : `<p class="sb-empty">Nobody is holding a card.</p>`;
+}
+
+/* Which regions of the codebase are locked right now, and by whom. This is
+   the constraint that lets a swarm run unattended, so it keeps top billing
+   rather than being buried in a card field. */
+function renderMap() {
+  const regions = {};
+  const add = (path, owner, col) => {
+    const p = String(path);
+    const isDir = p.includes("/");
+    const top = isDir ? p.split("/")[0] : p;
+    const r = (regions[top] = regions[top] || { holds: [], ready: [], dir: false });
+    if (isDir) r.dir = true;
+    (col === "Doing" ? r.holds : r.ready).push({ path: p, owner });
+  };
+  cardsIn("Doing").forEach(c => c.files.forEach(f => add(f, c.owner, "Doing")));
+  cardsIn("Ready").forEach(c => c.files.forEach(f => add(f, null, "Ready")));
+
+  const names = Object.keys(regions).sort();
+  const el = $("regions");
+  if (!names.length) {
+    el.innerHTML = `<p class="sb-empty">Nothing claimed. Overlapping files cannot be claimed twice.</p>`;
+    return;
+  }
+
+  el.innerHTML = names.map(name => {
+    const r = regions[name];
+    const held = r.holds.length;
+    // A Ready path that collides with a held path cannot be claimed yet.
+    const clash = r.ready.filter(x => r.holds.some(h =>
+      h.path === x.path || x.path.startsWith(h.path + "/") || h.path.startsWith(x.path + "/")));
+    const total = held + r.ready.length;
+    const pct = total ? Math.round(held / total * 100) : 0;
+    const cls = clash.length ? "contested" : (held ? "claimed" : "");
+    const short = p => r.dir ? (p.split("/").slice(1).join("/") || p) : p;
+    const lines = r.holds.map(h =>
+      `<div class="hold"><span>${esc(short(h.path))}</span><b>${esc(h.owner)}</b></div>`);
+    clash.forEach(c => lines.push(
+      `<div class="hold clash"><span>${esc(short(c.path))}</span><b>blocked</b></div>`));
+    if (!lines.length) lines.push(`<div class="region-idle">free</div>`);
+    return `<div class="region ${cls}">
+      <div class="region-name">${esc(name)}${r.dir ? "/" : ""}</div>
+      <div class="meter"><i style="width:${pct}%"></i></div>
+      <div class="holds">${lines.join("")}</div>
+    </div>`;
+  }).join("");
+}
+
+/* ── columns ────────────────────────────────────────────────────────── */
+function cardHTML(c, col) {
+  const tags = (c.tags || []).map(t =>
+    `<span class="tag c-${tagHue(t)}">${esc(t)}</span>`).join("");
+  const owner = c.owner && c.owner !== "-"
+    ? `<span class="owner">${esc(c.owner)}</span>` : "";
+  const nofiles = (!c.files || !c.files.length)
+    ? `<span class="warn">no files declared</span>` : "";
+  const age = col === "Doing" ? ageHTML(c.claimed) : "";
+  const dot = col === "Doing" ? `<span class="dot flight"></span>`
+            : col === "Review" ? `<span class="dot review"></span>` : "";
+  const label = `${c.id}: ${c.title}. ${col}`
+    + (owner ? `, held by ${c.owner}` : "") + ". Open details.";
+  return `<button class="card" draggable="true" data-id="${c.id}" aria-label="${esc(label)}">
+    <span class="card-top">${dot}<span class="id">${c.id}</span>${age}</span>
+    <span class="title">${esc(c.title)}</span>
+    <span class="meta">${owner}${tags}${nofiles}</span>
+  </button>`;
+}
+
+function render() {
+  const sig = {};
+  COLS.forEach(col => cardsIn(col).forEach(c => { sig[c.id] = col + "|" + c.owner; }));
+
+  $("cols").dataset.done = doneOpen ? "open" : "collapsed";
+  $("cols").innerHTML = COLS.map(col => {
+    // Filtered at the render step only — every OTHER cardsIn(col) caller
+    // (drag targets, the territory sidebar, the change-flash tracker just
+    // above) still sees the real board, so hiding cards here can never
+    // make a drop or a claim behave as if they did not exist.
+    const cards = humanOnly
+      ? cardsIn(col).filter(c => (c.tags || []).includes("needs-human"))
+      : cardsIn(col);
+    const collapsed = col === "Done" && !doneOpen;
+    const canAdd = ADDABLE.includes(col);
+    const quick = addingCol === col
+      ? `<div class="quick-add"><input class="qa-input" data-col="${col}" type="text"
+           aria-label="Title for the new ${col} card"
+           placeholder="New card title" value="${esc(addDraft)}"></div>`
+      : "";
+    const inner = quick + (cards.length
+      ? cards.map(c => cardHTML(c, col)).join("")
+      : (quick ? "" : `<p class="empty">Nothing here.</p>`));
+    const addBtn = canAdd
+      ? `<button class="col-btn" data-add="${col}" aria-label="Add a card to ${col}">${icon("plus")}</button>`
+      : "";
+    // Archive all: only worth showing once there is something to sweep.
+    const sweepBtn = (col === "Done" && cards.length && !collapsed)
+      ? `<button class="sweep" data-sweep="1">Archive all</button>` : "";
+    const foldBtn = col === "Done"
+      ? `<button class="col-btn" data-fold="1" aria-expanded="${doneOpen}"
+           aria-label="${doneOpen ? "Collapse" : "Expand"} Done">${icon(doneOpen ? "right" : "left")}</button>`
+      : "";
+    // Collapsed Done keeps a drop target, or finished work would be
+    // undraggable exactly when the column is out of the way.
+    const drop = collapsed
+      ? `<div class="drop-hint" data-col="${col}"></div>`
+      : `<div class="drop" data-col="${col}">${inner}</div>`;
+    return `<section class="col${collapsed ? " collapsed" : ""}" data-col="${col}" aria-label="${col}">
+      <div class="col-head">
+        <h2 class="col-pill">${col}</h2><span class="n">${cards.length}</span>
+        <span class="spacer"></span>${sweepBtn}${addBtn}${foldBtn}
+      </div>
+      ${drop}
+    </section>`;
+  }).join("");
+
+  const nDoing = cardsIn("Doing").length;
+  $("n-doing").textContent = nDoing;
+  $("n-ready").textContent = cardsIn("Ready").length;
+  $("n-review").textContent = cardsIn("Review").length;
+  $("n-human").textContent = COLS.reduce((sum, col) =>
+    sum + cardsIn(col).filter(c => (c.tags || []).includes("needs-human")).length, 0);
+  $("filter-human").setAttribute("aria-pressed", String(humanOnly));
+  $("toggle-done-vis").setAttribute("aria-pressed", String(doneOpen));
+  $("n-done-tb").textContent = cardsIn("Done").length;
+  $("done-vis-label").textContent = doneOpen ? "shown" : "hidden";
+  $("pulse").className = "dot " + (nDoing ? "flight" : "idle");
+
+  // Flash only what actually moved or changed hands since the last render.
+  Object.keys(sig).forEach(id => {
+    if (prevSig[id] && prevSig[id] !== sig[id]) {
+      const el = document.querySelector(`.card[data-id="${id}"]`);
+      if (el) el.classList.add("changed");
+    }
+  });
+  prevSig = sig;
+
+  // Say the shape of the board out loud, but only when it changes — a
+  // live region that repeats itself every two seconds is a siren.
+  const spoken = `${nDoing} in flight, ${cardsIn("Ready").length} ready, `
+    + `${cardsIn("Review").length} awaiting sign-off`
+    + ((board.conflicts || []).length ? `, ${board.conflicts.length} file collisions` : "");
+  if (spoken !== lastSpoken) { $("live").textContent = spoken; lastSpoken = spoken; }
+
+  renderConflicts();
+  renderWorkers();
+  renderMap();
+  wireCards();
+  wireQuickAdd();
+  wireColButtons();
+  if (openId) openDrawer(openId);
+}
+
+function wireColButtons() {
+  document.querySelectorAll("[data-add]").forEach(btn => {
+    btn.onclick = () => { addingCol = btn.dataset.add; addDraft = ""; render(); };
+  });
+  const fold = document.querySelector("[data-fold]");
+  if (fold) fold.onclick = () => { doneOpen = !doneOpen; render(); };
+  document.querySelectorAll("[data-open]").forEach(btn => {
+    btn.onclick = () => openDrawer(btn.dataset.open);
+  });
+
+  /* Same arm-then-confirm pattern as the inspector's Delete button: no
+     window.confirm, because embedded browser views block it outright. */
+  const btn = document.querySelector("[data-sweep]");
+  if (!btn) return;
+  const disarm = () => {
+    clearTimeout(btn._armTimer);
+    btn.classList.remove("armed");
+    btn.textContent = "Archive all";
+  };
+  btn.onclick = async () => {
+    if (!btn.classList.contains("armed")) {
+      btn.classList.add("armed");
+      btn.textContent = "Confirm";
+      btn._armTimer = setTimeout(disarm, 3000);
+      return;
+    }
+    disarm();
+    btn.disabled = true;
+    await api("/api/archive_all", {});
+    btn.disabled = false;
+  };
+}
+
+/* ── quick add: title only ─────────────────────────────────────────────
+   A "+" at the top of Backlog/Ready opens one input. Enter files it and
+   leaves the input open for the next one; Escape or an empty blur closes
+   it. Everything else about the card (tags, files, verify, body) is filled
+   in later from the inspector, once the work is understood well enough to
+   say. */
+function wireQuickAdd() {
+  const input = document.querySelector(".qa-input");
+  if (!input) return;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+  input.addEventListener("input", () => { addDraft = input.value; });
+  // A card title is one line, so an image cannot live in it. Pasted or
+  // dropped shots are held here and land in the new card's BODY when it
+  // is created — the title stays a title.
+  const shotsFor = ev => {
+    const files = imagesFrom(ev);
+    if (!files.length) return;
+    ev.preventDefault();
+    files.forEach(async f => {
+      try {
+        addShots.push(await uploadImage(f));
+        const n = addShots.length;
+        toast(`${n} image${n > 1 ? "s" : ""} attached — press Return to create the card`);
+      } catch (e) { toast(e.message); }
+    });
+  };
+  input.addEventListener("paste", shotsFor);
+  input.addEventListener("dragover", ev => {
+    if ((ev.dataTransfer || {}).types?.includes("Files")) ev.preventDefault();
+  });
+  input.addEventListener("drop", shotsFor);
+  input.addEventListener("keydown", async e => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const title = input.value.trim();
+      if (!title) return;
+      const col = input.dataset.col;
+      addDraft = "";
+      input.disabled = true;
+      const body = addShots.join("\n");
+      addShots = [];
+      await api("/api/add", { col, title, fields: {}, body });
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      addingCol = null;
+      addDraft = "";
+      addShots = [];
+      render();
+    }
+  });
+  input.addEventListener("blur", () => {
+    if (!input.value.trim()) { addingCol = null; addDraft = ""; render(); }
+  });
+}
+
+/* ── interaction ────────────────────────────────────────────────────── */
+function wireCards() {
+  document.querySelectorAll(".card").forEach(el => {
+    el.addEventListener("dragstart", e => {
+      e.dataTransfer.setData("text/plain", el.dataset.id);
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend", () => el.classList.remove("dragging"));
+    el.addEventListener("click", () => openDrawer(el.dataset.id));
+  });
+  document.querySelectorAll(".drop, .drop-hint").forEach(zone => {
+    zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("over"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+    zone.addEventListener("drop", async e => {
+      e.preventDefault();
+      zone.classList.remove("over");
+      const id = e.dataTransfer.getData("text/plain");
+      const to = zone.dataset.col;
+      const from = findCol(id);
+      if (!id || from === to) return;
+      // Ready→Doing is a claim, not a plain move: it also enforces that no
+      // in-flight card already holds these files.
+      if (from === "Ready" && to === "Doing") {
+        await api("/api/claim", { id, owner: me() });
+      } else if (from === "Doing" && to === "Ready") {
+        await api("/api/release", { id });
+      } else {
+        await api("/api/move", { id, to });
+      }
+    });
+  });
+}
+
+function findCol(id) {
+  for (const col of COLS) if (cardsIn(col).some(c => c.id === id)) return col;
+  return null;
+}
+function findCard(id) {
+  for (const col of COLS) {
+    const c = cardsIn(col).find(x => x.id === id);
+    if (c) return [col, c];
+  }
+  return [null, null];
+}
+
+/* ── inspector ──────────────────────────────────────────────────────── */
+/* Reopened on every board change, so it must be re-entrant: whatever had
+   focus and wherever the caret sat has to survive the repaint, or a poll
+   two seconds into typing throws you out of the field. */
+function openDrawer(id) {
+  const [col, c] = findCard(id);
+  if (!c) { closeDrawer(); return; }
+  const dw = $("drawer");
+  const wasOpen = dw.classList.contains("open");
+  const ae = document.activeElement;
+  const keepId = wasOpen && ae && dw.contains(ae) ? ae.id : null;
+  const keepSel = keepId && ae && "selectionStart" in ae ? [ae.selectionStart, ae.selectionEnd] : null;
+  if (!wasOpen) returnFocus = ae;
+  openId = id;
+
+  const nexts = { Backlog: ["Ready"], Ready: ["Backlog"], Doing: ["Review", "Ready"],
+                  Review: ["Done", "Doing"], Done: ["Backlog"] };
+  // Claiming used to be drag-only, which meant it was impossible on a
+  // touch device: HTML5 drag events never fire there. It is a button now.
+  const claimBtn = col === "Ready"
+    ? `<button class="btn primary" data-claim="1">Claim as ${esc(me())}</button>` : "";
+  const moveBtns = (nexts[col] || []).map((t, i) =>
+    `<button class="btn${!claimBtn && i === 0 ? " primary" : ""}" data-move="${t}">${
+      t === "Ready" && col === "Doing" ? "Release to Ready" : "Move to " + t}</button>`).join("");
+  const archiveBtn = col === "Done"
+    ? `<button class="btn danger" data-archive="1">Archive</button>` : "";
+
+  dw.innerHTML = `
+    <div class="dw-head">
+      <span class="id">${c.id}</span>
+      <span class="tag c-${COL_HUE[col] || "gray"}">${col}</span>
+      <button class="close" id="dw-close" aria-label="Close the inspector">${icon("close")}</button>
+    </div>
+    <div class="dw-body">
+      <h3 id="dw-title">${esc(c.title)}</h3>
+      <div class="actions">${claimBtn}${moveBtns}${archiveBtn}
+        <button class="btn danger" data-delete="1">Delete</button>
+      </div>
+
+      <div class="group">
+        <div class="field"><label for="kv-owner">Owner</label>
+          <input id="kv-owner" value="${esc(c.owner === '-' ? '' : (c.owner || ''))}" placeholder="unassigned"></div>
+        <div class="field"><label for="kv-priority">Priority</label>
+          <input id="kv-priority" value="${esc(c.priority || '')}" placeholder="P2"></div>
+        <div class="field"><label for="kv-tags">Tags</label>
+          <input id="kv-tags" value="${esc((c.tags || []).join(', '))}" placeholder="sonnet-safe, design, needs-human"></div>
+        <div class="field tall code"><label for="kv-files">Files</label>
+          <textarea id="kv-files" rows="2" placeholder="comma-separated paths">${esc((c.files || []).join(', '))}</textarea></div>
+        <div class="field tall code"><label for="kv-verify">Verify</label>
+          <textarea id="kv-verify" rows="2" placeholder="the command that proves it is done">${esc(c.verify || '')}</textarea></div>
+      </div>
+      <div class="save-row">
+        <button class="btn" id="kv-save" disabled>Save changes</button>
+        <button class="btn quiet" id="kv-cancel">Revert</button>
+        <span class="status" id="kv-status"></span>
+      </div>
+
+      ${c.body ? `<h4 class="section-title">Brief</h4><div class="prose">${escImg(c.body)}</div>` : ""}
+
+      <h4 class="section-title">Comments</h4>
+      ${(c.comments || []).map(x => `<div class="cmt">${escImg(x)}</div>`).join("")
+        || `<p class="empty">None yet.</p>`}
+      <div class="composer">
+        <textarea id="cmt" placeholder="Add a comment" aria-label="New comment"></textarea>
+        <div class="send">
+          <button class="btn" id="cmt-post" disabled>Post comment</button>
+          <span class="hint">as ${esc(me())} · ⌘↵ to post</span>
+        </div>
+      </div>
+    </div>`;
+
+  dw.removeAttribute("inert");
+  dw.classList.add("open");
+  $("scrim").classList.add("open");
+  $("dw-close").onclick = closeDrawer;
+
+  // Editable metadata (owner/priority/tags/files/verify). These are plain
+  // "key: value" lines in BOARD.md, one per line — a stray newline would
+  // corrupt the parser, so every value is collapsed to one line on save.
+  // Compare against a snapshot to gate Save on an actual change, same as
+  // the comment composer gates Post on non-empty text.
+  const kvFields = ["owner", "priority", "tags", "files", "verify"];
+  const kvOriginal = {
+    owner: c.owner === "-" ? "" : (c.owner || ""),
+    priority: c.priority || "",
+    tags: (c.tags || []).join(", "),
+    files: (c.files || []).join(", "),
+    verify: c.verify || "",
+  };
+  const kvSave = $("kv-save"), kvCancel = $("kv-cancel"), kvStatus = $("kv-status");
+  const kvDirty = () => kvFields.some(f => $("kv-" + f).value !== kvOriginal[f]);
+  const kvCheck = () => { kvSave.disabled = !kvDirty(); kvStatus.textContent = ""; };
+  kvFields.forEach(f => $("kv-" + f).addEventListener("input", kvCheck));
+  kvCancel.onclick = () => {
+    kvFields.forEach(f => { $("kv-" + f).value = kvOriginal[f]; });
+    kvCheck();
+  };
+  kvSave.onclick = async () => {
+    const clean = s => s.replace(/\s*\n\s*/g, ", ").trim();
+    const fields = {
+      owner: clean($("kv-owner").value) || "-",
+      priority: clean($("kv-priority").value),
+      tags: clean($("kv-tags").value),
+      files: clean($("kv-files").value),
+      verify: clean($("kv-verify").value),
+    };
+    kvSave.disabled = true;
+    kvStatus.textContent = "Saving…";
+    const ok = await api("/api/edit", { id, fields });
+    // On success api()'s load(true) reloads the board and re-runs
+    // openDrawer(openId), which repaints these inputs from the saved
+    // state — that's what clears the dirty flag, not any code here.
+    if (!ok) { kvStatus.textContent = ""; kvSave.disabled = false; }
+  };
+
+  dw.querySelectorAll("[data-move]").forEach(b => {
+    b.onclick = async () => {
+      const to = b.dataset.move;
+      if (col === "Doing" && to === "Ready") await api("/api/release", { id });
+      else await api("/api/move", { id, to });
+    };
+  });
+  const claimEl = dw.querySelector("[data-claim]");
+  if (claimEl) claimEl.onclick = () => api("/api/claim", { id, owner: me() });
+
+  // Delete is destructive and irreversible, and window.confirm is not an
+  // option here — embedded browser views block modal dialogs outright
+  // (the same reason window.prompt was removed from this file). Arm on the
+  // first click, require a second click within a few seconds to actually
+  // send it; anything else (blur, timeout, another action) disarms.
+  const arm = (el, resting, armed, run) => {
+    if (!el) return;
+    const disarm = () => {
+      clearTimeout(el._armTimer);
+      el.classList.remove("armed");
+      el.textContent = resting;
+    };
+    el.onclick = async () => {
+      if (!el.classList.contains("armed")) {
+        el.classList.add("armed");
+        el.textContent = armed;
+        el._armTimer = setTimeout(disarm, 3000);
+        return;
+      }
+      disarm();
+      el.disabled = true;
+      const ok = await run();
+      if (ok) closeDrawer(); else el.disabled = false;
+    };
+  };
+  arm(dw.querySelector("[data-delete]"), "Delete", "Click again to delete",
+      () => api("/api/delete", { id }));
+  arm(dw.querySelector("[data-archive]"), "Archive", "Click again to archive",
+      () => api("/api/archive", { id }));
+
+  const ta = $("cmt"), post = $("cmt-post");
+  // The board polls every 2s and rebuilds this panel when it changes;
+  // restore whatever was being typed so a poll never eats a draft.
+  ta.value = draft;
+  post.disabled = !draft.trim();
+  ta.addEventListener("input", () => {
+    draft = ta.value;
+    post.disabled = !draft.trim();
+  });
+  ta.addEventListener("keydown", e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send(); }
+  });
+  // Paste or drop a screenshot straight into the comment.
+  attachImagePaste(ta, () => { draft = ta.value; post.disabled = !draft.trim(); });
+  post.onclick = send;
+
+  async function send() {
+    const text = ta.value.trim();
+    if (!text) return;
+    post.disabled = true;
+    const ok = await api("/api/comment", { id, author: me(), text });
+    if (ok) { draft = ""; const t = $("cmt"); if (t) t.value = ""; }
+    else post.disabled = false;
+  }
+
+  if (keepId && $(keepId)) {
+    const el = $(keepId);
+    el.focus();
+    if (keepSel) { try { el.setSelectionRange(keepSel[0], keepSel[1]); } catch (e) {} }
+  } else if (!wasOpen) {
+    $("dw-close").focus();
+  }
+}
+
+function closeDrawer() {
+  if (!openId) return;
+  openId = null;
+  draft = "";
+  const dw = $("drawer");
+  dw.classList.remove("open");
+  dw.setAttribute("inert", "");
+  $("scrim").classList.remove("open");
+  if (returnFocus && document.contains(returnFocus)) returnFocus.focus();
+  returnFocus = null;
+}
+
+// A modal panel keeps the keyboard: Tab cycles inside it and nowhere else.
+$("drawer").addEventListener("keydown", e => {
+  if (e.key !== "Tab") return;
+  const f = Array.from($("drawer").querySelectorAll(
+    'button, input, textarea, a[href], [tabindex]:not([tabindex="-1"])'))
+    .filter(el => !el.disabled && el.offsetParent !== null);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+
+/* ── chrome wiring ──────────────────────────────────────────────────── */
+$("scrim").onclick = closeDrawer;
+$("refresh").onclick = () => load(true);
+$("filter-human").onclick = () => { humanOnly = !humanOnly; render(); };
+$("toggle-done-vis").onclick = () => { doneOpen = !doneOpen; render(); };
+
+// The two-finger horizontal-scroll forwarder that used to live here was
+// for the swiping-columns tier (columns arranged in a horizontal strip
+// below 1100px). That tier is gone -- columns stack and their cards
+// wrap instead -- so .board never overflows horizontally at any width
+// any more, and the forwarder had nothing left to do.
+
+const sbToggle = $("sidebar-toggle");
+const setSidebar = open => {
+  $("sidebar").classList.toggle("open", open);
+  $("sidebar-scrim").classList.toggle("open", open);
+  sbToggle.setAttribute("aria-expanded", String(open));
+};
+sbToggle.onclick = () => setSidebar(sbToggle.getAttribute("aria-expanded") !== "true");
+$("sidebar-scrim").onclick = () => setSidebar(false);
+
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if (openId) closeDrawer();
+  else if (sbToggle.getAttribute("aria-expanded") === "true") setSidebar(false);
+});
+
+const meEl = $("me");
+meEl.value = localStorage.getItem("klaus.me") || "human";
+$("me-avatar").textContent = meEl.value.slice(0, 1);
+meEl.addEventListener("change", () => {
+  const v = meEl.value.trim() || "human";
+  meEl.value = v;
+  localStorage.setItem("klaus.me", v);
+  $("me-avatar").textContent = v.slice(0, 1);
+  if (openId) openDrawer(openId);   // the composer shows who you post as
+});
+
+load(true);
+setInterval(load, 2000);
+</script>
+</body>
+</html>
