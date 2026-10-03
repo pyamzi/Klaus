@@ -17,8 +17,10 @@ PY = ["add", "config", "consts", "dialogs", "editor", "lang", "main", "nconvert"
       "ngen", "options", "qt", "template", "utils", "web", "_version"]
 # Ruling R1: Task 2 ("the port follows Klaus rules") edits these; their
 # as-vendored sha256 stays in UPSTREAM.md, and the rest stay byte-identical.
-MODIFIED = ["add", "config", "consts", "dialogs", "editor", "main", "nconvert",
-            "ngen", "options", "web"]
+TASK2 = ["add", "config", "consts", "dialogs", "editor", "main", "nconvert",
+         "ngen", "options", "web"]
+# Later fixes edit these too (#13: utils.py keeps media paths in the folder).
+MODIFIED = TASK2 + ["utils"]
 
 
 def read(p):
@@ -83,7 +85,9 @@ check("...and UPSTREAM.md names it with its upstream commit",
 check("UPSTREAM.md lists excal_tab.py as a Klaus addition", "`excal_tab.py`" in text)
 t2 = [ln for ln in text.splitlines() if ln.startswith("Modified by Task 2")]
 check("UPSTREAM.md has one line naming the files Task 2 modified",
-      len(t2) == 1 and all("`%s.py`" % n in t2[0] for n in MODIFIED), str(t2))
+      len(t2) == 1 and all("`%s.py`" % n in t2[0] for n in TASK2), str(t2))
+check("UPSTREAM.md names every later-modified file",
+      all("`%s.py`" % n in text for n in MODIFIED if n not in TASK2))
 
 section("byte identity with installed IOE")
 if not os.path.isdir(SRC):

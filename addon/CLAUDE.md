@@ -1209,8 +1209,9 @@ same reason.
   ported to Klaus rules. `setup()` (called once from `__init__`) registers
   IOE's hooks, "Image Occlusion Options…" in Tools and "Image Occlusion
   Help…" in Help, never `setConfigAction` (Klaus keeps its Config button).
-  **Conflict guard**: with add-on `1374772155` installed AND enabled
-  (`allAddons()` first: `isEnabled` is True for a missing folder) it
+  **Conflict guard**: with IOE installed AND enabled under either folder
+  name, `1374772155` (AnkiWeb) or `image_occlusion_enhanced` (its
+  .ankiaddon) (`allAddons()` first: `isEnabled` is True for a missing folder), it
   registers nothing and shows one tooltip a second later. `occlude(editor,
   image_path, initial_svg=None)` opens svg-edit; `initial_svg` loads as
   the starting masks in add mode. Note type, mask SVGs and the `imgocc`
@@ -1233,8 +1234,9 @@ same reason.
   outside the new image. Only a label NEW to the scene gets a new mask (id
   `klaus-new-<n>`, which ngen reads as a new card); one the old scene had
   keeps what the user left, a resized mask stays theirs and a deleted one
-  stays deleted (R22). The PNG gets a new media name; the old image and its
-  scene stay for notes not yet updated.
+  stays deleted (R22). The PNG gets a new media name; the old image's scene
+  stays while any note still names that image, then goes to Anki's media
+  trash (`add.drop_unused_sidecar`, the one removal path).
 - `web/copilot.js`: injected into editor webviews; shadow-DOM-aware
   (`composedPath`). Ghost text and Ask are gone — this file now only tracks
   field focus (for PDF page-insert targeting) and the image-crop dblclick

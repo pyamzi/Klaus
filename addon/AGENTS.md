@@ -79,7 +79,7 @@ Addons/                       # Git repo root
     ├── tag_migrate.py          # One-time klaus:: -> !Library:: tag rename for upgrading collections
     ├── browse_toggles.py       # Browse toolbar ◧/◨ sidebar and editor-column toggles
     ├── crop_dialog.py          # Image-crop dialog (crop saved as a new media file)
-    ├── image_occlusion/        # Image Occlusion Enhanced v1.4.0 (AGPL-3) built in: setup() (off while add-on 1374772155 is enabled), occlude(); provenance in UPSTREAM.md
+    ├── image_occlusion/        # Image Occlusion Enhanced v1.4.0 (AGPL-3) built in: setup() (off while IOE is enabled as 1374772155 or image_occlusion_enhanced), occlude(); provenance in UPSTREAM.md
     ├── config.json             # Default add-on config
     ├── config.md               # Config key documentation (shown in Anki config UI)
     ├── manifest.json           # Package name and version for non–AnkiWeb distribution

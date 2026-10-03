@@ -10,6 +10,9 @@ from aqt import mw
 from aqt.utils import tooltip
 
 CONFLICT_ADDON = "1374772155"
+# IOE's folder names: AnkiWeb's id, and its package name when installed from
+# the .ankiaddon file.
+CONFLICT_ADDONS = (CONFLICT_ADDON, "image_occlusion_enhanced")
 CONFLICT_TOOLTIP = (
     "Image Occlusion is now built into KlausNote. Disable the separate Image "
     "Occlusion Enhanced add-on and restart Anki."
@@ -24,7 +27,8 @@ def setup() -> bool:
     global _active
     mgr = mw.addonManager
     # allAddons() first: isEnabled() is True for a folder that isn't there.
-    if CONFLICT_ADDON in mgr.allAddons() and mgr.isEnabled(CONFLICT_ADDON):
+    installed = mgr.allAddons()
+    if any(name in installed and mgr.isEnabled(name) for name in CONFLICT_ADDONS):
         # Add-ons load before the main window shows; a tooltip now is unseen.
         mw.progress.single_shot(
             1000,
