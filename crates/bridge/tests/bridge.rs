@@ -745,6 +745,7 @@ fn sync_server() -> String {
         std::env::set_var("SYNC_USER1", "normal:secret");
         std::env::set_var("SYNC_USER2", "conflict:secret");
         std::env::set_var("SYNC_USER3", "auto:secret");
+        std::env::set_var("SYNC_USER4", "open:secret");
         let base_folder = tempfile::tempdir().unwrap().keep();
         runtime().block_on(async move {
             let config = SyncServerConfig { host: "127.0.0.1".parse().unwrap(), port: 0, base_folder, ip_header: default_ip_header() };
@@ -1057,4 +1058,40 @@ fn syncs_automatically_when_quiet() {
     let out: SyncOutcome = call(&b, "klausSyncOutcome", Empty {});
     assert!(matches!(ok(&out), ChangesRequired::FullUpload | ChangesRequired::FullSync), "{out:?}");
     assert!(!b.auto_sync_tick(), "not asked again while it waits");
+}
+
+/// Anki's rule for sync on open and on quit (aqt's can_auto_sync): signed in AND
+/// "Sync automatically" on. The tick, open and quit all apply the one rule.
+#[test]
+fn open_and_quit_sync_only_with_auto_sync_on() {
+    let (_dir, a) = signed_in("open");
+    let out = a.sync();
+    done(&a.full_sync(true, Some(out.server_media_usn)));
+    let set_auto = |on: bool| {
+        let set = SetSettingJsonRequest { key: "autoSync".into(), value_json: if on { b"true".to_vec() } else { b"false".to_vec() } };
+        a.call("setProfileConfigJson", &set.encode_to_vec()).unwrap();
+    };
+    let outcome_id = || call::<SyncOutcome>(&a, "klausSyncOutcome", Empty {}).id;
+
+    set_auto(false);
+    assert!(!a.should_auto_sync());
+    let before = outcome_id();
+    assert!(!a.sync_in_background(), "auto sync off: no sync on open");
+    a.sync_before_quit(std::time::Duration::from_secs(10));
+    assert_eq!(outcome_id(), before, "...nor on quit");
+    // A sync the user asks for still runs.
+    assert_eq!(ok(&a.sync()), ChangesRequired::NoChanges);
+
+    set_auto(true);
+    assert!(a.should_auto_sync());
+    assert!(a.sync_in_background(), "auto sync on: syncs on open");
+    // Bounded like wait_for_media: a sync that never finishes fails, not hangs.
+    let outcome = (0..200)
+        .map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            call::<SyncOutcome>(&a, "klausSyncOutcome", Empty {})
+        })
+        .find(|outcome| outcome.state() == SyncState::Done && outcome.id > before)
+        .expect("the open sync didn't finish within 10 s");
+    assert!(outcome.background && ok(&outcome) == ChangesRequired::NoChanges, "{outcome:?}");
 }
