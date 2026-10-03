@@ -166,6 +166,14 @@ def _library_root_check(then: Callable[[], None]) -> None:
             then()
             return
 
+        # Persist the root BEFORE the move (#18): on_done is fenced by
+        # the profile generation and never delivered on quit, and the
+        # map entries the move writes are relative to this root. Unmoved
+        # PDFs keep resolving from the legacy pdfs/ store, so the root is
+        # safe to record at every point mid-move (and the rescan's
+        # straggler sweep finishes an interrupted one).
+        settings.patch({"library_root": chosen})
+
         def do(_col: Any) -> Any:
             from . import drive_store, settings
 
@@ -175,7 +183,6 @@ def _library_root_check(then: Callable[[], None]) -> None:
         def on_done(result: Any) -> None:
             if generation != _profile_generation:
                 return
-            settings.patch({"library_root": chosen})
             failed = (result or {}).get("failed") or {}
             if failed:
                 tooltip(
