@@ -167,15 +167,25 @@
     clearRows();
   }
 
+  // A second click while switching would run the sequence again on the new mode.
+  let switching = false;
   async function toggleMode() {
-    const was = selected;
-    await setConfigBool({ key: ConfigKey_Bool.BROWSER_TABLE_SHOW_NOTES_MODE, value: !notesMode, undoable: false });
-    await loadMode();
-    // Keep the same note selected across modes.
-    if (was !== undefined) {
-      selected = notesMode ? (await getCard({ cid: was })).noteId : (await cardsOfNote({ nid: was })).cids[0];
+    if (switching) return;
+    switching = true;
+    try {
+      const was = selected;
+      await setConfigBool({ key: ConfigKey_Bool.BROWSER_TABLE_SHOW_NOTES_MODE, value: !notesMode, undoable: false });
+      await loadMode();
+      // Keep the same note selected across modes.
+      if (was !== undefined) {
+        selected = notesMode ? (await getCard({ cid: was })).noteId : (await cardsOfNote({ nid: was })).cids[0];
+      }
+      await runSearch();
+    } catch {
+      // The bridge's error was shown.
+    } finally {
+      switching = false;
     }
-    await runSearch();
   }
 
   // Side editor: Anki's editor page in browser mode, loaded with the selected note
@@ -195,27 +205,34 @@
   async function select(id: bigint | undefined) {
     selected = id;
     if (id === undefined) return;
-    const nid = await noteIdOf(id);
-    const note = await getNote({ nid });
-    await editorReady;
-    if (selected !== id) return;
-    const editor = editorFrame.contentWindow as any;
-    // As Anki's browser (editor.call_after_note_saved): save the current note's
-    // pending edits before loading another, or they'd be lost.
-    await editor.saveNow?.();
-    if (selected !== id) return;
-    editor.require("anki/ui").loaded.then(() =>
-      editor.loadNote({
-        nid: Number(nid),
-        notetypeId: Number(note.notetypeId),
-        focusTo: null,
-        originalNoteId: null,
-        reviewerCardId: null,
-        deckId: null,
-        initial: true,
-      }),
-    );
-    if (previewOpen) showPreview();
+    try {
+      const nid = await noteIdOf(id);
+      const note = await getNote({ nid });
+      await editorReady;
+      if (selected !== id) return;
+      const editor = editorFrame.contentWindow as any;
+      // As Anki's browser (editor.call_after_note_saved): save the current note's
+      // pending edits before loading another, or they'd be lost.
+      await editor.saveNow?.();
+      if (selected !== id) return;
+      editor
+        .require("anki/ui")
+        .loaded.then(() =>
+          editor.loadNote({
+            nid: Number(nid),
+            notetypeId: Number(note.notetypeId),
+            focusTo: null,
+            originalNoteId: null,
+            reviewerCardId: null,
+            deckId: null,
+            initial: true,
+          }),
+        )
+        .catch(() => {});
+      if (previewOpen) await showPreview();
+    } catch {
+      // The bridge's error was shown; the editor keeps the previous note.
+    }
   }
 
   function move(delta: number) {
