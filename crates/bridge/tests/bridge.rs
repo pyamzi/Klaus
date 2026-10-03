@@ -297,6 +297,7 @@ async fn change_notetype_saves_and_closes_only_on_success() {
     let mut note: Note = call(&bridge, "newNote", NotetypeId { ntid: basic });
     note.fields = vec!["Front".into(), "Back".into()];
     let added: AddNoteResponse = call(&bridge, "addNote", AddNoteRequest { note: Some(note.clone()), deck_id: 1 });
+    let also_added: AddNoteResponse = call(&bridge, "addNote", AddNoteRequest { note: Some(note.clone()), deck_id: 1 });
     let untouched: AddNoteResponse = call(&bridge, "addNote", AddNoteRequest { note: Some(note), deck_id: 1 });
     let info: ChangeNotetypeInfo = call(
         &bridge,
@@ -304,7 +305,6 @@ async fn change_notetype_saves_and_closes_only_on_success() {
         GetChangeNotetypeInfoRequest { old_notetype_id: basic, new_notetype_id: reversed },
     );
     let mut change = info.input.unwrap();
-    change.note_ids = vec![added.note_id];
     change.new_fields = vec![1, 0];
     let bridge = Arc::new(bridge);
     let web_dir = tempfile::tempdir().unwrap();
@@ -330,6 +330,7 @@ async fn change_notetype_saves_and_closes_only_on_success() {
             .post(format!("{base}/_anki/{method}"))
             .header("Content-Type", "application/binary")
             .header("Cookie", cookie)
+            .header("Referer", format!("{base}/change-notetype/{basic}?nid={}&nid={}", added.note_id, also_added.note_id))
             .body(body)
             .send()
     };
@@ -352,19 +353,43 @@ async fn change_notetype_saves_and_closes_only_on_success() {
         assert_eq!(denied.status(), 403);
     }
     assert_eq!(post("changeNotetype", vec![0xff]).await.unwrap().status(), 500);
+    // A page without Qt's selected-note context must not silently save nothing.
+    for page in [
+        format!("{base}/change-notetype/{basic}"),
+        format!("{base}/change-notetype/{basic}?nid=invalid"),
+        format!("{base}/change-notetype/{basic}?nid=-1"),
+        format!("{base}/editor/?nid={}", added.note_id),
+        format!("http://example.invalid/change-notetype/{basic}?nid={}", added.note_id),
+    ] {
+        let response = client
+            .post(format!("{base}/_anki/changeNotetype"))
+            .header("Content-Type", "application/binary")
+            .header("Cookie", cookie)
+            .header("Referer", page)
+            .body(change.encode_to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400);
+    }
     assert!(hooks.try_recv().is_err());
+    // The unmodified Anki page sends no IDs; its URL supplies the selection.
+    assert!(change.note_ids.is_empty());
     assert_eq!(post("changeNotetype", change.encode_to_vec()).await.unwrap().status(), 204);
     let (method, input) = tokio::time::timeout(std::time::Duration::from_secs(5), hooks.recv()).await.unwrap().unwrap();
     assert_eq!(method, "closeEditCurrent");
     assert!(input.is_empty());
-    let saved: Note = call(&bridge, "getNote", NoteId { nid: added.note_id });
-    assert_eq!(saved.notetype_id, reversed);
-    assert_eq!(saved.fields, ["Back", "Front"]);
+    for nid in [added.note_id, also_added.note_id] {
+        let saved: Note = call(&bridge, "getNote", NoteId { nid });
+        assert_eq!(saved.notetype_id, reversed);
+        assert_eq!(saved.fields, ["Back", "Front"]);
+    }
     let saved: Note = call(&bridge, "getNote", NoteId { nid: untouched.note_id });
     assert_eq!(saved.notetype_id, basic);
     assert_eq!(saved.fields, ["Front", "Back"]);
 
     change.new_notetype_id = 0;
+    change.note_ids = vec![added.note_id];
     assert_eq!(post("changeNotetype", change.encode_to_vec()).await.unwrap().status(), 204);
     let (method, input) = tokio::time::timeout(std::time::Duration::from_secs(5), hooks.recv()).await.unwrap().unwrap();
     assert_eq!(method, "showMessageBox");

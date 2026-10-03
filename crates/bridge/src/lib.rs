@@ -1201,12 +1201,33 @@ fn save_deck_configs(state: AppState, body: Bytes) -> Response {
 }
 
 /// Like Anki's change-notetype dialog: apply the mapping, then close on success.
-fn change_notetype(state: AppState, body: Bytes) -> Response {
-    if anki_proto::notetypes::ChangeNotetypeRequest::decode(body.as_ref()).is_err() {
+fn change_notetype(state: AppState, headers: &HeaderMap, body: Bytes) -> Response {
+    let Ok(mut req) = anki_proto::notetypes::ChangeNotetypeRequest::decode(body.as_ref()) else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "invalid changeNotetype request").into_response();
+    };
+    // Qt supplies the dialog's selection; Klaus's page URL carries it as repeated
+    // ?nid=<note ID> parameters. Anki's page itself sends no note_ids.
+    if req.note_ids.is_empty() {
+        if let Some(page) = headers.get(header::REFERER)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|url| reqwest::Url::parse(url).ok())
+            .filter(|url| url.origin().ascii_serialization() == &*state.origin && url.path().starts_with("/change-notetype/"))
+        {
+            let ids: Result<Vec<i64>, _> = page.query_pairs()
+                .filter(|(key, _)| key == "nid")
+                .map(|(_, value)| value.parse())
+                .collect();
+            let Ok(ids) = ids else {
+                return (StatusCode::BAD_REQUEST, "invalid changeNotetype note selection").into_response();
+            };
+            req.note_ids = ids;
+        }
+    }
+    if req.note_ids.is_empty() || req.note_ids.iter().any(|id| *id <= 0) {
+        return (StatusCode::BAD_REQUEST, "changeNotetype requires selected note IDs").into_response();
     }
     state.bridge.touch();
-    save_in_background(state, "changeNotetype", body, Some("closeEditCurrent"))
+    save_in_background(state, "changeNotetype", req.encode_to_vec().into(), Some("closeEditCurrent"))
 }
 
 fn save_in_background(state: AppState, method: &'static str, body: Bytes, close: Option<&'static str>) -> Response {
@@ -1284,7 +1305,7 @@ async fn anki_method(
         return save_deck_configs(state, body);
     }
     if method == "changeNotetype" {
-        return change_notetype(state, body);
+        return change_notetype(state, &headers, body);
     }
     // Polls don't count as activity, or the app would never look quiet to auto sync.
     if !matches!(method.as_str(), "klausSyncOutcome" | "latestProgress" | "mediaSyncStatus" | "klausSyncAccount") {

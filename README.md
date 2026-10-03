@@ -75,6 +75,12 @@ npx tauri build --bundles app # build Klaus.app
 
 See [`AGENTS.md`](AGENTS.md) for the development notes.
 
+To open Anki's change-notetype page directly, use
+`KLAUS_OPEN="change-notetype/<old notetype ID>?nid=<note ID>"` in a debug build.
+Repeat `nid` for each selected note (all must have the old note type). The bridge
+supplies this selection from the same-origin page URL, as Qt's dialog normally
+does; saves without a selection are rejected.
+
 ## License
 
 Klaus embeds Anki's `rslib`, which is licensed under the GNU AGPL v3, so Klaus is **AGPL-3.0-or-later** ([LICENSE](LICENSE), [ADR 0001](docs/adr/0001-build-on-anki-rslib.md)). Klaus is not affiliated with or endorsed by Ankitects.
