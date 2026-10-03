@@ -1052,7 +1052,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
 
     The surface PdfSidebar and its hosts use: ``load_path``,
     ``set_page_texts``, ``load_annotations``, ``clear_document``,
-    ``go_to_page``, ``toggle_thumbnails``, ``_page_label``.
+    ``go_to_page``, ``_page_label``.
     """
 
     def __init__(
@@ -2192,9 +2192,6 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._eval(
             f"window.klausGoToPage && window.klausGoToPage({int(page) + 1});"
         )
-
-    def toggle_thumbnails(self) -> None:
-        self._eval("window.klausToggleThumbs && window.klausToggleThumbs();")
 
     def cleanup(self) -> None:
         """Unregister the webview from Anki's global hooks BEFORE its
