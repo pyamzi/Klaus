@@ -110,15 +110,13 @@ check("zero literal hex colours in code (comments are exempt)",
       len(hits) == 0, str(hits))
 
 section("setup_flow.py: window title casing")
-check('"Welcome to Klaus" prose title is left untouched (explicitly exempt)',
-      '"Welcome to Klaus"' in _SETUP_SRC)
 check("addon-name window titles use KlausNote casing",
       "KlausNote: local models" in _SETUP_SRC)
-check("bare 'KlausNote:' titles were not left behind",
-      "KlausNote: Ollama isn't running" not in _SETUP_SRC
-      and "KlausNote: local embedding model isn't set up yet" not in _SETUP_SRC
-      and "KlausNote: embedding model needed" not in _SETUP_SRC
-      and "KlausNote: semantic search needs an API key" not in _SETUP_SRC)
+check("the welcome title names KlausNote", '"Welcome to KlausNote"' in _SETUP_SRC)
+# The retired names must not come back in any user-visible string.
+_legacy = re.findall(r"[\"'][^\"'\n]*\b(?:Klaus Note|KlausBook|Klaus(?=[:.,?!)\"']|\s(?!account)))", _SETUP_SRC)
+check("no 'Klaus', 'Klaus Note' or 'KlausBook' left in setup_flow's strings",
+      not _legacy, str(_legacy))
 
 
 section("crop_dialog.py: dialog is themed")

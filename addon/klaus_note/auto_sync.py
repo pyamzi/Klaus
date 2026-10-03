@@ -51,7 +51,7 @@ def entry(now: float, last_sync: float | None, failures: int,
     if full_pending:
         return "full", "AnkiWeb needs a full sync. Click to choose whether to upload or download."
     if failures >= FAIL_LIMIT:
-        return "failed", "Couldn't sync with AnkiWeb. Klaus keeps retrying; click to try now."
+        return "failed", "Couldn't sync with AnkiWeb. KlausNote keeps retrying; click to try now."
     if not last_sync:
         return "never", "Not synced with AnkiWeb yet. Click to sync now."
     return "synced", f"Synced with AnkiWeb {ago(now - last_sync)}. Click to sync now."

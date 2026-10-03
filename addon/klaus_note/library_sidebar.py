@@ -629,7 +629,7 @@ def _confirm_remove(safe: str, name: str) -> None:
             pdf_handler.set_missing(uf, pdf_handler.load_missing(uf) - {safe})
 
     tag_sync._ask(
-        f"“{name}” is no longer in your Library folder. Remove it from Klaus too?"
+        f"“{name}” is no longer in your Library folder. Remove it from KlausNote too?"
         "\n\nThis also removes its marks and its card tag.",
         yes,
         lambda: None,

@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix='external clients ') as root:
         tester.click()
         check('connection test disables repeat clicks while running', not tester.isEnabled() and 'Testing' in status.text())
         op = pending_ops.pop()
-        with patch.object(bridge, 'test_connection', return_value={'ok':True,'message':'Connected to Klaus. 17 tools available.','tool_count':17}) as diagnostic:
+        with patch.object(bridge, 'test_connection', return_value={'ok':True,'message':'Connected to KlausNote. 17 tools available.','tool_count':17}) as diagnostic:
             op.success(op.op(None))
         check('diagnostic uses copied interpreter and paths', diagnostic.call_args.args == (actual['command'], actual['args'][0], actual['args'][2]))
         check('connection success restores button and shows status', tester.isEnabled() and '17 tools' in status.text())

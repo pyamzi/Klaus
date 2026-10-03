@@ -791,7 +791,7 @@ def manage_models_dialog(*_args: Any) -> None:
         if button is install_btn:
             runtime_controls.addWidget(button)
         else:
-            _row(advanced_layout, button.text(), "Manage the Ollama runtime installed by Klaus.", button)
+            _row(advanced_layout, button.text(), "Manage the Ollama runtime installed by KlausNote.", button)
     runtime_hint = QLabel(
         "Runs your card-matching model on this computer. "
         f"First-time installation downloads {ollama_runtime.runtime_download_size_hint()}."
@@ -1013,9 +1013,9 @@ def manage_models_dialog(*_args: Any) -> None:
     appearance_layout = _page(
         "Appearance",
         "Appearance",
-        "The KlausBook design layer: backgrounds for Anki's deck, "
+        "The KlausNote design layer: backgrounds for Anki's deck, "
         "overview and study screens, and the deck-screen widgets. The "
-        "accent color styles Klaus's own windows in either mode. To add "
+        "accent color styles KlausNote's own windows in either mode. To add "
         "or remove a widget such as the review heatmap, right-click the "
         "deck screen and choose Edit Widgets",
     )
@@ -1079,9 +1079,9 @@ def manage_models_dialog(*_args: Any) -> None:
     _row(
         appearance_layout,
         "KlausBook design",
-        "Restyle Anki toward the KlausBook look: toolbar, backgrounds, "
+        "Restyle Anki toward the KlausNote look: toolbar, backgrounds, "
         "frosted panels, and widget editing on the deck screen. "
-        "Off, Anki keeps its native design and Klaus adds only its "
+        "Off, Anki keeps its native design and KlausNote adds only its "
         "tools.",
         klausbook_cb,
     )
@@ -1659,7 +1659,7 @@ def manage_models_dialog(*_args: Any) -> None:
     _row(
         appearance_layout,
         "Accent color",
-        "Recolors buttons, pills and highlights across every Klaus "
+        "Recolors buttons, pills and highlights across every KlausNote "
         "surface. Click the last square to pick your own color.",
         accent_ctl,
     )
@@ -2483,7 +2483,7 @@ def manage_models_dialog(*_args: Any) -> None:
                 paint_all()
                 refresh_dirty()
             if snapshot["reachable"]:
-                status = "Ollama is running (managed by Klaus)." if snapshot["owned"] else (
+                status = "Ollama is running (managed by KlausNote)." if snapshot["owned"] else (
                     "Ollama is running (external). Stop it in the application that started it."
                 )
             else:

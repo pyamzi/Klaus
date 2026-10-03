@@ -662,7 +662,7 @@ _render_slice = _HM_SRC.split("def _on_deck_browser_content")[1].split(
 _css_slice = _HM_SRC.split("def _on_webview_will_set_content")[1].split(
     "def _open_day")[0]
 check("the panel is a deck-screen WIDGET, so it renders only with the "
-      "KlausBook design layer on — native mode leaves Anki's deck "
+      "KlausNote design layer on — native mode leaves Anki's deck "
       "screen exactly as Anki draws it",
       "design_enabled" in _render_slice)
 check("its stylesheet is gated the same way, so the css can never "

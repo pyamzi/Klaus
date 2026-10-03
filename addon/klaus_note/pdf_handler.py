@@ -1462,7 +1462,7 @@ def rescan_root(
     if plan["missing"]:
         print(
             "[klaus_note] rescan: missing from the Library folder "
-            f"(nothing deleted on the Klaus side): {plan['missing']}"
+            f"(nothing deleted on the KlausNote side): {plan['missing']}"
         )
     if plan["ambiguous"]:
         print(
