@@ -138,6 +138,8 @@ class PdfSidebar(QWidget):
         # Per-tab reading position for the session (PDF reader 3/5).
         self._syncing = False
         self._last_page: dict[str, int] = {}
+        # The document switch waiting on the page's commit (#15).
+        self._switch: Optional[list] = None
 
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -294,7 +296,39 @@ class PdfSidebar(QWidget):
             return False
         return True
 
+    def _after_commit(self, fn: Callable[[], None]) -> None:
+        """Run ``fn`` (a load or clear that replaces the shown document)
+        once the page's open text box, note or card editor has committed
+        (#15). The commit must land BEFORE the viewer's annotations switch:
+        bridge messages carry no document id, so a late text-add would be
+        minted into the new PDF. Nothing shown: no editor, run now. Only
+        the latest request runs; ``_after_switch`` chains onto it."""
+        pending = self._switch = [fn]
+
+        def run() -> None:
+            if self._switch is not pending:
+                return  # superseded, or cancelled by re-selecting the shown tab
+            self._switch = None
+            for f in pending:
+                f()
+
+        commit = getattr(self._viewer, "commit_open_edit", None)
+        if commit is None or self._name is None:
+            run()
+        else:
+            commit(run)
+
+    def _after_switch(self, fn: Callable[[], None]) -> None:
+        """``fn`` after the pending document switch, or now if none."""
+        if self._switch is not None:
+            self._switch.append(fn)
+        else:
+            fn()
+
     def load_pdf(self, name: str) -> None:
+        self._after_commit(lambda: self._load_now(name))
+
+    def _load_now(self, name: str) -> None:
         from . import pdf_handler, viewer_context
         from . import settings
 
@@ -499,8 +533,8 @@ class PdfSidebar(QWidget):
         """Bake pending marks, let an open text box commit, then reload in
         place keeping page and zoom; the reload re-reads the marks and
         mirrors outside ones."""
-        if name is None or name != self._name:
-            return
+        if name is None or name != self._name or self._switch is not None:
+            return  # a switch is waiting: this document is being left
         try:
             from . import annotation_save
 
@@ -547,6 +581,7 @@ class PdfSidebar(QWidget):
         and drops its save-pipeline subscription. Bakes pending marks and
         releases the document in doc_sync first. Call from every path
         that tears a sidebar down."""
+        self._switch = None  # a late commit reply must not load into a closed panel
         self._release()
         unsub, self._unsub_doc = self._unsub_doc, None
         if unsub is not None:
@@ -673,16 +708,18 @@ class PdfSidebar(QWidget):
         if prev and prev != name:
             self._last_page[prev] = self._current_page
         if self.is_loaded(name):
+            self._switch = None  # back before a pending switch answered
             self._set_active_pointer(name)
             return
         self.load_pdf(name)
         page = self._last_page.get(name, 0)
         if page > 0:
-            # One tick so the viewer takes the new document before we
-            # jump back to the remembered position.
-            QTimer.singleShot(
+            # After the load (it waits on the page's commit), and one tick
+            # later so the viewer takes the new document before we jump
+            # back to the remembered position.
+            self._after_switch(lambda: QTimer.singleShot(
                 0, lambda: self.jump_to_page(page)
-            )
+            ))
 
     @_guarded
     def _on_tab_close(self, name: str) -> None:
@@ -692,7 +729,9 @@ class PdfSidebar(QWidget):
         self._persist()
         if not self.tabs.names():
             try:
-                self.clear()
+                # Commit an open box into the closing document first (#15).
+                # clear() itself stays immediate: delete and "missing" use it.
+                self._after_commit(self.clear)
             except Exception:
                 pass
             if self.host_key == "editor":

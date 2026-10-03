@@ -130,9 +130,14 @@ class FakeJs(QtWidgets.QWidget):
     def load_annotations(self, name):
         self.calls.append(("load_annotations", name))
 
+    hold = False  # True: the page has an open box and answers later
+
     def commit_open_edit(self, then):
         self.calls.append(("commit",))
-        self.waiting = then
+        if self.hold:
+            self.waiting = then
+        else:
+            then()  # no box open: the page answers at once (#15 asks on every switch)
 
     def repoint(self, path):
         self.calls.append(("repoint", path))
@@ -235,11 +240,13 @@ def _counting_load(name):
 sb.load_pdf = _counting_load
 LOG.clear()
 v.calls.clear()
+v.hold = True
 sb._on_doc_event("changed", "Doc", None)
 check("flushes pending saves, then asks the page to commit its text box",
       LOG[:1] == [("flush", "Doc", False)] and v.calls == [("commit",)], f"{LOG} {v.calls}")
 check("nothing reloads before the commit is done", TIPS == [] and v.waiting is not None)
 v.waiting()
+v.hold = False
 spin()
 check("reloads the same file exactly once, in place, keeping page and zoom",
       [c for c in v.calls if c[0] == "load_path"] == [("load_path", DOC, "Doc", True)]
@@ -409,6 +416,7 @@ spin()
 check("JSON older than the PDF: no request", PIPE.requests == [], str(PIPE.requests))
 
 section('a second reader: "changed" waits for its own text box, reloads keeping the view')
+fake.hold = True
 fake.calls.clear()
 LOG.clear()
 del TIPS[:]
