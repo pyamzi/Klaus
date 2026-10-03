@@ -699,8 +699,7 @@ same reason.
   clears a highlight's note and its card); `apply_text_update(...,
   kind=)` serves text and notes. The "Hand-drawn style" preference
   (`hand_drawn`, default on) reaches the page as `klausSetHandDrawn` on
-  ready and on Save (`pdfjs_viewer.set_hand_drawn_all`); the page (plan
-  Tasks 6–7, pending as of 2026-10-01) draws
+  ready and on Save (`pdfjs_viewer.set_hand_drawn_all`); the page draws
   rough.js marker highlights (vendored `web/rough.min.js`, seed
   `pdfjs_pure.seedFor(id)`, never stored) and Excalifont text (served as
   `web/fonts/Excalifont-Regular.ttf`, OFL-1.1), and places cards with
@@ -709,6 +708,20 @@ same reason.
   notes and highlight-note cards are Helvetica `/FreeText` filled with
   their ink (no border, no `/AP`), a highlight's note also rides in its
   `/Contents`, and the old `/Text` sticky icon is gone.
+  Page side (`pdfjs_viewer.html`): `renderAnnotLayers` rebuilds
+  `.hlLayer`, `.noteLayer` and `.cardLayer` per page; with hand-drawn on
+  the bands and connector lines are rough.js paths in an SVG whose
+  viewBox is the page in points, and cards are DOM boxes at points ×
+  `state.scale` — no `Math.random`, so the wobble is the same at every
+  zoom. A note's `rects[0]` INCLUDES `CARD_PAD` (6 pt) on every side.
+  The Note tool (`#abNote`, `state.tool = "note"`) places a card and
+  opens `openTextEdit`'s card variant; emptying a card posts
+  `note-remove` (a note) or `note-text ""` (a highlight's card), never
+  an empty add. `cardAt` is hit-tested before `highlightAt`, a card
+  drag posts ONE message on drop (`card-move` or `note-update`), and
+  the card's context menu falls through to the occlusion and zoom
+  items. With hand-drawn off the page is today's divs, ✎ anchors and
+  Helvetica (free-standing notes still draw, as plain cards).
   Parity completed by K-100:
   Cmd/Ctrl-double-click copies the slide (through the shared
   copyPageImage bridge — the clipboard is the "insert into field"

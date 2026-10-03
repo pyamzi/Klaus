@@ -60,7 +60,7 @@ Success means:
 - rough.js 4.6.x (MIT) is vendored as `klausmate/web/rough.min.js` with its licence, built by a pinned script, and loaded before the main script.
 - `pdfjs_pure.js` gains `seedFor(id)` (a stable 32-bit hash) and `cardSpot(rec, pageW, pageH)` (the default card position, clamped), both node-tested.
 - With hand-drawn on, `renderAnnotLayers` draws:
-  - highlight: per rect, a rough.js `polygon` in one SVG per page layer, `fillStyle: "solid"`, `roughness: 1`, `seed: seedFor(id)`, no stroke, the band 2 pt taller than the rect with jittered ends, the ink at today's 0.43 alpha, `mix-blend-mode: multiply` so text stays readable.
+  - highlight: per rect, a rough.js `polygon` in one SVG per page layer, `fillStyle: "solid"`, `roughness: 1`, `seed: seedFor(id)`, no stroke, the band 2 pt taller than the rect with jittered ends, the ink at today's 0.43 alpha, no blend mode (final review, 2026-10-01: a multiply blend made bands vanish on dark slides; the plain alpha is what the off path already shows readably).
   - text box: the existing `div.hltext`, in the hand-drawn font stack.
   - highlight note: a card (`div.noteCard`: rough.js rounded-rectangle outline and fill in the highlight's ink, text in the hand-drawn font) at `card` or `cardSpot`, and a rough.js line from the card's nearest corner to the highlight. The ✎ anchor goes.
   - free-standing note: the same card at `rects[0]`.

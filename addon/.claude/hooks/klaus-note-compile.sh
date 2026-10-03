@@ -20,6 +20,16 @@ case "$FILE" in
   *) exit 0 ;;
 esac
 
+# Cloud sessions have no Anki install, so only the syntax check applies.
+if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ]; then
+  if ! OUT=$(python3 -m py_compile "$FILE" 2>&1); then
+    echo "klaus_note: py_compile failed after editing $(basename "$FILE"):" >&2
+    echo "$OUT" >&2
+    exit 2
+  fi
+  exit 0
+fi
+
 LINK="$HOME/Library/Application Support/Anki2/addons21/klaus_note"
 if [ ! -L "$LINK" ]; then
   echo "klaus_note: the addons21 symlink is MISSING ($LINK)." >&2
