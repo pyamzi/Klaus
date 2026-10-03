@@ -8,10 +8,10 @@
 /* Klaus follows the system appearance (no in-app toggle). */
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
-/* The Klaus design system (the "Apple HIG" artifact, tokens.json), which is the
-   shadcn-svelte preset b2GUtMueeu (Nova, Zinc, bold menu accent) with the HIG
-   layers, a darker ring and Anki's colours. Keep the two in step: change the
-   design system, then regenerate these two blocks from its tokens. */
+/* The Klaus design system (its tokens.json), which is the shadcn-svelte preset
+   b2GUtMueeu (Nova, Zinc, bold menu accent) with the Klaus layers, a darker ring
+   and Anki's colours. Keep the two in step: change the design system, then
+   regenerate these two blocks from its tokens. */
 :root {
 	--background: #ffffff;
 	--foreground: #09090b;
