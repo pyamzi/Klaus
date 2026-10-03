@@ -69,8 +69,7 @@ fn main() {
         // the next sync rather than asked for while quitting.
         RunEvent::ExitRequested { api, .. } => {
             let bridge = app.state::<Arc<Bridge>>().inner().clone();
-            let account = bridge.sync_account();
-            if account.email.is_empty() || !account.auto_sync || synced_on_close.swap(true, Ordering::SeqCst) {
+            if !bridge.should_auto_sync() || synced_on_close.swap(true, Ordering::SeqCst) {
                 return;
             }
             api.prevent_exit();
