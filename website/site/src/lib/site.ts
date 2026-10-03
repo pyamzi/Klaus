@@ -21,6 +21,6 @@ export const site = {
 	gaId: '',
 
 	discord: 'https://discord.gg/uFRgE8RtDY',
-	appRepo: 'https://github.com/pyamzi/Klaus',
-	addonRepo: 'https://github.com/pyamzi/KlausMate'
+	appRepo: 'https://github.com/pyamzi/klaus-note',
+	addonRepo: 'https://github.com/pyamzi/klaus-note-addon'
 };
