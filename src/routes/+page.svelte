@@ -19,6 +19,8 @@
     FilteredDeckForUpdate,
     SetDeckCollapsedRequest_Scope,
   } from "@generated/anki/decks_pb";
+  import { Empty } from "@generated/anki/generic_pb";
+  import { postProto } from "@generated/post";
   import { onMount } from "svelte";
   import { toast } from "svelte-sonner";
   import { Button } from "$lib/components/ui/button";
@@ -51,7 +53,9 @@
 
   // Klaus's shell shows a file picker, then opens Anki's import page.
   function importPackage() {
-    fetch("/_anki/klausImportPackage", { method: "POST", headers: { "Content-Type": "application/binary" } });
+    postProto("klausImportPackage", new Empty(), Empty).catch(() => {
+      // Shown by the bridge.
+    });
   }
 
   // Create / Rename. "Parent::Child" nests, as in Anki.
@@ -71,11 +75,16 @@
     undoToast = undefined;
   }
 
+  // A save in flight: a second Enter mustn't add the deck twice.
+  let busy = $state(false);
+
   async function saveName(event: SubmitEvent) {
     event.preventDefault();
+    if (busy) return;
     retireUndo();
     const trimmed = name.trim();
     if (!trimmed) return;
+    busy = true;
     try {
       if (renaming) {
         await renameDeck({ deckId: renaming.deckId, newName: trimmed });
@@ -88,6 +97,8 @@
       await refresh();
     } catch {
       // The bridge's error was already shown.
+    } finally {
+      busy = false;
     }
   }
 
@@ -123,6 +134,7 @@
   ];
   let filteredOpen = $state(false);
   let filtered: FilteredDeckForUpdate | undefined = $state();
+  let filteredName = $state("");
   // Plain objects: $state doesn't track protobuf class instances.
   type Term = { search: string; limit: number; order: Order };
   let terms: Term[] = $state([]);
@@ -137,6 +149,7 @@
       // As Anki: a second filter shows as enabled only for an existing deck.
       second = deckId !== 0n && saved.length > 1;
       reschedule = deck.config!.reschedule;
+      filteredName = deck.name;
       filtered = deck;
       filteredOpen = true;
     } catch {
@@ -145,10 +158,13 @@
   }
   async function saveFiltered(event: SubmitEvent) {
     event.preventDefault();
+    if (busy) return;
     retireUndo();
     const deck = filtered!;
+    deck.name = filteredName;
     deck.config!.searchTerms = (second ? terms : terms.slice(0, 1)).map((t) => new Deck_Filtered_SearchTerm(t));
     deck.config!.reschedule = reschedule;
+    busy = true;
     try {
       // Saving (re)builds the deck; Anki then shows it.
       await addOrUpdateFilteredDeck(deck);
@@ -156,6 +172,8 @@
       await refresh();
     } catch {
       // e.g. no cards matched: shown by the bridge; the dialog stays open.
+    } finally {
+      busy = false;
     }
   }
 
@@ -255,7 +273,7 @@
         <Dialog.Close>
           {#snippet child({ props })}<Button {...props} variant="outline">Cancel</Button>{/snippet}
         </Dialog.Close>
-        <Button type="submit">{renaming ? "Rename" : "Create"}</Button>
+        <Button type="submit" disabled={busy}>{renaming ? "Rename" : "Create"}</Button>
       </Dialog.Footer>
     </form>
   </Dialog.Content>
@@ -266,12 +284,12 @@
     {#if filtered}
       <form onsubmit={saveFiltered} class="flex flex-col gap-4">
         <Dialog.Header>
-          <Dialog.Title>{filtered.id ? `Options for ${filtered.name}` : "Filtered Deck"}</Dialog.Title>
+          <Dialog.Title>{filtered.id ? `Options for ${filteredName}` : "Filtered Deck"}</Dialog.Title>
         </Dialog.Header>
         <Field.Group>
           <Field.Field>
             <Field.Label for="filtered-name">Name</Field.Label>
-            <Input id="filtered-name" bind:value={filtered.name} required />
+            <Input id="filtered-name" bind:value={filteredName} required />
           </Field.Field>
           {#each terms as term, i (i)}
             {#if i === 0 || second}
@@ -285,7 +303,7 @@
                   <div class="flex gap-4">
                     <Field.Field>
                       <Field.Label for="limit-{i}">Limit to</Field.Label>
-                      <Input id="limit-{i}" type="number" min="1" max="99999" bind:value={term.limit} />
+                      <Input id="limit-{i}" type="number" min="1" max="99999" bind:value={term.limit} required />
                     </Field.Field>
                     <Field.Field>
                       <Field.Label for="order-{i}">Cards selected by</Field.Label>
@@ -321,7 +339,7 @@
           <Dialog.Close>
             {#snippet child({ props })}<Button {...props} variant="outline">Cancel</Button>{/snippet}
           </Dialog.Close>
-          <Button type="submit">{filtered.id ? "Rebuild" : "Build"}</Button>
+          <Button type="submit" disabled={busy}>{filtered.id ? "Rebuild" : "Build"}</Button>
         </Dialog.Footer>
       </form>
     {/if}
