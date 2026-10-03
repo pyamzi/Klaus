@@ -361,6 +361,15 @@ check("...and library_actions no longer imports aqt's exec-based showWarning",
       "showWarning" not in open("klaus_note/library_actions.py", encoding="utf-8").read())
 check("...the drop-path warning has a parent", "parent=mw" in _src["_refuse_clashes"])
 
+section("import: only an identical name is a re-import; a case-only twin is a clash")
+add_pdf("cs1", "Casing.pdf", "CaseDir", "!Library::CaseDir::Casing")
+warned.clear()
+check("the same name in the same folder is a re-import",
+      act._refuse_clashes(["/elsewhere/Casing.pdf"], "CaseDir") == ["/elsewhere/Casing.pdf"] and not warned, str(warned))
+check("a case-only twin is refused, naming the clash",
+      act._refuse_clashes(["/elsewhere/casing.pdf"], "CaseDir") == [] and any("Casing.pdf" in w for w in warned),
+      str(warned))
+
 section("Remove Folder never removes a tag a PDF still stores (round 1)")
 add_pdf("leg", "Legacy.pdf", None, "!Library::Legacy")
 drive_store.add_folder(UF, "Legacy")
@@ -375,13 +384,15 @@ add_pdf("s2", "Shared_A.pdf", "Onc", "!Library::Onc::Shared_A")  # legacy: both 
 drive_store.rename_display(UF, "s2", "Shared B.pdf")  # renamed in Finder: no clash any more
 live["col"] = AnkiCol({1: {"!Library::Onc::Shared_A"}, 2: {"!Library::Onc::Shared_A"}})
 _real_cached = ts._cached_matches_many
-ts._cached_matches_many = lambda safes, cfg: {s: [(2, 0.99)] for s in safes}
+ts._cached_matches_many = lambda safes, cfg: {s: [({"s1": 1, "s2": 2}.get(s, 9), 0.99)] for s in safes}
 ts.sync_after_folder_rename(None, ["s2"])
 check("the keeper's note does not get the renamed PDF's tag",
       "!Library::Onc::Shared_B" not in live["col"].notes[1], str(live["col"].notes))
 check("...the renamed PDF's tag is built from ITS matches",
       "!Library::Onc::Shared_B" in live["col"].notes[2], str(live["col"].notes))
 check("...and the keeper's tag is untouched", "!Library::Onc::Shared_A" in live["col"].notes[1])
+check("...while the shared tag drops the renamed PDF's note (rebuilt from the keeper's matches)",
+      "!Library::Onc::Shared_A" not in live["col"].notes[2], str(live["col"].notes))
 ts.set_stored_tag("s2", "!Library::Onc::Shared_A")
 live["col"] = AnkiCol({1: {"!Library::Onc::Shared_A"}, 2: {"!Library::Onc::Shared_A"}})
 ts._cached_matches_many = lambda safes, cfg: {s: None for s in safes}
@@ -389,6 +400,8 @@ ts.sync_after_rename(None, "s2")
 check("cold cache: nothing is copied, the new tag is registered empty",
       "!Library::Onc::Shared_B" not in live["col"].notes[1] | live["col"].notes[2]
       and "!Library::Onc::Shared_B" in live["col"].tags.all(), str((live["col"].notes, live["col"].tags.all())))
+check("...and the shared tag is left as it was (an unknown cache never shrinks it)",
+      all("!Library::Onc::Shared_A" in live["col"].notes[n] for n in (1, 2)), str(live["col"].notes))
 ts._cached_matches_many = _real_cached
 
 section("the clash check fails CLOSED (round 1)")
@@ -423,6 +436,18 @@ _real_clashes = ts.library_clashes
 ts.library_clashes = lambda: {"flagged": "“flagged.pdf” clashes."}
 iq.refresh(None)
 check("the flagged PDF is skipped, the other queued", [n for _k, n in _queued] == ["ok"], str(_queued))
+_queued.clear()
+ts.library_clashes = lambda: None
+check("a clash check that cannot read the Library queues nothing (fails closed)",
+      iq.refresh(None) == 0 and _queued == [], str(_queued))
+
+
+def _raise():
+    raise OSError("library unreadable")
+
+
+ts.library_clashes = _raise
+check("...nor does one that raises", iq.refresh(None) == 0 and _queued == [], str(_queued))
 ts.library_clashes = _real_clashes
 for k, v in _saved_iq.items():
     setattr(iq, k, v)

@@ -459,10 +459,15 @@ class ReplaceRefused(OSError):
 def name_in_library(user_files_dir: str, name: str) -> str | None:
     """The safe name an import of ``name`` would clash with (#10): one
     already mapped or ingested, including names that sanitize alike
-    ("Lecture 1" and "Lecture_1"). None when the name is free."""
+    ("Lecture 1" and "Lecture_1") and names that differ only in case, as
+    Anki compares tags. Returns the existing safe name in its stored
+    spelling, so callers act on that entry. None when the name is free."""
     safe = _safe_basename(name)
-    free = _unique_safe(user_files_dir, load_library_map(user_files_dir), safe) == safe
-    return None if free else safe
+    taken = _taken_safe_names(user_files_dir, load_library_map(user_files_dir))
+    if safe in taken:
+        return safe
+    key = safe.casefold()
+    return next((s for s in sorted(taken) if s.casefold() == key), None)
 
 
 def replace_blocker(user_files_dir: str, name: str, root: str | None) -> str | None:
@@ -530,6 +535,8 @@ def save_pdf(
     safe = _safe_basename(name)
     clash = name_in_library(user_files_dir, name)
     filename = _library_filename(os.path.basename(raw_path), safe)
+    if clash:
+        safe = clash  # the existing entry's key, case-only matches included
     mapped = mapping.get(safe) if clash else None
     prior = os.path.join(root, mapped) if in_root and mapped else None
     if replace is not None:
@@ -559,17 +566,33 @@ def save_pdf(
             os.path.dirname(pdf_dest),
             f".{os.path.basename(pdf_dest)}.{uuid.uuid4().hex}.tmp",
         )
+        backup = None
         try:
             shutil.copy2(raw_path, tmp)
-            if old and os.path.isfile(old) and replace(old) is False:
-                raise ReplaceRefused(
-                    f"“{os.path.basename(old)}” couldn't be moved to "
-                    "the Trash, so nothing was replaced."
-                )
-            os.replace(tmp, pdf_dest)
+            if old and os.path.isfile(old):
+                # A local second name for the old file: if the swap below
+                # fails after the Trash move, it goes back where it was.
+                backup = os.path.join(os.path.dirname(old), f".{os.path.basename(old)}.{uuid.uuid4().hex}.bak")
+                try:
+                    os.link(old, backup)
+                except OSError:
+                    shutil.copy2(old, backup)
+                if replace(old) is False:
+                    raise ReplaceRefused(
+                        f"“{os.path.basename(old)}” couldn't be moved to "
+                        "the Trash, so nothing was replaced."
+                    )
+            try:
+                os.replace(tmp, pdf_dest)
+            except OSError:
+                if backup and not os.path.exists(old):
+                    os.replace(backup, old)
+                    backup = None
+                raise
         finally:
-            if os.path.exists(tmp):
-                os.remove(tmp)
+            for leftover in (tmp, backup):
+                if leftover and os.path.exists(leftover):
+                    os.remove(leftover)
         if replacing:
             # The new file starts with no marks: nothing of the old one
             # may later read as "deleted outside" or rank against it.
@@ -1373,13 +1396,24 @@ def _rel_folder(rel: str) -> str | None:
     return "/".join(parts) or None
 
 
+def _taken_safe_names(user_files_dir: str, mapping: dict) -> set[str]:
+    """Every safe name in use: mapping entries and ingested contexts."""
+    names = set(mapping)
+    try:
+        names.update(f[:-4] for f in os.listdir(os.path.join(user_files_dir, "contexts")) if f.endswith(".txt"))
+    except OSError:
+        pass
+    return names
+
+
 def _unique_safe(user_files_dir: str, mapping: dict, stem: str) -> str:
-    """A safe name not already used by a mapping entry or a context."""
+    """A safe name not already used by a mapping entry or a context,
+    compared casefolded (a case-only twin would share a tag)."""
     base = _safe_basename(stem)
-    ctx = os.path.join(user_files_dir, "contexts")
+    used = {s.casefold() for s in _taken_safe_names(user_files_dir, mapping)}
 
     def taken(s: str) -> bool:
-        return s in mapping or os.path.isfile(os.path.join(ctx, s + ".txt"))
+        return s.casefold() in used
 
     if not taken(base):
         return base

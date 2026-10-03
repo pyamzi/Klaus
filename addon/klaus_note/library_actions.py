@@ -347,18 +347,19 @@ def import_files(paths: list[str], folder: str | None = None) -> int:
 def _refuse_clashes(paths: list[str], folder: str | None) -> list[str]:
     """#14: drop files whose name would share a tag with a folder or
     another PDF in ``folder``, in one warning naming each clash. A file
-    named exactly like a PDF already there is a re-import, not a clash."""
+    named exactly like a PDF already there is a re-import, not a clash;
+    a case-only difference is a clash (Anki compares tags casefolded)."""
     pdfs, folders = tag_sync.library_layout()
-    same = {d.casefold() for f, d in pdfs.values() if (f or None) == (folder or None)}
+    same = {d for f, d in pdfs.values() if (f or None) == (folder or None)}
     keep, refused = [], []
     for path in paths:
         name = os.path.basename(path)
-        why = None if name.casefold() in same else tag_sync.name_clash(pdfs, folders, folder, name)
+        why = None if name in same else tag_sync.name_clash(pdfs, folders, folder, name)
         if why:
             refused.append(why)
             continue
         keep.append(path)
-        same.add(name.casefold())
+        same.add(name)
         pdfs[f"\0import{len(keep)}"] = (folder or None, name)  # a batch can clash with itself
     if refused:
         # A tick later: this runs inside a Finder drop's event filter, and

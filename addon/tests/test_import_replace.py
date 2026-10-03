@@ -101,6 +101,8 @@ try:
     check("...also for a name that sanitizes to it",
           ph.name_in_library(uf, "Lecture_1") == "Lecture_1")
     check("...and not for a new name", ph.name_in_library(uf, "Lecture 2") is None)
+    check("...and for a case-only twin, as the stored spelling (Anki tags compare casefolded)",
+          ph.name_in_library(uf, "lecture 1") == "Lecture_1", repr(ph.name_in_library(uf, "lecture 1")))
     info = ph.save_pdf(uf, "Lecture 1", other, root=root)
     mirror(uf, "Lecture_1")
     check("existing Library file's bytes are unchanged", read(lib) == before)
@@ -121,6 +123,10 @@ try:
     check("a third copy at the root gets a suffixed file, distinct name",
           len({info["name"], info2["name"], "Lecture_1"}) == 3
           and info2["filename"] == "Lecture 1 (1).pdf", repr(info2))
+    info3 = ph.save_pdf(uf, "lecture 1", other, root=root)
+    check("a case-only twin is kept beside it, never under a case variant of a used name",
+          info3["name"].casefold() not in {"lecture_1", info["name"].casefold(), info2["name"].casefold()}
+          and read(lib) == before, repr(info3))
 finally:
     shutil.rmtree(uf, ignore_errors=True)
     shutil.rmtree(root, ignore_errors=True)
@@ -170,6 +176,36 @@ try:
     check("a mirror afterwards removes nothing and parks nothing",
           mirror(uf, "Lecture_1") == 0
           and ph.load_removed_native(uf, "Lecture_1") == [])
+finally:
+    shutil.rmtree(uf, ignore_errors=True)
+    shutil.rmtree(root, ignore_errors=True)
+
+section("Replace: a swap that fails after the Trash move puts the old file back")
+uf, root, lib, other = setup_marked()
+try:
+    old = read(lib)
+    trash = tempfile.mkdtemp(prefix="klaus_imp_trash_")
+    _real_replace = ph.os.replace
+
+    def failing_swap(src, dst):
+        if os.path.abspath(dst) == os.path.abspath(lib) and src.endswith(".tmp"):
+            raise OSError("swap failed")
+        return _real_replace(src, dst)
+
+    ph.os.replace = failing_swap
+    raised = False
+    try:
+        ph.save_pdf(uf, "Lecture 1", other, root=root,
+                    replace=lambda p: shutil.move(p, os.path.join(trash, os.path.basename(p))) or True)
+    except OSError:
+        raised = True
+    finally:
+        ph.os.replace = _real_replace
+    check("save_pdf reports the failure", raised)
+    check("the old file is back at its Library path", os.path.isfile(lib) and read(lib) == old)
+    check("its marks are intact", len(ph.load_annotations(uf, "Lecture_1")) == 1)
+    check("no temp or backup file is left beside it",
+          sorted(os.listdir(os.path.dirname(lib))) == ["Lecture 1.pdf"], str(os.listdir(os.path.dirname(lib))))
 finally:
     shutil.rmtree(uf, ignore_errors=True)
     shutil.rmtree(root, ignore_errors=True)

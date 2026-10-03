@@ -774,6 +774,27 @@ def _retag_from_cache(col, safe: str, tag: str, cfg: dict) -> None:
     apply_membership(col, tag, {nid for nid, score in matches if score >= threshold})
 
 
+def _rebuild_shared(col, old: str, leaving: set[str], cfg: dict) -> None:
+    """A shared tag (an old clash) after PDFs in ``leaving`` moved to
+    their own tags: it still holds their matches, so re-derive it from
+    the owners that stay. A cold cache leaves it as it is: "don't know"
+    is never "zero matches"."""
+    from . import retention
+
+    key = old.casefold()
+    owners = sorted(s for s, t in _stored_tags().items() if s not in leaving and t.casefold() == key)
+    if not owners:
+        return
+    caches = _cached_matches_many(owners, cfg)
+    if any(caches.get(s) is None for s in owners):
+        return
+    nids: set[int] = set()
+    for s in owners:
+        threshold = retention.get_threshold(s, cfg)
+        nids |= {nid for nid, score in caches[s] if score >= threshold}
+    apply_membership(col, old, nids)
+
+
 def _cached_matches_many(safes: list[str], cfg: dict) -> dict[str, list | None]:
     """Each PDF's current matches.json cache, loading the card index ONCE
     (the batch paths used to reload the whole vectors file per PDF, K-305).
@@ -835,8 +856,11 @@ def _do_sync_one(col, safe: str, tag: str, desired_nids: set[int]) -> dict:
     stored = get_stored_tag(safe)
     # A tag another PDF still stores stays that PDF's; the membership
     # diff below builds this PDF's own tag from scratch.
-    renamed = False if stored != tag and _shared(safe, stored) else apply_rename(col, stored, tag)
+    shared = stored != tag and _shared(safe, stored)
+    renamed = False if shared else apply_rename(col, stored, tag)
     added, removed = apply_membership(col, tag, desired_nids)
+    if shared:
+        _rebuild_shared(col, stored, {safe}, settings.read())
     if stored != tag:
         set_stored_tag(safe, tag)
     return {
@@ -1108,6 +1132,7 @@ def sync_after_rename(parent, pdf_name: str) -> None:
         def work(col):
             if keep:
                 _retag_from_cache(col, safe, desired, cfg)
+                _rebuild_shared(col, stored, {safe}, cfg)
             else:
                 apply_rename(col, stored, desired)
             set_stored_tag(safe, desired)
@@ -1155,6 +1180,9 @@ def sync_after_folder_rename(parent, safes: list[str]) -> None:
                     _retag_from_cache(col, safe, new, cfg)
                 else:
                     apply_rename(col, old, new)
+            leaving = {safe for safe, _o, _n, keep in pairs if keep}
+            for old in {o for _s, o, _n, keep in pairs if keep}:
+                _rebuild_shared(col, old, leaving, cfg)
             for safe, desired in updates:
                 set_stored_tag(safe, desired)
             return {"count": len(pairs)}

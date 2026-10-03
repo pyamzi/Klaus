@@ -415,13 +415,19 @@ def refresh(parent: Any = None) -> int:
         # #14: a PDF whose name clashes is shown flagged and waits for a
         # rename. Skipped only, never added to ``excluded``: that set's
         # index data is deleted above.
+        # Fails closed like the tag gate: when the Library can't be checked
+        # (None, or a raise), queue nothing rather than index a clash.
         try:
             from . import tag_sync
 
-            clashing = set(tag_sync.library_clashes() or ())
-        except Exception as exc:  # noqa: BLE001 - the tag gate still holds
+            clashes = tag_sync.library_clashes()
+        except Exception as exc:  # noqa: BLE001
             print(f"[klaus_note] clash check before refresh failed: {exc}")
-            clashing = set()
+            clashes = None
+        if clashes is None:
+            tooltip("Couldn't check the Library for name clashes, so nothing was queued.", parent=parent)
+            return 0
+        clashing = set(clashes)
         jobs = refresh_jobs(
             names, excluded | clashing, pending_names(), needs, stale, card_index_from_scratch(settings.read())
         )
