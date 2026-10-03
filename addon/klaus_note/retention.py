@@ -31,7 +31,7 @@ import math
 import os
 import threading
 import time
-from typing import Any, Callable
+from typing import Callable
 
 from aqt import mw
 from aqt.operations import QueryOp
@@ -759,7 +759,6 @@ def ensure_pdf_index(
     on_done: Callable[[pdf_index.PdfIndex], None] | None = None,
     on_error: Callable[[Exception], None] | None = None,
     cancel: threading.Event | None = None,
-    _reentrant: bool = False,
 ) -> None:
     """Bring one PDF's page index up to date. Callbacks fire on main.
 
@@ -767,29 +766,22 @@ def ensure_pdf_index(
     the provider — so the whole pipeline runs ``without_collection()``.
     Cancellation persists ``embedded_rows``; the next run resumes there.
 
-    Guards ``curation._busy`` — the ONE re-entrancy token shared with the
-    card-index sync and ensure_matches below, so a caller composing
-    several phases could hold it once across all of them. Pass
-    ``_reentrant=True`` when the caller already holds it.
-
-    No caller does. ``index_queue._run`` composes this with the two
-    around it and lets each phase take the token in TURN, because its
-    cancellation branches return without a release and a held token
-    would leak (K-146's finding; the caller this parenthetical used to
-    name, ``curation.run_curation``, was deleted by that same card).
+    Guards ``curation._busy``, the one token shared with the card-index
+    sync and ensure_matches below. ``index_queue._run`` composes this
+    with the two around it and lets each phase take the token in TURN,
+    because its cancellation branches return without a release and a
+    held token would leak (K-146's finding).
     """
-    if not _reentrant:
-        if curation._busy:
-            _fail(
-                on_error,
-                RuntimeError("KlausNote is already indexing — try again in a moment."),
-            )
-            return
-        curation._busy = True
+    if curation._busy:
+        _fail(
+            on_error,
+            RuntimeError("KlausNote is already indexing — try again in a moment."),
+        )
+        return
+    curation._busy = True
 
     def release() -> None:
-        if not _reentrant:
-            curation._busy = False
+        curation._busy = False
 
     def finish_err(exc: Exception) -> None:
         release()
@@ -895,27 +887,23 @@ def ensure_matches(
     on_done: Callable[[list[tuple[int, float]]], None] | None = None,
     on_error: Callable[[Exception], None] | None = None,
     cancel: threading.Event | None = None,
-    _reentrant: bool = False,
 ) -> None:
     """Return cached (or freshly computed) card↔PDF match scores.
 
     Guards ``curation._busy`` exactly like ensure_pdf_index above — this
     used to run entirely unguarded, letting its O(notes x pages) match
-    pass start concurrently with an index build. Pass ``_reentrant=True``
-    when a caller already holds the token.
+    pass start concurrently with an index build.
     """
-    if not _reentrant:
-        if curation._busy:
-            _fail(
-                on_error,
-                RuntimeError("KlausNote is already indexing — try again in a moment."),
-            )
-            return
-        curation._busy = True
+    if curation._busy:
+        _fail(
+            on_error,
+            RuntimeError("KlausNote is already indexing — try again in a moment."),
+        )
+        return
+    curation._busy = True
 
     def release() -> None:
-        if not _reentrant:
-            curation._busy = False
+        curation._busy = False
 
     def do_match(_col=None) -> tuple[list[tuple[int, float]], dict[int, int]]:
         cfg = settings.read()

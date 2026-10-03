@@ -33,7 +33,6 @@ BROWSE_MENUS = ("menuEdit", "menuqt_accel_view", "menu_Notes", "menu_Cards", "me
 TOOLBAR_CSS = """
 .hitem.klaus-active { text-decoration: underline; text-underline-offset: 3px; }
 """
-TABS = ("decks", "add", "browse")
 
 
 def preflight(kind: str, obj) -> list[str]:
@@ -234,10 +233,6 @@ _state = types.SimpleNamespace(
 
 class EmbedError(Exception):
     pass
-
-
-def _mw():
-    return _state.mw
 
 
 def _config() -> dict:

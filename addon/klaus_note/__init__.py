@@ -48,12 +48,6 @@ settings.run_on_main = mw.taskman.run_on_main
 settings.current_profile = lambda: getattr(mw, "col", None)
 
 
-# Retired config keys, scrubbed from old profiles on next launch. Covers the
-# old chat_* -> klaus_* rename pairs (both sides are now dead -- no renaming,
-# just dropped) plus every key the removed autocomplete/Ask/Browse-search
-# features owned.
-
-
 # ----------------------------- card context ------------------------------
 
 

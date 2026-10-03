@@ -105,10 +105,9 @@ impl Bridge {
             let mut pending = self.account.pending_sign_in.lock().unwrap();
             pending.take_if(|(expected, ..)| expected == state)
         };
-        let Some((expected, verifier, redirect)) = pending else {
+        let Some((_, verifier, redirect)) = pending else {
             return Err("This sign-in link has expired. Start again from KlausNote.".into());
         };
-        let _ = expected;
         #[derive(serde::Deserialize)]
         struct Token {
             access_token: String,

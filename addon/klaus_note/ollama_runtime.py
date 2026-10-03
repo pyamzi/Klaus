@@ -208,20 +208,6 @@ def cleanup_old_runtimes(keep: str | None = OLLAMA_VERSION) -> int:
     return freed
 
 
-def managed_runtime_disk_usage() -> int:
-    """Bytes used by managed runtime *versions* only; server.log and
-    ollama.pid in runtime_root don't count (they'd keep the settings
-    Remove button alive showing 'frees 0.0 GB')."""
-    root = runtime_root()
-    if not os.path.isdir(root):
-        return 0
-    return sum(
-        _dir_size(runtime_dir(entry))
-        for entry in os.listdir(root)
-        if _parse_version(entry) is not None
-    )
-
-
 def _dir_size(path: str) -> int:
     total = 0
     for dirpath, _dirs, files in os.walk(path):

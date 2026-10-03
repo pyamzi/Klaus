@@ -51,8 +51,6 @@ from aqt.utils import showWarning, tooltip
 from . import card_index, embeddings
 from . import settings
 
-ADDON_DIR = os.path.dirname(__file__)
-
 
 def index_dir() -> str:
     """The card index folder under the user files (settings.user_files())."""
@@ -72,8 +70,8 @@ _FIELD_SEP = "\x1f"  # anki notes.flds separator
 # one-way (ensure_index never checked retention's), and ensure_matches
 # checked neither.
 #
-# The ``_reentrant`` kwarg those functions carry let ONE caller hold the
-# token across several phases; K-146 removed that caller (run_curation).
+# Each of those functions takes and releases the token itself; K-146
+# removed the one caller (run_curation) that held it across several phases.
 # index_queue._run composes the same phases but lets each take the token
 # in turn, because its cancellation branches return without a release
 # and a held token would leak, bricking indexing for the session — see
@@ -158,7 +156,6 @@ def ensure_index(
     on_done: Callable[[card_index.CardIndex, bool], None] | None = None,
     on_error: Callable[[Exception], None] | None = None,
     cancel: threading.Event | None = None,
-    _reentrant: bool = False,
 ) -> None:
     """Bring the card index up to date. All callbacks fire on main thread.
 
@@ -183,24 +180,16 @@ def ensure_index(
     instead of racing it — a PDF dropped mid-Index-Now would otherwise
     be refused here and take a whole queued batch down as a "failure"
     the user never caused.
-
-    ``_reentrant``: for a caller that already holds ``_busy`` across a
-    larger composed pipeline this is one phase of — skips the
-    guard/release here so the single token is acquired exactly once.
-    No caller sets it today (see ``_busy``); the kwarg stays because
-    retention's two phases carry the matching one.
     """
     global _busy
-    if not _reentrant:
-        if _busy:
-            _fail(on_error, RuntimeError("KlausNote is already indexing — try again in a moment."))
-            return
-        _busy = True
+    if _busy:
+        _fail(on_error, RuntimeError("KlausNote is already indexing — try again in a moment."))
+        return
+    _busy = True
 
     def release() -> None:
         global _busy
-        if not _reentrant:
-            _busy = False
+        _busy = False
 
     def finish_err(exc: Exception) -> None:
         release()
