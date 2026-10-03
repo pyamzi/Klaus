@@ -7,10 +7,21 @@
 			"has": [
 				{
 					"type": "host",
-					"value": "www.klausnote.com"
+					"value": "www.klaus.so"
 				}
 			],
-			"destination": "https://klausnote.com/$1",
+			"destination": "https://klaus.so/$1",
+			"permanent": true
+		},
+		{
+			"source": "/(.*)",
+			"has": [
+				{
+					"type": "host",
+					"value": "(?:www\\.)?klausnote\\.com"
+				}
+			],
+			"destination": "https://klaus.so/$1",
 			"permanent": true
 		},
 		{
@@ -21,7 +32,7 @@
 					"value": "(?:www\\.)?klaus\\.ink"
 				}
 			],
-			"destination": "https://klausnote.com/$1",
+			"destination": "https://klaus.so/$1",
 			"permanent": true
 		}
 	],

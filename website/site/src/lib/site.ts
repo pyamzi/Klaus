@@ -1,8 +1,8 @@
-// Everything account-specific about klausnote.com, in one place. None of these are
+// Everything account-specific about klaus.so, in one place. None of these are
 // secrets: they all end up in the public page. Leave a value empty to switch that
 // feature off; the site still builds and works without it.
 export const site = {
-	url: 'https://klausnote.com',
+	url: 'https://klaus.so',
 	name: 'KlausNote',
 
 	// Waitlist signups go to the "Klaus" Supabase project, through its public

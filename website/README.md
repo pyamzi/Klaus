@@ -1,6 +1,6 @@
 # Klaus Note Website
 
-The klausnote.com marketing site lives in `site/` (SvelteKit + Tailwind + shadcn-svelte, prerendered by adapter-static). This folder is its own Git repository (local only for now), and the site is not deployed.
+The klaus.so marketing site (klausnote.com and klaus.ink redirect to it) lives in `site/` (SvelteKit + Tailwind + shadcn-svelte, prerendered by adapter-static). This folder is its own Git repository (local only for now), and the site is not deployed.
 
 Read `../shared-context/CONTEXT.md` for shared decisions and cross-project handoffs.
 
@@ -11,7 +11,7 @@ cd site
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # static site in site/build, ready for any static host
-npm run deploy     # build and publish to klausnote.com (Vercel project klaus-ink, still named after the old domain; link in site/.vercel)
+npm run deploy     # build and publish to klaus.so (Vercel project klaus-ink, still named after the old domain; link in site/.vercel)
 ```
 
 Before launch, fill in `site/src/lib/site.ts` (the only account-specific file): the Supabase project the waitlist writes to (already set: the "Klaus" project; schema in `site/supabase/waitlist.sql`, signups readable only from the Supabase dashboard), the Plausible domain, and the Google Analytics ID (loaded only after consent). Conversions are tracked as `Waitlist signup` (with the form's `source`), `CTA click` and `Outbound click`; in Plausible, add `Waitlist signup` as a custom-event goal. After deploying, submit `https://klausnote.com/sitemap.xml` in Google Search Console.

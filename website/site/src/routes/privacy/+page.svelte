@@ -5,14 +5,14 @@
 
 <svelte:head>
 	<title>Privacy · KlausNote</title>
-	<meta name="description" content="What klausnote.com collects, why, and how to have it removed." />
+	<meta name="description" content="What klaus.so collects, why, and how to have it removed." />
 	<link rel="canonical" href="{site.url}/privacy" />
 </svelte:head>
 
 <main class="privacy">
 	<a href="/" class="brand" aria-label="Back to KlausNote"><Wordmark size="sm" /></a>
 	<h1>Privacy</h1>
-	<p class="lede">This covers klausnote.com, the website. The KlausNote app and KlausNote for Anki have their own notes in their repositories.</p>
+	<p class="lede">This covers klaus.so, the website. The KlausNote app and KlausNote for Anki have their own notes in their repositories.</p>
 
 	<h2>Waitlist</h2>
 	<p>
