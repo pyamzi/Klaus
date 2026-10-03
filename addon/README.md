@@ -1,4 +1,4 @@
-# Klaus Note: a lecture-PDF library with local card matching for Anki
+# KlausNote: a lecture-PDF library with local card matching for Anki
 
 Klaus organizes lecture PDFs and matches them to cards using local Ollama
 embeddings. Lecture recording lives in the Klaus app, not the add-on. Matching
@@ -21,7 +21,7 @@ and [endpoint](klaus_note/anki_endpoint.py).
 | **Adding a PDF** | Click **Add to Library** at the bottom of the deck list or a deck's overview, drop a lecture PDF on either screen, or drop it straight into the Library window. |
 | **Card matching** | Right-click a PDF in the Library → **Add to Search Index**. Klaus searches the whole collection by meaning and tags every card that lecture covers with the PDF's own `!Library::…` tag. |
 | **Library** | The **Library** link in the top toolbar opens a window listing every PDF you've imported, in folders you create, each with a retention score, card/note counts, and a right-click menu to index, re-tag, suspend, chart, or open it. |
-| **Copying matches into a deck** | Select notes in Browse → **Notes → Klaus Note: Create Curated Deck from Selection…**. One undo step, originals untouched. |
+| **Copying matches into a deck** | Select notes in Browse → **Notes → KlausNote: Create Curated Deck from Selection…**. One undo step, originals untouched. |
 | **PDF viewer** | Native viewer opened from the Library or the editor's drop panel — text selection, page/slide image copy, highlights with sticky notes baked in as real PDF annotations. |
 | **Image cropping** | Right-click or double-click an image in a note field to crop it; saves as a new media file. |
 
@@ -40,7 +40,7 @@ copy or symlink `klaus_note/` into `addons21/` instead. Locate that folder using
 
 ## Local model setup
 
-Open **Tools → Klaus Note Preferences… → Local models** (the toolbar star
+Open **Tools → KlausNote Preferences… → Local models** (the toolbar star
 also opens Preferences). The initial endpoint is `http://127.0.0.1:11434`
 and embedding model is `nomic-embed-text`.
 

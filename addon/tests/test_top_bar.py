@@ -44,9 +44,9 @@ check("addressable for styling", 'id="klaus-logo"' in html)
 check("the <a> owns the accessible name — the inner svg repeats neither "
       "role nor aria-label",
       html.count("aria-label=") == 1
-      and 'aria-label="Klaus settings"' in html
+      and 'aria-label="KlausNote settings"' in html
       and "role=" not in html
-      and 'title="Klaus settings"' in html)
+      and 'title="KlausNote settings"' in html)
 check("the 26x26 seat is unchanged — the box is the toolbar's, only the "
       "artwork inside it changed",
       'width="26" height="26"' in html)

@@ -188,11 +188,11 @@ if m2 is not None and NODE:
     check("a failed render logs and ALSO toasts why (same toast: encoding as the others)",
           len(posts) == 2 and posts[0] == "log:occlude failed: boom"
           and posts[1] == "toast:" + base64.b64encode(
-              b"Klaus: couldn't render that page").decode(), str(posts) + run.stderr[-200:])
+              b"KlausNote: couldn't render that page").decode(), str(posts) + run.stderr[-200:])
 elif m2 is not None:
     print("SKIP  occludeImage failure toast (no node)")
 check("the failure toast is in the source",
-      "post(\"toast:\" + btoa(\"Klaus: couldn't render that page\"))" in html)
+      "post(\"toast:\" + btoa(\"KlausNote: couldn't render that page\"))" in html)
 check("a disabled item shows the tip on hover and on click",
       "mi.title = NO_EDITOR_TIP" in html and 'post("toast:" + btoa(NO_EDITOR_TIP))' in html)
 
@@ -446,7 +446,7 @@ io.occlude = lambda editor, path, svg=None: False  # IOE refused (it may have sa
 TIPS.clear()
 occ_sb(PNG, 4, False)
 check("occlude False with the guard off: a tooltip, never silent",
-      TIPS == ["Klaus: couldn't open the occlusion editor"], str(TIPS))
+      TIPS == ["KlausNote: couldn't open the occlusion editor"], str(TIPS))
 
 section("R15: the conflict guard is checked before anything is written")
 MKDIRS: list = []
@@ -482,7 +482,7 @@ try:
         TIPS.clear()
         ok, res = occ_sb(PNG, 4, False)
         check(label + ": the tooltip, no raise, occlude not called",
-              ok and TIPS == ["Klaus: couldn't save the page image"] and CALLS == [],
+              ok and TIPS == ["KlausNote: couldn't save the page image"] and CALLS == [],
               f"{res} {TIPS} {CALLS}")
 finally:
     rp.tempfile.mkdtemp, rp.atexit.register = _mkdtemp, _register
@@ -628,7 +628,7 @@ if draw_sb is not None:
     attempt(draw_sb)
     flush()
     check("occlude False: a tooltip, never silent",
-          TIPS == ["Klaus: couldn't open the occlusion editor"], str(TIPS))
+          TIPS == ["KlausNote: couldn't open the occlusion editor"], str(TIPS))
 
     section("a launch that raises, a tick later, never escapes the timer slot")
     HOOKED: list = []
@@ -646,7 +646,7 @@ if draw_sb is not None:
             flush()
             check(label + ": nothing reaches the excepthook", HOOKED == [], str(HOOKED))
             check(label + ": a tooltip says it failed",
-                  TIPS == ["Klaus: couldn't open the occlusion editor"], str(TIPS))
+                  TIPS == ["KlausNote: couldn't open the occlusion editor"], str(TIPS))
     finally:
         sys.excepthook = _hook
 

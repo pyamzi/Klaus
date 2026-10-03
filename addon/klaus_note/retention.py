@@ -782,7 +782,7 @@ def ensure_pdf_index(
         if curation._busy:
             _fail(
                 on_error,
-                RuntimeError("Klaus is already indexing — try again in a moment."),
+                RuntimeError("KlausNote is already indexing — try again in a moment."),
             )
             return
         curation._busy = True
@@ -908,7 +908,7 @@ def ensure_matches(
         if curation._busy:
             _fail(
                 on_error,
-                RuntimeError("Klaus is already indexing — try again in a moment."),
+                RuntimeError("KlausNote is already indexing — try again in a moment."),
             )
             return
         curation._busy = True
@@ -928,7 +928,7 @@ def ensure_matches(
         if cidx is None or not card_index.check_signature(cidx, sig):
             raise RuntimeError(
                 "The card index needs a rebuild — press Index Now in "
-                "Klaus Note Preferences → Local models first."
+                "KlausNote Preferences → Local models first."
             )
         digest = card_index_digest(cidx)
         cached = load_matches(pdf_name, sig, cidx.dims, src_sig, digest)

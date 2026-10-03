@@ -785,7 +785,7 @@ def sync_after_matches(
 
         _run_sync_op(
             parent,
-            f"Klaus: tag “{display}” in !Library",
+            f"KlausNote: tag “{display}” in !Library",
             work,
             on_done=lambda result: _tooltip_membership(parent, display, result),
             on_finished=settled,
@@ -821,7 +821,7 @@ def sync_after_threshold(
 
         _run_sync_op(
             parent,
-            f"Klaus: retag “{display}” for new sensitivity",
+            f"KlausNote: retag “{display}” for new sensitivity",
             lambda col: _do_sync_one(col, safe, tag, desired_nids),
             on_done=lambda result: _tooltip_membership(parent, display, result),
         )
@@ -877,7 +877,7 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
                 parent=parent,
             )
 
-        _run_sync_op(parent, "Klaus: retag PDFs for new default sensitivity", work, on_done=done)
+        _run_sync_op(parent, "KlausNote: retag PDFs for new default sensitivity", work, on_done=done)
     except Exception as exc:  # noqa: BLE001
         print(f"[klaus_note] tag_sync: sync_after_clear_overrides failed: {exc}")
 
@@ -909,7 +909,7 @@ def sync_after_rename(parent, pdf_name: str) -> None:
 
         _run_sync_op(
             parent,
-            f"Klaus: rename !Library tag for “{display}”",
+            f"KlausNote: rename !Library tag for “{display}”",
             work,
             on_done=lambda _r: tooltip(f"“{display}”: !Library tag renamed.", parent=parent),
         )
@@ -950,7 +950,7 @@ def sync_after_folder_rename(parent, safes: list[str]) -> None:
 
         _run_sync_op(
             parent,
-            "Klaus: rename !Library tags for moved folder",
+            "KlausNote: rename !Library tags for moved folder",
             work,
             on_done=lambda result: tooltip(
                 f"!Library tags updated for {result.get('count', 0)} PDF(s).", parent=parent
@@ -986,7 +986,7 @@ def sync_after_delete(parent, pdf_name: str, display: str | None = None) -> None
 
         _run_sync_op(
             parent,
-            f"Klaus: remove !Library tag for “{label}”",
+            f"KlausNote: remove !Library tag for “{label}”",
             lambda col: {"removed": apply_removal(col, stored)},
         )
     except Exception as exc:  # noqa: BLE001
@@ -1028,7 +1028,7 @@ def _reapply_missing(col, missing: dict[str, str], cfg: dict) -> None:
             set_stored_tag(safe, tag)
         return {"count": len(plans)}
 
-    _run_sync_op(mw, "Klaus: restore !Library tags after sidebar rename", work)
+    _run_sync_op(mw, "KlausNote: restore !Library tags after sidebar rename", work)
 
 
 def _library_state(col):

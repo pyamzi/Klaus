@@ -105,7 +105,7 @@ def run_pending():
         pending.pop(0)()
 
 
-def call_op(fn, timeout, write, label="Klaus: x"):
+def call_op(fn, timeout, write, label="KlausNote: x"):
     """_run_collection_op from a worker, with 'main' pumped here."""
     box = {}
 
@@ -128,11 +128,11 @@ def call_op(fn, timeout, write, label="Klaus: x"):
 section("writes: one CollectionOp, one undo entry")
 FakeCol.log.clear()
 FakeOp.made.clear()
-box = call_op(lambda col: (col.tags.bulk_add([1, 2], "x"), "done")[1], 2.0, True, "Klaus: addTags")
+box = call_op(lambda col: (col.tags.bulk_add([1, 2], "x"), "done")[1], 2.0, True, "KlausNote: addTags")
 op = FakeOp.made[-1]
 check("runs as a CollectionOp", getattr(op, "kind", "") == "collection")
 check("wrapped in one custom undo entry, merged after the write",
-      FakeCol.log == [("undo_entry", "Klaus: addTags"), ("bulk_add", [1, 2], "x"), ("merge", 7)])
+      FakeCol.log == [("undo_entry", "KlausNote: addTags"), ("bulk_add", [1, 2], "x"), ("merge", 7)])
 check("the handler's own result reaches the caller", box.get("r") == "done")
 
 def boom(col):
@@ -149,7 +149,7 @@ done = threading.Event()
 
 def late_worker():
     try:
-        ep._run_collection_op(lambda col: wrote.append(1), 0.05, True, "Klaus: addNote")
+        ep._run_collection_op(lambda col: wrote.append(1), 0.05, True, "KlausNote: addNote")
     except BaseException as e:  # noqa: BLE001
         box["e"] = e
     done.set()
@@ -158,7 +158,7 @@ threading.Thread(target=late_worker).start()
 done.wait(2.0)  # main thread busy: the op has not started when the caller gives up
 check("caller times out", isinstance(box.get("e"), TimeoutError))
 run_pending()  # the op finally starts, after the caller left
-check("the late op does not write", wrote == [] and ("undo_entry", "Klaus: addNote") not in FakeCol.log)
+check("the late op does not write", wrote == [] and ("undo_entry", "KlausNote: addNote") not in FakeCol.log)
 
 section("reads: QueryOp off the main thread")
 FakeOp.made.clear()
@@ -182,7 +182,7 @@ end = ep.Endpoint(col_getter=FakeCol, run_on_main=lambda fn, timeout: (main_call
                   version="x", run_op=fake_run_op)
 FakeCol.log.clear()
 res = end.handle("addTags", {"notes": [5], "tags": "t"}, False)
-check("addTags goes through run_op as a write", calls == [(True, "Klaus: addTags")], str(res))
+check("addTags goes through run_op as a write", calls == [(True, "KlausNote: addTags")], str(res))
 check("and actually tags", ("bulk_add", [5], "t") in FakeCol.log)
 check("both semantic searches are background reads",
       ep.ACTIONS["klausSearchNotesSemantic"].background and ep.ACTIONS["klausSearchLecturePdfs"].background)

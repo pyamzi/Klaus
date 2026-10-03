@@ -671,7 +671,7 @@ ro._web, ro._page_loaded, ro._unsub_save = Web(), True, None
 ro._start_foreign_mirror = lambda name: None
 REAL_JS.load_annotations(ro, "Corrupt")
 check("the reader opens with nothing to show", ro._highlights == [], str(ro._highlights))
-_UNREADABLE = "Klaus can't read this PDF's saved marks, so new marks won't be saved until that file is fixed or removed."
+_UNREADABLE = "KlausNote can't read this PDF's saved marks, so new marks won't be saved until that file is fixed or removed."
 check("the exact unreadable-marks copy, defined once beside the save-failed copy",
       getattr(asv, "UNREADABLE_MARKS_COPY", None) == _UNREADABLE)
 check("...and says so once, in those words", _tips5 == [_UNREADABLE], str(_tips5))

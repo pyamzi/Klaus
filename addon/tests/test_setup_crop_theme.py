@@ -6,7 +6,7 @@ Pins the acceptance criteria from board/board.py show K-112:
   1. every QDialog these modules build applies theme.dialog_qss(...)
   2. secondary/cancel buttons carry the SecondaryButton objectName
   3. no literal hardcoded hex colour outside comments
-  4. window titles use "Klaus Note" casing where the addon name appears in
+  4. window titles use "KlausNote" casing where the addon name appears in
      a title, while short "Klaus" prose (e.g. "Welcome to Klaus") is left
      alone
 """
@@ -112,13 +112,13 @@ check("zero literal hex colours in code (comments are exempt)",
 section("setup_flow.py: window title casing")
 check('"Welcome to Klaus" prose title is left untouched (explicitly exempt)',
       '"Welcome to Klaus"' in _SETUP_SRC)
-check("addon-name window titles use Klaus Note casing",
-      "Klaus Note: local models" in _SETUP_SRC)
-check("bare 'Klaus:' titles were not left behind",
-      "Klaus: Ollama isn't running" not in _SETUP_SRC
-      and "Klaus: local embedding model isn't set up yet" not in _SETUP_SRC
-      and "Klaus: embedding model needed" not in _SETUP_SRC
-      and "Klaus: semantic search needs an API key" not in _SETUP_SRC)
+check("addon-name window titles use KlausNote casing",
+      "KlausNote: local models" in _SETUP_SRC)
+check("bare 'KlausNote:' titles were not left behind",
+      "KlausNote: Ollama isn't running" not in _SETUP_SRC
+      and "KlausNote: local embedding model isn't set up yet" not in _SETUP_SRC
+      and "KlausNote: embedding model needed" not in _SETUP_SRC
+      and "KlausNote: semantic search needs an API key" not in _SETUP_SRC)
 
 
 section("crop_dialog.py: dialog is themed")
@@ -188,7 +188,7 @@ check("rubber-band selection state machine intact",
       and 'self._mode = "resize"' in _CROP_SRC)
 check("save-as-new-file encode path intact",
       "def encode_cropped" in _CROP_SRC and "_KEEP_FORMATS" in _CROP_SRC)
-check("crop dialog title still names the file, not renamed to Klaus Note",
+check("crop dialog title still names the file, not renamed to KlausNote",
       'f"Crop Image: {fname}"' in _CROP_SRC)
 
 class _FakeBtn:

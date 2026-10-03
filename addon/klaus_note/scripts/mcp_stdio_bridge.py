@@ -15,7 +15,7 @@ HTTP_TIMEOUT_S = 180
 PROTOCOL_VERSION = "2025-06-18"
 MISSING_PROFILE = "Open Anki with your profile, then test again."
 INVALID_DISCOVERY = "Connection information is invalid; restart Anki and test again."
-UNAVAILABLE = "Klaus is unavailable; restart Anki with your profile open and test again."
+UNAVAILABLE = "KlausNote is unavailable; restart Anki with your profile open and test again."
 AUTH_REJECTED = "Connection credentials were rejected; restart Anki and test again."
 
 

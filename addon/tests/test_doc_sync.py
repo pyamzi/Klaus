@@ -96,7 +96,7 @@ pump(0.8)
 check("still exactly one", EVENTS == [("changed", "A", None)], str(EVENTS))
 EVENTS.clear()
 
-section("Klaus's own write (pinned) emits nothing")
+section("KlausNote's own write (pinned) emits nothing")
 tmp = os.path.join(TMP, "a.tmp")
 write(tmp, b"klaus save, different size")
 ds.pin_own_write("A", ph.file_stat(tmp))

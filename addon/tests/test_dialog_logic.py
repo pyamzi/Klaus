@@ -112,10 +112,10 @@ check("no tabs and no card grid left — sidebar + stacked pages",
 check("sidebar carries the app identity",
       'setObjectName("SettingsSidebar")' in _src2
       and 'setObjectName("SidebarAppName")' in _src2
-      and 'QLabel("Klaus Note")' in _src2)
+      and 'QLabel("KlausNote")' in _src2)
 check("sidebar identity: the k logo beside the Excalifont wordmark",
       "_logo_pixmap" in _src2
-      and 'QLabel("Klaus Note")' in _src2
+      and 'QLabel("KlausNote")' in _src2
       and "_top_bar.logo_svg(colour)" in _src2)
 check("the logo fills the text colour (matches the wordmark) and repaints on a theme save",
       'QColor(c["text"])' in _src2
@@ -192,7 +192,7 @@ check("footer says Cancel, like SynapsePro's",
       'QPushButton("Cancel")' in _src2)
 _init_src = open("klaus_note/__init__.py").read()
 check("the accent preset is applied at profile open, before any "
-      "Klaus surface draws",
+      "KlausNote surface draws",
       "profile_did_open.append(_apply_color_theme)" in _init_src
       and _init_src.index("append(_apply_color_theme)")
       < _init_src.index("append(settings.migrate)"))
@@ -376,7 +376,7 @@ check("Save is the dialog's DEFAULT button — HIG: a dialog names its "
       "default action, and Return should save once there is something "
       "to save (Qt never fires a disabled default)",
       "save_btn.setDefault(True)" in _mm_src)
-# Anki's own Light/Dark switch, mirrored into Klaus Note Preferences
+# Anki's own Light/Dark switch, mirrored into KlausNote Preferences
 # (2026-08-30, Pouya) — the ONE row writing an Anki preference.
 check("the Anki theme row seeds from mw.pm.theme(), marks dirty like "
       "every deferred pref, and Save applies via mw.set_theme ONLY on "

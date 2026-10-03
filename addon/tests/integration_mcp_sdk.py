@@ -24,7 +24,7 @@ at = importlib.import_module('klaus_note.anki_tools')
 
 
 async def main():
-    with tempfile.TemporaryDirectory(prefix='Klaus SDK ') as scratch:
+    with tempfile.TemporaryDirectory(prefix='KlausNote SDK ') as scratch:
         root = Path(scratch)
         (root/'contexts').mkdir()
         (root/'pdfs').mkdir()

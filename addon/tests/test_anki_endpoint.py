@@ -620,7 +620,7 @@ class _FakeSemProvider:
 class _FailingSemProvider:
     def embed(self, texts, kind="query"):
         raise embeddings.EmbeddingError(
-            "OpenAI API key is not set — add it in Klaus Note Preferences "
+            "OpenAI API key is not set — add it in KlausNote Preferences "
             "→ API keys & models.", provider="OpenAI", status=401)
 
 
@@ -671,7 +671,7 @@ try:
     r_err = ac("klausSearchNotesSemantic", query="tell me about the kidneys")
     check("an embedding failure (no key) answers the provider's own clean message, no 'EmbeddingError:' prefix",
           r_err["result"] is None
-          and r_err["error"] == "OpenAI API key is not set — add it in Klaus Note Preferences → API keys & models."
+          and r_err["error"] == "OpenAI API key is not set — add it in KlausNote Preferences → API keys & models."
           and "EmbeddingError" not in r_err["error"])
 
     # A blank query is rejected before any embedding call is made.
