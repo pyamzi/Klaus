@@ -8,10 +8,10 @@
 /* Klaus follows the system appearance (no in-app toggle). */
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
-/* The Klaus design system (the "Apple HIG" artifact, tokens.json), which is the
-   shadcn-svelte preset b2GUtMueeu (Nova, Zinc, bold menu accent) with the HIG
-   layers, a darker ring and Anki's colours. Keep the two in step: change the
-   design system, then regenerate these two blocks from its tokens. */
+/* The Klaus design system (its tokens.json), which is the shadcn-svelte preset
+   b2GUtMueeu (Nova, Zinc, bold menu accent) with the Klaus layers, a darker ring
+   and Anki's colours. Keep the two in step: change the design system, then
+   regenerate these two blocks from its tokens. */
 :root {
 	--background: #ffffff;
 	--foreground: #09090b;
@@ -44,6 +44,7 @@
 	--sidebar-accent-foreground: #fafafa;
 	--sidebar-border: #e4e4e7;
 	--sidebar-ring: #71717b;
+	--link: #1a73d4; /* Klaus blue, 4.7:1 on white: filtered decks, as Anki's fg-link */
 	--radius: 0.625rem;
 	/* Anki's meanings, at ≥4.5:1 on the background: new / learning / due counts; browser row states. */
 	--count-new: #1d4ed8;
@@ -94,6 +95,7 @@
 		--sidebar-accent-foreground: #18181b;
 		--sidebar-border: rgba(255, 255, 255, 0.1);
 		--sidebar-ring: #9f9fa9;
+		--link: #2393f4; /* the logo blue, 6.0:1 on zinc-950 */
 		/* Anki's meanings, at ≥4.5:1 on the background: new / learning / due counts; browser row states. */
 		--count-new: #93c5fd;
 		--count-learn: #fca5a5;
@@ -157,6 +159,7 @@
 	--color-card: var(--card);
 	--color-foreground: var(--foreground);
 	--color-background: var(--background);
+	--color-link: var(--link);
 	--radius-sm: calc(var(--radius) * 0.6);
 	--radius-md: calc(var(--radius) * 0.8);
 	--radius-lg: var(--radius);
@@ -173,6 +176,9 @@
 	}
 	body {
 		@apply bg-background text-foreground;
+	}
+	h1, h2, h3, h4, h5, h6 {
+		@apply font-heading;
 	}
 	html {
 		@apply font-sans;
