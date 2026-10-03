@@ -14,8 +14,8 @@ The real project here is **`klaus_note/`** — "Klaus", an Anki addon for a
 lecture-PDF library with per-PDF retention scoring, semantic card↔PDF
 matching (indexing a PDF tags every card it covers), a PDF reader
 (pdf.js) with highlights/sticky notes, and image cropping. Around it:
-`tests/` (headless logic tests), `board/` + `context/` (the multi-agent
-kanban board — see below), `References/` and `scripts/` (vendored
+`tests/` (headless logic tests), `board/` (the retired kanban board,
+kept for its ARCHIVE.md history — see below), `References/` and `scripts/` (vendored
 reference repos + packaging), and `AGENTS.md` (deep architecture guide:
 hooks registered, JS↔Python protocol, config keys, packaging).
 `PRODUCT.md` says what Klaus is for; `DESIGN.md` is the design language —
@@ -82,29 +82,28 @@ holds API keys) stay ignored — never stage those.
   shows the mutations, `--selftest` checks the tool). It never touches the
   working tree — every mutation is applied in a sandbox copy, and the repo is
   hashed before the run and re-hashed in a `finally`.
-- **Board CLI** (see "The agent board" below):
-  `python3 board/board.py {list,show,claim,move,comment,check-disjoint}`
+- **Issues** (see "Issue tracker" below): `gh issue list --repo
+  pyamzi/klaus-note-addon --label ready-for-agent`
 - No linter is configured in this repo.
 
-## The agent board
+## Issue tracker
 
-Multi-session work is coordinated through a kanban board:
-`board/BOARD.md` is the source of truth, and **every state change
-(claim/move/comment) goes through `python3 board/board.py`** — it
-serializes writes behind a lockfile; hand-editing BOARD.md to move a card
-will eventually lose a write (card *body* prose may be hand-edited by the
-orchestrator/designer only). Claiming enforces file-disjointness against
-cards already in Doing, and a card's `verify:` command must fail before
-the work and pass after. Roles, columns, and gates: `context/ROLES.md`;
-the rules a session must hold to share the board safely are the
-`agent-board` skill (`.claude/skills/agent-board/`).
-Dashboard: `python3 board/serve.py --port 8766` → 127.0.0.1:8766
-(preview config "board-dashboard" in `.claude/launch.json`). **Not
-8765** — an unrelated long-running `stream_server.py` owns that port on
-this machine, so the board silently failed to bind there and the
-preview served that server's "you need a WebSocket client" page
-instead. Signed-off history is in
-`board/ARCHIVE.md` — search it (K-0xx) before re-debugging anything.
+Add-on work lives in GitHub Issues on `pyamzi/klaus-note-addon` (via
+`gh`; see `docs/agents/issue-tracker.md`). Every issue carries one
+category label (`bug`/`enhancement`), one state label (`needs-triage`,
+`needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`; see
+`docs/agents/triage-labels.md`) and a priority (`P1` data loss or
+security, `P2`, `P3`). The repo is public: write issue text neutrally,
+and keep an unfixed security hole off GitHub until its fix lands.
+Claim an issue by assigning yourself before you start (`gh issue edit
+<n> --add-assignee @me`), and comment on it at milestones and blockers.
+
+The old kanban board (`board/BOARD.md`) was retired on 2026-10-02.
+Its full history, K-001 onward, is in `board/ARCHIVE.md` — search it
+(K-0xx) before re-debugging anything. `board/board.py` stays because
+the Website, Auth and Agenda boards still use it.
+
+anything.
 
 **Parking another session's uncommitted hunk (Pouya, 2026-09-01).**
 Three sessions routinely work this checkout at once, so you WILL claim
@@ -116,10 +115,10 @@ revert to every other session, and on 2026-09-01 it was reported as one
 <your card> <what the hunk is>" -- <file>`; (2) a patch copy in YOUR
 scratchpad (`git diff HEAD -- <file> > .../parked-<file>.patch`),
 because the stash stack is shared across the main checkout and every
-worktree and another session may pop it; (3) a `board.py comment` on
-your claiming card naming both the stash message and the patch path.
-Re-apply exactly as found when your commit lands, before moving your
-card to Review, and say so in a comment. Bare `git stash`/`stash pop`
+worktree and another session may pop it; (3) a comment on your issue
+naming both the stash message and the patch path.
+Re-apply exactly as found when your commit lands, and say so in a
+comment on the issue. Bare `git stash`/`stash pop`
 without `-m` and without the file scope are off-limits here for the
 same reason.
 

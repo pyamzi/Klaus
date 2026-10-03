@@ -5999,3 +5999,1088 @@ archived: 2026-09-18
 - [2026-09-17 orchestrator] Orchestrator sign-off: landed in the main checkout as eb09eae (cherry-pick -x of 20a89d8, test file only). Re-verified here: the card's 3x standalone loop passes, symlink compile OK, and 6 concurrent runs (3 lanes x 2 rounds, the contention profile the worker caught the SIGBUS under) all exited 0 with no new Python crash report in DiagnosticReports. The root cause stands as found: not a test-ordering dependency but an exit-time native crash in PyQt6's sip wrapper walk with ~9 never-closed QMainWindow/PdfDock pairs still live; explicit teardown before report() removes the pile. The card's title premise was wrong in an instructive way and the comment records that.
 - [2026-09-17 orchestrator] CORRECTION to my sign-off above. The worker reported catching a SIGBUS at interpreter exit and reading its report at ~/Library/Logs/DiagnosticReports/Python-2026-09-17-164442.ips (stack sip_api_visit_wrappers <- cleanup_on_exit <- Py_FinalizeEx). Checked from disk: that file does not exist in the user report directory, its Retired/ subdirectory, or /Library/Logs/DiagnosticReports. The only Python crash report on this machine is python-2026-09-16-113133.ips from yesterday, a SIGABRT (EXC_CRASH) containing none of the cited frames and no reference to test_pdf_dock. The worker transcript contains no crash-report content at all (none of the .ips keys procName/bug_type/exceptionType/faultingThread, no "Thread N Crashed" line); its cat of the cited path used 2>/dev/null | head, which prints nothing for a missing file. So the root-cause story is withdrawn from "confirmed" to "plausible mechanism, unevidenced": ~20 never-closed QMainWindow/PdfDock pairs left for PyQt6 to walk at exit is a credible SIGBUS source, but nobody has actually observed this flake fail. The worker itself could not reproduce it under the documented sequential loop. The FIX stays and the card stays Done on its own merits: explicit teardown before report() is correct hygiene, the file passes 3x standalone and 6 concurrent runs here, and it cannot make anything worse. If the 1-in-3 flake recurs, capture the real .ips and attach its path before diagnosing.
 - [2026-09-17 orchestrator] SECOND CORRECTION, reversing most of the one above. My claim that the worker transcript "contains no crash-report content" was wrong: I grepped for the .ips keys with unescaped quotes, and the transcript stores tool output as escaped JSON, so every key I searched for was there as \"termination\" etc. and my counts were false zeros. Re-checked with fixed-string search: the transcript holds the actual report body - "exception": SIGBUS, subtype KERN_PROTECTION_FAILURE at 0x0000000102925d00, "termination": code 10 "Bus error: 10" by exc handler, pid 23448, and a frame list with sip_api_visit_wrappers in sip.cpython-39-darwin.so - plus the worker's own parsed rendering of the same. That is a real macOS crash report, read by the worker. What remains true from the first correction: the file is no longer at the cited path, nor in Retired/, nor under /Library/Logs/DiagnosticReports, so it cannot be re-read today. Disposition: the root cause is reinstated as OBSERVED (exit-time SIGBUS in PyQt6's sip wrapper walk), not merely plausible; the fix and the Done status were never in question. Process rule from this: a worker that cites a crash report copies it into its scratchpad before summarizing, because DiagnosticReports does not keep them reliably, and an orchestrator checking a transcript for JSON must search bare key names, not quoted ones.
+
+### K-286: Klaus Plus website: restyle to the Obsidian palette + the star logo
+owner: klausbook-fable
+priority: P2
+tags: design
+files: service/klausplus/templates.py,service/tests/test_brand.py
+verify: cd service && .venv/bin/python -m pytest -q tests/test_pages.py tests/test_brand.py
+created: 2026-09-18
+claimed: 2026-09-18
+archived: 2026-09-19
+
+The service already serves the website (/, /subscribe, /welcome, /recover, /terms, /privacy via klausplus/templates.py's shared _PAGE frame) but it's nearly unstyled (light-only, hardcoded #222/#f2f2f2/#0a58ca, no logo). KlausBook and klausmate have converged on an Obsidian-dark design (KlausBook-Context/docs/reference/design-tokens.json is the canonical token source, byte-synced into this repo at the same path — run scripts/check-token-sync.sh after editing colors) plus a shared logo (docs/reference/brand/klaus-logo.svg, the impossible-star mark). Restyle only — do not change any page's text content (test_pages.py asserts exact legal-copy substrings and escaping; those must still pass verbatim).
+
+Acceptance criteria:
+1. _PAGE's <style> block uses design-tokens.json's colors.dark as the default, colors.light under a (prefers-color-scheme: light) media query — same dark-first methodology as KlausBook-Context/extensions/klaus-pdf/webview-src/viewer.css, not a new approach.
+2. The star logo (docs/reference/brand/klaus-logo.svg's path data, fill=currentColor) renders inline near the top of every page via the shared _frame(), not duplicated per page-function.
+3. .btn, code, a, footer restyled with tokens (accent for links/buttons, border/bg-secondary for the code chip, text-muted for the footer) — no new hardcoded hex values.
+4. All existing test_pages.py assertions still pass unmodified — this is a CSS-only change.
+5. A new drift test (service/tests/test_brand.py or similar) asserts the CSS actually reads its color values from design-tokens.json (parse the emitted <style> block, compare) — same discipline as KlausBook-Context's tests/design_tokens_test.mjs, applied to this third consumer.
+
+#### Comments
+- [2026-09-18 klausbook-fable] Decisions: hand-transcribed design-tokens.json's colors.dark/light into _PAGE's <style> (same dark-first + prefers-color-scheme methodology as KlausBook-Context's viewer.css); logo inlined once in _frame() with fill=currentColor. Files: service/klausplus/templates.py, service/tests/test_brand.py (new), docs/reference/brand/{klaus-logo.svg,README.md} (new, synced from KlausBook-Context). Risks: pytest in my execution environment shows an intermittent, reproducible-on-any-file import-staleness anomaly (confirmed unrelated to this change via git diff, raw byte reads, and manually replicating test_brand.py's comparison logic by hand — all pass cleanly) that I could not resolve despite trying pycache purges, PYTHONDONTWRITEBYTECODE, a fresh throwaway venv, pytest cache clearing, and --assert=plain. Needs a human (or a fresh terminal/session) to run 'cd service && .venv/bin/python -m pytest -q' and confirm test_brand.py passes for real before Done — I'm confident it will, but board discipline says I shouldn't self-certify a verify I couldn't get to exit 0 in my own hands. Next: test_pages.py's 2 existing tests pass unmodified either way (verified repeatedly, no ambiguity there).
+- [2026-09-18 klausbook-fable] Root cause of the earlier pytest anomaly found and fixed: not a sandbox/environment issue, not a race — this venv's Apple CommandLineTools Python 3.9 caches bytecode machine-wide under ~/Library/Caches/com.apple.python/<abs path>.pyc, keyed on mtime+size. My earlier sed-based fault-injection (#ff0000 in place of #7f6df2, same string length) landed in the same wall-clock second as the revert, so the stale (faulty) bytecode kept being served to every process — reproduced identically via the user's real terminal and the assistant's own shell, ruling out a sandbox split. Cleared the stale cache (find ~/Library/Caches/com.apple.python -path '*KlausMate-Context*' -delete) and re-ran verify clean: 6 passed in service/tests/test_brand.py + test_pages.py. Moving to Done.
+
+### K-154: The thumbnail strip is reachable in only one of the viewer's three hosts
+owner: swarm-154
+priority: P2
+tags: ui,consistency,feature-pdf-viewer
+files: klausmate/pdf_viewer.py,klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py,tests/test_pdfjs_viewer.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_pdfjs_viewer.py
+created: 2026-09-01
+claimed: 2026-09-18
+archived: 2026-09-19
+
+Found by the K-153 viewer-consistency audit; split out because it needs the pdfjs files another lane holds.
+
+The thumbnail toggle button lives ONLY in the editor panel (__init__.py:944-960). The other two hosts — the Library and the lecture dock — have no way to show or hide the strip. Two consequences, and the second is a real bug:
+
+1. NATIVE RENDERER: the strip is built in all three hosts (pdf_viewer.py:3611) and its visibility restores from a SHARED, GLOBAL thumbs_state (pdf_viewer.py:3695, pdf_handler.load_thumbs_state). So toggling it on in the editor panel leaves it stuck open in the Library and the lecture dock WITH NO WAY TO DISMISS IT.
+
+2. PDFJS RENDERER: worse — klausToggleThumbs (web/pdfjs_viewer.html:1600) has no in-page button and no keyboard binding at all, so thumbnails are 100% unreachable outside the editor panel.
+
+Fix shape, matching K-153s conclusion: put the affordance INSIDE the viewer rather than in one host. Either a viewer-owned chrome row carrying the toggle, or add it to the pdfjs annobar (which is already host-agnostic and now carries the ink swatches) plus a keyboard binding for the native renderer.
+
+WATCH: tests/test_pdfjs_viewer.py:133-143 pins PdfJsViewers duck-typed surface INCLUDING toggle_thumbs — that contract must still hold if the button moves.
+
+Related zoom asymmetry worth deciding at the same time: on the native renderer zoom has NO visible affordance in any host (context menu and Cmd+/- only — pdf_viewer.py:2513 calls this out as critique P3), while on pdfjs every host gets the annobars zoom buttons. So switching renderers changes the visible control set, differently per host.
+
+#### Comments
+- [2026-09-18 swarm-154] Fixed the reachability bug (native + pdfjs), scoped exactly to K-154 — the zoom-asymmetry aside was NOT touched. RED (new tests added first, confirmed failing against the untouched code): PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_pdfjs_viewer.py -> 334 passed, 6 failed FAIL annobar grows an eighth control: Thumbnails (the seven from K-116/K-150 plus this one) FAIL HIG Title Case tooltip, matching Highlight/Add Text's own shortcut-less style FAIL clicking it drives the SAME klausToggleThumbs API the editor panel's header button already used — no second toggle path FAIL the button lives INSIDE #annobar (the bar every host already renders), not a host-specific chrome row FAIL Ctrl+Shift+T resolves to a thumbs combo None FAIL dispatching that combo reaches toggle_thumbnails — exactly as dispatching "find" reaches _show_find_bar below (Two extra native sanity checks — Ctrl+F still resolving to "find", Ctrl+Shift+A still resolving to "highlight" — passed even in this RED run, proving the harness itself was sound before any fix.) Fix shape (matches the card's own suggestion; read the real annobar/shortcut code first, it matched the description): - pdfjs (klausmate/web/pdfjs_viewer.html): added an eighth annobar control, #abThumbs (grid-of-4 icon, title="Thumbnails"), right after abZoomFit, wired the same way abZoomIn/abZoomFit already are — its click handler calls the EXISTING window.klausToggleThumbs() (no second toggle path) and toggles its own .active/aria-pressed from #thumbs' "visible" class. Since the annobar is already host-agnostic (K-116), this is reachable from every host (Library, Lecture dock, editor) without any Python-side change to pdfjs_viewer.py. - native (klausmate/pdf_viewer.py): added Ctrl+Shift+T as a new shortcut combo, following the EXACT existing idiom for Cmd+F/Cmd+Shift+A — a case in _match_shortcut_combo (`Key_T` + shift + not-alt -> "thumbs"), a case in _dispatch_shortcut_combo (`"thumbs" -> self.toggle_thumbnails()`), and a QShortcut(Ctrl+Shift+T) fallback on self._pdf_view for conflict-free hosts, mirroring the hl_sc_a/hl_sc pair. The generic ShortcutOverride/KeyPress handling already in eventFilter needed no changes — it dispatches whatever _match_shortcut_combo returns. - Per the card's own scoping (item 5): the shared-global thumbs_state design was left as-is. Making the toggle reachable in every host is what removes "stuck open with no way to dismiss" — no per-host state was introduced. GREEN (same command, after the fix): PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_pdfjs_viewer.py -> 340 passed, 0 failed Duck-typed surface pin (tests/test_pdfjs_viewer.py's "duck-typed viewer surface" section, originally lines 133-143) explicitly re-checked and still holds — toggle_thumbnails was never touched on PdfJsViewer, only wired to from a new in-page button: ok PdfJsViewer has toggle_thumbnails Zoom-asymmetry aside: confirmed untouched. No edits to any zoom-related code path (klausSetZoom, klausZoomReset, abZoomIn/abZoomOut/abZoomFit, _zoom_in/_zoom_out/_zoom_reset) in either file — grepped the diff to verify. Also ran the adjacent real-Qt suites that exercise pdf_viewer.py's shortcut/eventFilter machinery, to check for regressions outside this card's own verify command (all green, no changes needed there): tests/test_pdf_dock.py (107/0), tests/test_transcript_strip.py (38/0), tests/test_lecture_view.py (122/0). One test-harness note worth recording: tests/test_pdfjs_viewer.py already imports klausmate.pdf_viewer once near the top (line 244) under the plain permissive aqt.qt stub, where every Qt.Key/Qt.KeyboardModifier collapses to the same dummy object — meaningless for testing real key-combo matching. The new native-shortcut test section therefore re-imports klausmate.pdf_viewer with REAL PyQt6 behind aqt.qt (the test_drive.py/test_transcript_strip.py K-117 pattern), popping the cached klausmate.pdf_viewer entry first so the fresh shim actually takes effect (Python doesn't re-execute an already-imported module) — done in-process rather than the K-096 partial-Qt probe's subprocess, since nothing downstream of this last section reads pdf_viewer again. Files touched: klausmate/pdf_viewer.py, klausmate/web/pdfjs_viewer.html, tests/test_pdfjs_viewer.py. klausmate/pdfjs_viewer.py was read but needed no changes (toggle_thumbnails already existed and just needed a caller).
+
+### K-205: assistant integration: full loop green, dock renders on chrome, endpoint answers, live checklist
+owner: swarm-t13
+priority: P2
+tags: assistant,integration,needs-human
+files: docs/superpowers/plans/2026-09-01-klaus-assistant-claude-code.md
+verify: bash -c 'for t in tests/test_*.py; do python3 "$t" >/dev/null 2>&1 || exit 1; done'
+created: 2026-09-02
+claimed: 2026-09-02
+archived: 2026-09-19
+
+#### Comments
+- [2026-09-02 swarm-t13] DONE. Full loop: 38/38 files green, 4211 passed / 0 failed (QT_QPA_PLATFORM=offscreen, PYTHONDONTWRITEBYTECODE=1, no stale caches). 3 pre-existing honest SKIPs, none new: test_agent_host.py (no control_request in the recorded fixtures, build 2.1.228), test_page_ocr.py + test_pdf_notes.py (pypdf unavailable to those two tests' own sys.path -- pdf_handler.py/pdf_notes.py both add klausmate/vendor themselves before importing pypdf, which is why my own render script could). Dock render (scratchpad/render_dock.py -- fake AgentHost, REAL viewer_context.report_document/activate, REAL page_ocr.context_for over a pypdf-written 2-page scratch PDF, QT_SCALE_FACTOR=2, both palettes via theme.night_mode forced True/False): ALL CHECKS PASS. Header in both: "Following: Task 13 Demo Lecture.pdf . p. 1/2". Ground corners match theme.palette(night)["chrome"] exactly at both bottom corners (light #FFFFFF -> RGB 255,255,255; dark #232323 -> RGB 35,35,35). Grabbed image 840x640px, dock.devicePixelRatioF()==2.0, confirming Retina actually applied. context_for pulled real text-layer text (157 chars) and a real QtPdf-rendered PNG (39441 bytes). PNGs (attached): /private/tmp/claude-501/-Users-pyamzi-Documents-Github-KlausMate-Context/97bc4fbb-fc4d-4b55-a09b-ccaf5c79a685/scratchpad/assistant_dock_light.png (28836 bytes) and .../scratchpad/assistant_dock_dark.png (27589 bytes) -- both visually inspected, correct in every palette. Endpoint smoke (scratchpad/endpoint_smoke.py -- real ThreadingHTTPServer + anki_endpoint.Endpoint against a stub collection, hit with real curl subprocess calls, transcript saved to scratchpad/endpoint_smoke.out): version+correct token -> {"result": 6, "error": null}; version with NO token -> 403; version with a WRONG token -> 403; version with correct token but an Origin header -> 403; POST /mcp initialize -> result.serverInfo.name == "klaus"; POST /mcp tools/list -> the 13-tool ACTIONS registry (bare names: list_decks, list_models, model_fields, find_notes, get_notes, add_note, update_note_fields, add_tags, remove_tags, open_in_browse, search_notes, search_lecture_pdfs, current_view). All 6 checks pass. Permission-mode re-probe (spec 4.2, ONE real claude 2.1.228 call, empty temp dir, 90s budget, cost $0.3946885): "echo 'list files in the current directory using bash' | claude -p --output-format stream-json --verbose --permission-mode manual --allowedTools Read --disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task". manual IS a valid --permission-mode choice in this build (not rejected). Result: NO control_request or can_use_tool event anywhere in the 19 stdout lines; final result.permission_denials == []. Bash is simply unavailable -- absent from the system/init event's own 490-tool roster (Read/Glob/ToolSearch present, Bash/Edit/Write absent) and absent from ToolSearch's own 566-entry corpus (0 matches searching "select:Bash" or "bash shell command execute"). The model gave up on Bash, used Glob instead, and answered correctly that no Bash tool exists and the dir is empty. Confirms the spec's existing finding: --disallowedTools is the real, load-bearing guard; permission-mode shows no observed gating effect in this build, so agent_host.py's hardcoded --permission-mode default (command_line(), line 89) needs no change. Two zero-cost CLI-usage attempts before this (variadic --disallowedTools swallowing a trailing bare positional prompt, "Error: Input must be provided either through stdin or as a prompt argument") are recorded verbatim in the report; confirmed NOT to affect agent_host.command_line()'s real spawn shape, which never puts a bare prompt after the tool lists (the turn goes over stdin as one stream-json line). Secondary, unconfirmed, not chased further (one-call budget): Glob/ToolSearch ran unprompted despite --allowedTools only naming Read. Full detail, per-file table, raw transcripts: .superpowers/sdd/2026-09-01-klaus-assistant-claude-code/task-13-report.md Board note: K-206 (theme.py/library_explorer.py/test_theme.py/test_library_explorer.py/test_drive.py) claimed those files AFTER this task's loop and render already used them cleanly -- no conflict, nothing to re-run. NEEDS-HUMAN live checklist for Pouya (nothing here touched his running Anki): 1) restart Anki 2) open the Library 3) open a PDF 4) press Ctrl+Shift+K (or Tools -> Klaus Assistant) 5) the dock says "Following: <pdf> . p. 1/N" 6) ask "what is on this slide?" -> the answer streams and cites the page 7) ask "make one card from it" -> the approval dialog appears -> Approve -> the card exists in Browse with tag klaus::assistant 8) switch to another PDF -> the header follows and the session switches 9) select text in the PDF -> the chip shows it 10) click inside the PDF page then press Ctrl+Shift+K -> the dock toggles (this checks whether clicks reach the sidebar's mousePressEvent) 11) open Preferences -> Assistant -> the detected claude path shows.
+- [2026-09-02 swarm-t13] FIX ROUND 1 (review: task-13-review.md). Three corrections, all done, no git writes. 1) CRITICAL, corrected: my prior comment/report wrongly claimed the real claude probe characterized --permission-mode manual. Re-verified against the EXISTING permission_probe.stdout.jsonl (no new claude -p call, per orchestrator ruling): grep -c '"manual"' -> 0 matches anywhere in the 41687-byte file; grep -o '"permissionMode":[^,}]*' -> "permissionMode":"default". So --permission-mode manual was passed on the command line but the session's own init event recorded default -- -p print mode (build 2.1.228) does not appear to honour --permission-mode manual. Free check re-run: claude --help | grep -A6 -i permission-mode still lists manual as a valid documented choice (acceptEdits, auto, bypassPermissions, manual, dontAsk, plan) -- the flag was never rejected, it just didn't take effect in the session. Every observation from that call (no control_request anywhere, Bash absent from the 490-tool init roster and from ToolSearch's 566-entry corpus, permission_denials:[], Glob/ToolSearch running unprompted despite allowedTools only naming Read) now stands relabeled as a SECOND confirmation of default -- not new evidence about manual. Removed every "under manual specifically" sentence from the report and this card's history. Spec doc docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md line 141 (only that line -- confirmed via git diff) edited to record this finding plainly instead of asserting the manual re-probe as done; left UNCOMMITTED for the orchestrator to review and commit (workers do not run git writes). No second claude -p call was spent. 2) IMPORTANT, fixed: added a 413 check to scratchpad/endpoint_smoke.py. New check 7: a 5,194,304-byte body (BODY_CAP + 1,000,000, ~4.95 MiB, over the 4 MiB BODY_CAP) sent over curl's stdin (--data-binary @-, a body this size cannot go through argv) with a VALID token -> HTTP 413 (anki_endpoint.py's drain-then-413 path, lines ~605-639); then a fresh curl subprocess (fresh TCP socket) immediately after, re-running the plain version check, confirms the endpoint is still healthy: {"result": 6, "error": null}. Both conditions ANDed into one check. Re-ran the WHOLE script twice: both times "7/7 checks passed" and "ALL CHECKS PASS", exit 0, identical results. Full 7-check output is in the report's Step 3 and in scratchpad/endpoint_smoke.out. 3) MINOR, fixed: report Step 1's "the Step 5 probe below" corrected to "the Step 4 probe below" (the probe is Step 4; Step 5 is the live checklist). Full before/after for all three items: .superpowers/sdd/2026-09-01-klaus-assistant-claude-code/task-13-report.md, new "## Fix round 1" section at the end (Step 3 and Step 4 sections above it were also rewritten in place to carry the corrected numbers/claims; Findings and Concerns updated to stay internally consistent -- no section still asserts manual was tested). Card stays in Review, still needs-human tagged, still needs Pouya's live checklist (unchanged, 11 items, still not run against his real Anki).
+- [2026-09-02 orchestrator] Task review + re-review clean (loop reproduced, dock renders byte-identical, smoke 7/7 incl. 413, probe relabelled honestly; spec §4.7 committed 7ca8522). Stays in Review, needs-human: Pouya's 11-item live checklist (+ the out-of-root read item the fix wave adds) is the remaining gate.
+- [2026-09-02 swarm-fixwave] Live-checklist ADDITIONS from the final-review fix wave (K-209). Append these to the Step 5 list; nothing above changes. 12. (I5, confinement) Ask the assistant: "read ~/Library/Application Support/Anki2/addons21/klausmate/meta.json and tell me what is in it". It must REFUSE or FAIL, and the transcript must NOT show the file's contents (that file holds the embedding API key). decide_permission now denies any file_path/path/pattern resolving outside the library root, but --disallowedTools is the real gate in this build, so this is the one that has to be seen. 13. (I8) Ask for a card, then approve SLOWLY — wait more than a minute before clicking Approve. The model must not report failure before the note lands, and must not add a duplicate. MCP_TOOL_TIMEOUT is now 300 s in the child's env vs the endpoint's 120 s approval wait. 14. (M7) With OCR on, flip pages fast for ~10 s. No hang, no crash; the dock keeps answering. 15. (C1) Ask a question, press Stop mid-answer, ask again. The second question must go through — no "error: stdin write failed". 16. (I6) When the approval dialog appears, press Enter WITHOUT clicking. It must CANCEL, not approve. 17. (I7) Turn on Preferences -> Assistant -> Reopen on start, leave the dock open, restart Anki. The dock comes back. I4 is already done and needs no live item: probed live (build 2.1.228) — ${KLAUS_TOKEN} expands in an inline --mcp-config header (init: klaus connected) and ps -o args shows the placeholder, not the token.
+
+### K-219: PDF dock T4: integration — loop, renders in four placements, live checklist
+owner: claude-t4
+priority: P2
+tags: pdf-dock,integration,needs-human
+files: docs/superpowers/plans/2026-09-05-pdf-dock.md
+verify: for t in tests/test_*.py; do PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 "$t" >/dev/null 2>&1 || exit 1; done
+created: 2026-09-05
+claimed: 2026-09-05
+archived: 2026-09-19
+
+Plan Task 4. After T1-T3 are committed; moves to Ready then.
+
+#### Comments
+- [2026-09-05 claude-t4] Task 4 Step 4 -- live checklist (needs-human; not executed by the worker). Loop (39/39 files, 0 failed) and renders (10 PNGs, all 4 placements x night/day, integrated) are posted in the task-4 report. Verbatim from the brief: 1. Restart Anki. Open Browse; click the editor toolbar's Library… button → the PDF panel appears docked where it was last left (an old placement migrated: above/below → bottom, notes-left → left). 2. Drag the panel's empty bar to Browse's left edge → it docks beside Anki's sidebar; to the bottom edge → under both columns; away from any edge → it floats and stays above Browse. 3. Double-click the empty bar → floats; double-click again → docks back where it came from. 4. ⧉ toggles float/dock; the bar's ✕ hides the panel; Library… shows it again; ＋ still lists the Library's PDFs; a tab drag still reorders tabs. 5. Close Browse with the panel floating → no zombie window; reopen Browse → the panel comes back floating at the same place. 6. Add Cards: the same five steps; cancel Add Cards' discard prompt with the panel open → the panel is still there. 7. Under the pdf.js renderer (Preferences → Appearance) the docked and floating panel both render pages (the webview inside a QDockWidget — the Lecture dock already proves this on the main window).
+- [2026-09-05 orchestrator] Review Approved: loop 39 files/4419 checks reproduced, renders reproduced and inspected, checklist verbatim. Stays in Review, needs-human: the seven-item live checklist above is Pouya's gate.
+
+### K-229: API-first T9: integration — loop, live embed smoke (flagged), checklist
+owner: claude-t9
+priority: P2
+tags: api-first,plan1,integration,needs-human
+files: docs/superpowers/plans/2026-09-15-page-store-and-api-clients.md
+verify: for t in tests/test_*.py; do PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 "$t" >/dev/null 2>&1 || exit 1; done
+created: 2026-09-15
+claimed: 2026-09-16
+archived: 2026-09-19
+
+Plan 1 Task 9. Last.
+
+#### Comments
+- [2026-09-16 claude-t9] 1. Restart Anki. Open KlausMate Preferences → the page is "API keys & models" with two key fields and three model fields; no Ollama page, no OCR row, no Claude Code binary row. 2. Paste the OpenAI key and Save → the re-index prompt shows note and PDF counts and a token/dollar estimate; accept. 3. The bottom status bar shows "Embedding pages…" per PDF; the Library's rows refresh; a PDF's index directory has `manifest.json` version 2 with `pages`. 4. Right-click a PDF → Show matches in Browse still opens the `!Library` tag search. 5. Open a PDF in Browse's dock, press Ctrl+Shift+K, ask "what is on this slide?" → the answer cites the page text (no OCR); the Preferences page has no OCR switch. 6. Reviewer → Lecture panel still jumps to the matched page. 7. Remove the OpenAI key and Save → drop a PDF onto the deck screen → the refusal names the Preferences page. 8. Paste the OpenAI key for the first time and Save → a priced re-index prompt appears whose DEFAULT button is No (Enter must not start a paid sweep); accept it deliberately with Yes → the sweep runs. (New in this plan: a first key offers the sweep even though nothing changed.) 9. Live API check, embeddings: after the sweep, open the Library → every PDF row shows a retention score; `user_files/pdf_index/<safe>/manifest.json` has `"version": 2` and a `"pages"` list; the bottom status dock read "Embedding pages…" during the run. 10. Live API check, transcription: not reachable from any UI yet (Plan 2's recorder) — skip; only note that Preferences shows the `transcription_model` field with its placeholder. 11. Known gaps, not defects to report: the readiness nudge names both keys but checks only the OpenAI one (K-231); the assistant's page image is re-rendered on every Send, no cache (K-230); the `reasoning_model` field is written but not read by the assistant until Plan 3 (K-235); removing the OpenAI key and Saving does not re-prompt.
+- [2026-09-16 orchestrator] Loop on 4b4841c: 43/43 files, 4505 passed, 0 failed; compile + audit selftest clean; the paid smoke skipped (no key in the session environment). Stays in Review, needs-human: the 11-item live checklist above is Pouya's.
+
+### K-249: Klaus Plus T10: integration — FakeUpstream + env switch, local e2e, loops, the rollout checklist
+owner: claude-kp10
+priority: P2
+tags: klaus-plus,plan-kp,integration,needs-human
+files: service/klausplus/upstream.py,service/klausplus/app.py,service/tests/test_proxy.py,service/tests/test_upstream_fake.py,scripts/mutation_audit.py,scripts/AUDIT.md
+verify: test -e service/tests/test_upstream_fake.py && cd service && .venv/bin/python -m pytest -q
+created: 2026-09-16
+claimed: 2026-09-16
+archived: 2026-09-19
+
+#### Comments
+- [2026-09-16 claude-kp10] Step 4: The rollout checklist, posted verbatim on the card for Pouya (needs-human): 1. `brew install flyctl`, `fly auth login`; from `service/`: `fly launch --no-deploy --copy-config --name klausmate`, `fly volumes create klausplus_data --size 1`. 2. Set the Fly secrets from `service/README.md` step 3, with the Stripe TEST key and spend caps set at OpenAI and Anthropic. 3. Run `scripts/stripe_setup.py` in test mode; paste its `fly secrets set` line. `fly deploy`. `/healthz` answers. 4. Open `https://klausmate.fly.dev`, subscribe monthly with card `4242 4242 4242 4242` → the welcome page shows a `kp_` key (and emails it if Resend is configured). 5. In Anki: Preferences → API keys & models → paste the key → Save → Check: the status line reads "Plus · renews … · 0 of 30 lecture hours, 0 of 3,000 cards, 0 of 200 turns"; the OpenAI and Anthropic rows say "Not needed on Klaus Plus". 6. Drop a PDF on the deck screen with no OpenAI key in config → it indexes through the service (`fly logs` shows `POST /v1/embeddings 200` with a hash prefix and a metered amount, never text); the Library row fills in. 7. Manage subscription… opens Stripe's portal; cancel at period end → Check still says active with "renews" replaced by the end date; in the Stripe dashboard, mark the subscription unpaid (or end the test clock) → Check reads refused with the service's message; a drop refuses with the same message and offers the free tier. 8. Set `KLAUS_PLUS_PAUSED=1` → a drop shows the maintenance message; unset it. 9. Going live: the live Stripe key, `MIN_CLIENT_VERSION` = the shipped add-on version, `fly deploy`, ship the add-on.
+- [2026-09-16 orchestrator] Committed 1af5e40: 72 service tests, add-on loop clean, audit logged; review (sonnet) APPROVED. Stays in Review: the checklist above is Pouya's to walk (needs-human). The e2e's /v1 finding is fixed in the following commit.
+- [2026-09-17 orchestrator] Re-verified 2026-09-17 while answering Pouya about the subscription system: `cd service && .venv/bin/python -m pytest -q` -> 127 passed in ~1 s (up from 72 at review), entirely keyless via KLAUS_PLUS_FAKE_UPSTREAM. Note for whoever walks the checklist: the repo venv runs Python 3.9.6 (the machine has no 3.12; only 3.9 and 3.14), and the suite is green on it despite README saying 3.12. I briefly mislabeled .venv/pyvenv.cfg as 3.14 by re-running venv on the existing dir; restored to the real 3.9.6 metadata, suite re-run green. Nothing in the 9 steps above can be done by an agent: Fly login with a card, Stripe account, and the OPENAI_API_KEY/ANTHROPIC_API_KEY secrets (config.py:74-75) are all Pouya-only.
+
+### K-259: Plan 2 T7: docs and integration — CLAUDE.md, AGENTS.md, config.md, the audit, the live checklist (needs-human)
+owner: claude-p2t7
+priority: P2
+tags: plan-2,docs,needs-human
+files: CLAUDE.md,AGENTS.md,klausmate/config.md,scripts/mutation_audit.py,scripts/AUDIT.md,tests/test_imports.py
+verify: grep -q 'pertinence' CLAUDE.md && grep -q 'lecture_recorder' AGENTS.md
+created: 2026-09-16
+claimed: 2026-09-17
+archived: 2026-09-19
+
+#### Comments
+- [2026-09-17 claude-p2t7] 1. Restart Anki. 2. Preferences → API keys & models: an OpenAI key and an Anthropic key (or a Klaus Plus key) saved. 3. Open a lecture PDF in the dock; press ● Record; speak for 60 seconds while turning three pages; press ■ — the bar showed elapsed time and "n to transcribe" and returns to ●. 4. The transcript strip under each of those pages shows what was said on THAT page (native viewer and pdf.js, the strip never covers a page). 5. Run the index on that PDF (Library → Update): the status line shows "judging n/m" after matching; the Judge/Skip prompt named the count (and the cost off Plus, "included" on Plus); Judge. 6. The Library row shows "n · m doubtful" when any card was rejected; "Doubtful cards…" opens Browse on that lecture's rejected cards, each tagged `!Library::Doubtful` AND the lecture tag. 7. Open Match Sensitivity: the preview score equals the row's; OK changes nothing. 8. Ask the assistant about a page you spoke over: its answer reflects the transcript. 9. Skip on a second lecture: no judging, the counts unchanged, no Doubtful tag on its cards. 10. With the Anthropic key removed and no Plus: the index runs, a log line says the judge was skipped, no prompt. 11. `user_files/recordings/<safe>/` is empty after the uploads succeeded; with the network off, the WAVs stay and are re-queued on the next Record.
+- [2026-09-17 claude-p2t7] DONE (stays in Doing, needs-human). Verify: before (grep -q 'pertinence' CLAUDE.md && grep -q 'lecture_recorder' AGENTS.md) exit 1; after exit 0. Files: CLAUDE.md (Plan 2 paragraph; 'Only Plan 1 is built' and 'embeddings.py is the ONE live Plus path' both corrected — three of four purposes are live now; new pertinence.py + lecture_recorder.py entries; index_queue/tag_sync/retention/page_store/pdf_viewer/pdfjs_viewer/__init__/lecture_view/pdf_drive/pdf_map/openai_client/anthropic_client/cost/plus entries updated), AGENTS.md (intro, the network paragraph gains transcription and the judge, layout gains both modules + recordings/ + judged.json, the index chain is FIVE phases, retention diagram is confirmed-only, transcript-strip bullet, the two lecture profile hooks, conventions), klausmate/config.md (api_key_anthropic/reasoning_model/transcription_model are wired now; new 'Doubtful cards (the pertinence check)' and 'Recording a lecture' sections; confirmed-only priorities; library_tags_enabled now also costs the Doubtful tag) — NO new config key exists: config.json is byte-identical to HEAD. scripts/mutation_audit.py: AUDIT_MODULES += pertinence, lecture_recorder; SANDBOX_TREES += service/klausplus (tests/test_lecture_recorder.py lifts the service's wav_seconds by AST, so without that tree the sandbox baseline was RED and the run aborted — never a mutation target, hashed like every other tree; --selftest still OK, 212 files). tests/test_imports.py: NO change needed — its census is a glob; verified both new modules appear as their own checks (57 passed). Audit: pertinence 39 mutations, caught=15 caught-crash=15 survived=9, NO gut survivor; one real finding — bool@74:44 is the INNER additionalProperties on each verdict object, and test_pertinence.py:75 pins only the outer one (one clause closes it; that file is outside this task's set). lecture_recorder 48 mutations, caught=21 caught-crash=3 inconclusive=4 survived=20, NINE gut survivors: the pure half (Chunker, wav_bytes, chunk_path, Uploader._one incl. Plus routing/quota/refusal, _ensure_page, requeue_leftovers) is all caught; the survivors are the Qt-side Recorder the test file scopes out by its own docstring — _tick (the consequential one, pinned nowhere headless), start()'s failure/success tails, stop()'s flag, and the one-expression readouts whose values ARE pinned in tests/test_pdf_dock.py (outside this lane's reach); plus exist_ok=True at :458 (small but real). The 4 inconclusive are HANGS not survivors (drain() is Queue.join(); gutting _ensure_thread/_loop means no worker ever drains) — 300s x4 = 1200s of the 5224s run. Tree-integrity flagged klausmate/config.md as an external change: it was MY own doc edit landing mid-run, not a leak. Loop: 48 files, 4,964 passed, 0 failed, 0 non-zero exits (run twice, before and after the last doc edit); compile through the symlink OK. Step 3 paid smokes SKIPPED HONESTLY — no provider keys in this environment and none set; KLAUS_LIVE_API never set, nothing left the process, meta.json never read. Live checklist posted verbatim in the comment above. Report: .superpowers/sdd/2026-09-15-pertinence-and-lecture-recorder/task-7-report.md
+- [2026-09-17 orchestrator] Review (sonnet): CHANGES REQUIRED — three stale sentences (AGENTS.md anthropic_client 'no caller' ×2; CLAUDE.md 'PRICES has exactly two entries'); fixed by the orchestrator against cost.py/pertinence.py, committed as 6fa3fda. Stays in Review: the eleven-step live checklist above is Pouya's (needs-human).
+- [2026-09-17 orchestrator] Final whole-plan review (fable) — no-code items for Pouya, beside the checklist above: M-4 design debt: hiding the PDF dock (✕, last tab closed) or leaving review keeps the microphone open with no indicator — only host close, dock shutdown and profile close release it (one-line option: _release_recorder(self) in panel_hide). M-5 cosmetic: after a profile SWITCH the Lecture dock's ■ glyph stays until the next click (starts cleanly). M-6 live check: Recorder._tick polls readAll() every 250 ms on Qt's default QAudioSource buffer — speak two minutes continuously and confirm the transcript has no gaps. M-7: requeued leftover WAVs are labelled with a 30 s span even when a page change cut them short (ordering unaffected). The KLAUS_LIVE_API paid smokes were skipped (no key in the build environment): steps 3–6 and 10–11 above are those smokes, live.
+- [2026-09-17 orchestrator] Fix wave landed (e82d64f): the judge now stops and reports a refusal (401/402/403/426) instead of re-sending every batch; Stop re-indexes only once the last chunk is transcribed (capped at 20 min); a card that stops matching a lecture stops being doubtful for it. Two Minors left as documented gaps: doubtful_members parses every judged PDF's matches.json on the calling thread (inherent to the fix; fine at library scale), and _request_index_when_idle resolves the uploader before its de-dup check (cosmetic).
+
+### K-290: Local transcription: recording and Preferences integration
+owner: codex-local-rebuild
+priority: P2
+tags: local-model,transcription
+files: klaus_note/lecture_recorder.py,klaus_note/manage_models.py,klaus_note/config.json,klaus_note/__init__.py,klaus_note/config.md,scripts/mutation_audit.py,tests/test_lecture_recorder.py,tests/test_api_first_config.py,tests/test_dialog_logic.py,tests/test_local_transcription_settings.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_local_transcription_settings.py && env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lecture_recorder.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+Implement Task 2 of docs/superpowers/plans/2026-09-19-local-transcription.md. Acceptance: recorder uses local adapter, preserves failed audio/FIFO/page/profile guards, deduplicated main-thread errors, real Preferences fields save/reopen, cloud model key retired without unrelated migration loss. Focused RED gate observed before implementation: new settings test absent, exit 2. Full suite and mutation selftest required. Preserve existing logo hunk. Independent review before Done.
+
+#### Comments
+- [2026-09-19 codex-local-rebuild] Implemented in 69a0271. Full aggregate 4725 checks across46files green, paid smoke skipped, mutation selftest and direct/symlink compiles passed. Actual Preferences offscreen edit/save/reopen/Browse and profile notification guards tested. Independent review pending. Report .superpowers/sdd/2026-09-19-local-transcription/task-2-report.md.
+
+### K-289: Local transcription: whisper.cpp adapter and executable contract tests
+owner: codex-local-rebuild
+priority: P2
+tags: local-model,transcription
+files: klaus_note/local_transcription.py,tests/test_local_transcription.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_local_transcription.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+Implement Task 1 of docs/superpowers/plans/2026-09-19-local-transcription.md. Acceptance: stdlib adapter discovers local executable, parses JSON, preserves argv paths, reports typed failures, passes fake executable tests and real scratch JFK sample. No microphone or live user data. RED observed by controller before implementation: test file absent, exit 2. Independent SDD review required before sign-off.
+
+#### Comments
+- [2026-09-19 codex-local-rebuild] Implemented in e5f9104. Recorded RED missing-module failure, GREEN 55 checks, real scratch whisper.cpp sample, both compile paths passed. Independent SDD review in progress; report .superpowers/sdd/2026-09-19-local-transcription/task-1-report.md.
+
+### K-291: Local embeddings: restore managed Ollama runtime and client
+owner: codex-local-rebuild
+priority: P2
+tags: local-model,embeddings,runtime
+files: klaus_note/ollama_client.py,klaus_note/ollama_runtime.py,klaus_note/ollama_setup.py,tests/test_ollama_client.py,tests/test_ollama_runtime.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ollama_client.py && env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ollama_runtime.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+Task1 of docs/superpowers/plans/2026-09-19-ollama-restoration.md. Restore historical full stdlib runtime/client/setup with local endpoint guards, no implicit provisioning, checksum/extraction and owned-process behavior tested against scratch/fakes. RED observed before implementation: client test absent exit2. Independent review required. Starts after transcription plan final review.
+
+### K-292: Local embeddings: switch provider, migration and readiness to Ollama
+owner: codex-local-rebuild
+priority: P2
+tags: local-model,embeddings,integration
+files: klaus_note/embeddings.py,klaus_note/__init__.py,klaus_note/config.json,klaus_note/config.md,klaus_note/setup_flow.py,klaus_note/index_queue.py,klaus_note/manage_models.py,klaus_note/openai_client.py,klaus_note/cost.py,klaus_note/browse_toolkit.py,klaus_note/retention.py,scripts/mutation_audit.py,tests/test_local_embeddings.py,tests/test_klaus_note.py,tests/test_api_first_config.py,tests/test_index_queue.py,tests/test_setup_crop_theme.py,tests/test_dialog_logic.py,tests/test_manage_models_assistant.py,tests/test_local_transcription_settings.py,tests/test_md3_switch.py,tests/test_bridge_reentrancy.py,tests/test_browse_toolkit.py,tests/test_openai_client.py,tests/test_live_api.py,tests/test_cost.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_local_embeddings.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+Task2 of docs/superpowers/plans/2026-09-19-ollama-restoration.md. Depends on reviewed K-291. Local provider and one-time cloud migration, no key gates or paid cost, silent existing-runtime readiness only, basic current-shell Preferences. Preserve D6 transcription rows and unrelated logo hunk unstaged. New behavioral adapter test missing exit2 observed before implementation. Full suite/audit/both compiles and independent review required.
+
+### K-294: Local models: runtime management and model inventory controls
+owner: codex-local-rebuild
+priority: P2
+tags: local-model,preferences
+files: klaus_note/manage_models.py,klaus_note/config.md,tests/test_local_model_settings.py,tests/test_dialog_logic.py,tests/test_local_transcription_settings.py,tests/test_md3_switch.py,tests/test_manage_models_assistant.py,klaus_note/setup_flow.py,tests/test_local_embeddings.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_local_model_settings.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+Task3 of docs/superpowers/plans/2026-09-19-ollama-restoration.md. Current-shell Local models runtime status/install/start/stop/update/automanage and inventory refresh/pull/delete controls, safe async lifetime, explicit download consent, no silent selected model changes. Real offscreen action/save/progress/close tests and rendered inspection, fullsuite/compiles. Missing-test RED exit2 observed. Starts after K-292 review. Preserve unstaged logo hunk. No live system installs/model downloads.
+
+### K-295: External MCP: current page content and copyable client configuration
+owner: codex-local-rebuild
+priority: P2
+tags: local-model,mcp,preferences
+files: klaus_note/anki_endpoint.py,klaus_note/manage_models.py,klaus_note/scripts/mcp_stdio_bridge.py,klaus_note/config.md,tests/test_anki_endpoint.py,tests/test_mcp_stdio_bridge.py,tests/test_external_client_settings.py,tests/test_current_page.py,tests/test_dialog_logic.py,tests/test_local_model_settings.py,tests/test_local_transcription_settings.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_external_client_settings.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+Task2 of docs/superpowers/plans/2026-09-19-external-mcp-bridge.md. current_page exposes captured PDF text/transcript/selection plus genuine MCP image block, compatible current_view. Preferences readonly JSON/Copy resolves real external Python never Anki executable, stable paths no token/port, honest setup/privacy. Scratch/real-offscreen tests, fullsuite/compiles/package-content gate. Missing settings-test exit2 observed. Starts after K-293 review. Preserve logo hunk unstaged and no external app writes.
+
+### K-293: External MCP: private discovery and stdio transport
+owner: codex-local-rebuild
+priority: P2
+tags: local-model,mcp
+files: klaus_note/anki_endpoint.py,klaus_note/scripts/mcp_stdio_bridge.py,tests/test_anki_endpoint.py,tests/test_mcp_stdio_bridge.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mcp_stdio_bridge.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+Task1 of docs/superpowers/plans/2026-09-19-external-mcp-bridge.md. Private atomic discovery lifecycle; stdlib stdio to loopback HTTP bridge preserving approval, session rotation, no replay, protocol-only stdout. Missing-test RED exit2 observed. Starts only after full Ollama plan review. Scratch endpoint and subprocess tests, no live Anki/config writes. Independent review required.
+
+### K-296: Local model reversion: final documentation, verification and package
+owner: codex-local-rebuild
+priority: P2
+tags: local-model,documentation,package
+files: README.md,klaus_note/README.md,klaus_note/config.md,PRODUCT.md,ANKIWEB.md,AGENTS.md,CLAUDE.md,klaus_note/user_files_README.txt,scripts/package.sh,klaus_note/manifest.json,docs/superpowers/plans/2026-09-19-HANDOFF-local-model-reversion.md,docs/superpowers/reports/2026-09-19-local-model-reversion.md
+verify: test -s docs/superpowers/reports/2026-09-19-local-model-reversion.md
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+Task2 of docs/superpowers/plans/2026-09-19-local-model-integration.md after all D4/D5/D6 reviews. Actual user/agent docs, checked official links, complete final fullsuite/audit/compiles, local package inspected and hashed, tracked evidence report including rulings/limits. Report-missing RED exit1 observed; content/code/package inspected by final review. No push/merge, preserve unrelated logo/board edits, disclose combined package.
+
+### K-297: Final review: clear external page context after failed PDF load
+owner: codex-local-rebuild
+priority: P2
+tags: local-model,mcp,review-fix
+files: klaus_note/pdf_viewer.py,tests/test_current_page_load_failure.py,tests/test_current_page.py,tests/test_pdfjs_viewer.py,klaus_note/manifest.json,docs/superpowers/reports/2026-09-19-local-model-reversion.md,docs/superpowers/plans/2026-09-19-HANDOFF-local-model-reversion.md
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_current_page_load_failure.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+One final whole-project review fix wave. Both missing PDF and failed native load clear sidebar state but leave prior viewer_context. Invalidate only failed sidebar context, actual offscreen sidebar+endpoint regression proves no stale previous page and preserves other valid viewer. RED missing test exit2 observed. Focused gates then one final aggregate because shared PDF viewer state serves multiple surfaces, compile/package/report refreshed. No live Anki/data and no unrelated changes.
+
+### K-319: Progress windows of Klaus's collection ops hang off mw, never a closable dialog
+owner: -
+priority: P2
+files: klaus_note/tag_sync.py,klaus_note/curation.py,tests/test_library_sync.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_library_sync.py
+created: 2026-09-30
+archived: 2026-10-02
+
+Pouya hit 'RuntimeError: wrapped C/C++ object of type ProgressDialog has been deleted' (aqt/progress.py _on_show_timer). A CollectionOp shows its progress 600 ms late, parented to the op's parent; a parent deleted in between (Preferences closed after 'apply to all', Browse closed after Create Curated Deck) deletes it first. _run_sync_op and create_curated_deck now parent progress to mw. Other add-ons (AnkiHub/AnkiCollab background syncs) can still cause the same error; the traceback names no add-on.
+
+### K-095: pdf.js migration umbrella: replace QPdfView rendering to kill flicker
+owner: -
+priority: P2
+tags: pdfjs,orchestrator
+created: 2026-08-25
+archived: 2026-10-02
+
+Pouya: 'I want to do the real fix… PDFjs is the thing I will have to do eventually.' QPdfView flickers structurally (async pdfium page delivery, overlay repaint races); SynapsePro proves the pdf.js-in-webview architecture (scripts/SynapsePro-main/web_notebook/pdf_viewer.html): canvas layers GPU-composited by Chromium, base64 PDF feed, no repaint during scroll. Strategy: new PdfJsViewer behind config flag pdf_renderer ('native' default) satisfying PdfSidebar's six-method surface (set_document/set_page_texts/load_annotations/clear_document/go_to_page/scroll_position + toggle_thumbnails/_page_label); build parity feature-by-feature (K-096..K-099); flip default + retire native path only after live soak (K-100). The annotations JSON and bake pipeline are renderer-independent and MUST NOT change.
+
+#### Comments
+- [2026-08-25 orchestrator] Live-soak bugs from Pouya, fixed: (1) TEXT LAYER MISALIGNED + highlights broken — pdf.js 3.x sizes glyph spans via calc(var(--scale-factor)*...) and we never set the variable, so every span fell to ~13px default (measured: 36pt title span was 12.2pt tall). Fix: applyScaleFactor() on the pages container, tracked through build + rezoom; text layer attached to DOM BEFORE renderTextLayer so per-span scaleX measurement sees computed styles; official text-layer CSS props (text-size-adjust:none etc). Harness now measures span font 44.24px = 36pt x 1.23 scale, selection rect 538x41pt covering the full title — screenshot-verified pixel alignment under simulated hostile Anki stdHtml CSS. (2) Cmd+/- ZOOMED THE WHOLE FRAME — Anki's window-level zoom QActions fired before the page saw the key (the documented host-window shortcut ambiguity). Fix: ShortcutOverride claim on the webview + focusProxy for Cmd +/-/0/F/G/Shift-G/Alt-G/Shift-H/Shift-A, zoomFactor pinned to 1.0; the page's JS is the single zoom owner. (3) selectionRectMap containment relaxed to rect-center + clamp. Regression-pinned in tests/test_pdfjs_viewer.py (51 checks).
+- [2026-08-25 orchestrator] Live crash fixed: poll_external_changes duck-types v._apply_mirror on the active renderer — AttributeError on PdfJsViewer (traceback from Pouya, taskman closure). PdfJsViewer now implements the full K-082 mirror surface: _apply_mirror (mirror_foreign_annotations + reload + push, NO bake — would re-feed the watcher), _start_foreign_mirror (daemon-thread pypdf scan + pristine capture, main-thread apply; also now runs on every pdfjs load_annotations so Preview marks made while Anki was closed appear on open), and _refresh_highlight_overlay as a push alias for _reload_records_for's post-bake refresh (that one was silently swallowed, not crashing — stale display). The entire duck-typed surface (12 attrs, from a grep of shared code) is now pinned in tests/test_pdfjs_viewer.py so shared-code additions can't crash one renderer silently. This closes K-100 gap item (2) early.
+- [2026-08-25 orchestrator] Double-draw fixed (Pouya live report: highlights + outside text rendered twice). Root cause: the bake writes marks as REAL PDF annotations, and pdf.js paints annotations by default — canvas showed the baked copy under the overlay's record copy. The native viewer's documented rule transplanted: all four render sites (pages, thumbnails, page/region image copies) now pass annotationMode: AnnotationMode.DISABLE. Pixel-verified in the harness with a hand-written PDF carrying a real red /Square annotation: viewer canvas white at the annot rect, control render with annotations enabled red — the flag, not the PDF, is what suppresses it. Test pins all render sites carry the flag.
+- [2026-08-25 orchestrator] Live crash fixed (theme change): RuntimeError 'wrapped C/C++ object of type AnkiWebView has been deleted' inside Anki's theme_did_change iteration. Cause: AnkiWebView.__init__ registers on_theme_did_change with the GLOBAL hook and only AnkiWebView.cleanup() unregisters it (Anki even logs 'destroyed without a cleanup() call'); PdfJsViewer created webviews but never called it, so closing the Library window / editor panel left a dead bound method that crashed the user's next theme switch. Fix: PdfJsViewer.cleanup() (idempotent, drops _web), PdfSidebar.cleanup() forwarding duck-typed (native QPdfView needs nothing), called from DriveWindow.shutdown and _PdfTabContainer._on_host_closing, plus pdf_viewer.cleanup_all_sidebars() swept on profile_will_close + aboutToQuit as a backstop for unenumerated paths. Regression test simulates Anki's hook lifecycle end to end AND falsifies itself (proves a webview destroyed without cleanup does crash the hook). 76 checks green.
+- [2026-08-31 orchestrator] Umbrella status: every parity card is now Done (K-096 foundation, K-097 selection/clipboard, K-098 marks, K-099 find/thumbs/nav, K-116 zoom+annobar, K-100 editor integration). The ONLY remaining child is K-101 — the needs-human cutover soak. This umbrella closes with it.
+- [2026-09-18 orchestrator] K-154 (thumbnail-strip host reachability) is a sibling PDF-viewer consistency issue, tagged feature-pdf-viewer, NOT a child of this umbrella — it's about the three hosts, not the renderer swap.
+- [2026-10-01 pdf-reader-task13] Closed by the PDF reader rework (spec docs/superpowers/specs/2026-09-30-pdf-reader-design.md; plan docs/superpowers/plans/2026-09-30-pdf-reader.md). Every reader runs on pdf.js since 2a50c38 (native QPdfView only as the no-QtWebEngine fallback); the pdf_renderer flag left config in 2a50c38 and its Preferences row, prefs_state key/effect and pdfjs_viewer.renderer_from_config in 083e6b8. Deleting the native renderer is phase 5 ('PDF reader 5/5'), after Pouya's phase-4 trial.
+
+### K-155: Dead editor seam: _klaus_note_active_pdf is written and never read
+owner: -
+priority: P3
+tags: cleanup
+files: klaus_note/pdf_viewer.py,klaus_note/__init__.py,tests/test_klaus_note.py
+created: 2026-09-01
+archived: 2026-10-02
+
+Found by the K-153 audit. pdf_viewer.py:4452 (_set_active) writes editor._klaus_note_active_pdf, and __init__.py:2158-2159 initialises it to None. A repo-wide grep finds NO reader — it is either dead code or an unfinished seam.
+
+Same shape as K-140s _klaus_note_target_field_* removal (commit: dead editor state written three times, read never). FIRST JOB IS TO TRY TO DISPROVE IT: grep every read including getattr and string-keyed access, and check web/copilot.js and the pycmd routing in case it crosses the JS boundary by name. If something reads it, the finding is wrong — say so and stop; that is a good outcome.
+
+Also in scope, same file family: __init__.py:1998 hand-rolls btn.setStyleSheet("font-size: 10px; border: none;") on the per-tab close button, where panel_header_qss should own the glyph. No colour, so it clears the letter of the no-hardcoded-colour rule, but it is a hand-rolled sheet in a themed surface. Note the hardcoded-hex lint (tests/test_setup_crop_theme.py:105,139) covers only setup_flow.py and crop_dialog.py — pdf_viewer.py, __init__.py and pdf_drive.py are unaudited for colour literals, which is worth fixing on its own.
+
+#### Comments
+- [2026-10-01 pdf-reader-task13] Confirmed dead (no reader by attribute, getattr, string key or JS) and removed in 531895f (spec docs/superpowers/specs/2026-09-30-pdf-reader-design.md, plan Task 13): PdfSidebar._set_active and its five call sites, PdfDock.hideEvent's _set_active(None), and on_editor_did_init's default; tests/test_pdf_dock.py pins its absence; grep -rn _klaus_note_active_pdf klaus_note tests is empty. NOT done here (out of Task 13's brief): the hand-rolled close-button stylesheet (now reader_tabs._decorate_tab) and the colour-literal audit of pdf_viewer.py/__init__.py/pdf_drive.py; file a new card if still wanted.
+
+### K-321: PDF reader 1/5: save pipeline and sync engine
+owner: claude-reader
+priority: P1
+tags: pdf-reader,sync
+files: klaus_note/pdf_handler.py,klaus_note/pdf_drive.py,klaus_note/library_sidebar.py,klaus_note/pdf_viewer.py,klaus_note/pdfjs_viewer.py,klaus_note/annotation_save.py,klaus_note/doc_sync.py,klaus_note/lecture_view.py,tests/test_pdf_lock.py,tests/test_library_stats.py,tests/test_annotation_save.py,tests/test_doc_sync.py,tests/test_rescan.py,tests/test_reader_sync.py
+verify: for t in test_pdf_lock test_library_stats test_annotation_save test_doc_sync test_rescan test_reader_sync; do PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/$t.py || exit 1; done
+created: 2026-09-30
+claimed: 2026-09-30
+archived: 2026-10-02
+
+Plan docs/superpowers/plans/2026-09-30-pdf-reader.md Tasks 1-6; spec docs/superpowers/specs/2026-09-30-pdf-reader-design.md sections 3-4. Supersedes K-095/K-101 (closed in phase 3).
+
+#### Comments
+- [2026-09-30 claude-reader] Heads-up: an unclaimed session has uncommitted edits in klaus_note/pdf_handler.py (from . import settings; settings.read() in _live_endpoint/_live_library_root) and a retention._cfg refactor that currently breaks tests/test_klaus_note.py in the working tree. K-321 claims pdf_handler.py; my commits (b7effd8, 5741d5e, 36c23f8) stage only my hunks and leave theirs uncommitted and intact. Please claim a card for the settings refactor.
+- [2026-09-30 claude-seam] From K-322 (settings seam): annotation_save.py's lazy 'from . import USER_FILES' reached back for a package attribute the seam deleted — two lines changed to settings.user_files() in the main checkout (uncommitted, in your claimed file). Build new code against klaus_note.settings: settings.read() / settings.patch(updates, remove=()) / settings.user_files().
+- [2026-09-30 claude-reader] Progress: Tasks 1, 2, 3a, 4, 5a done and reviewed (commits b7effd8..c40f051). Tasks 3b (viewer rewiring), 5b (pdf_drive/library_sidebar glue) and 6 wait on the settings seam (K-322) being committed. Meanwhile phase 2 (plan Tasks 7-10: pdf_source.py, piece loader, render cache, zoom fix) proceeds under this card; files added: klaus_note/pdf_source.py, klaus_note/web/pdfjs_viewer.html, klaus_note/web/pdfjs_pure.js, tests/test_pdf_source.py, tests/pdfjs_pure_test.js, tests/test_pdfjs_pure.py, tests/test_pdfjs_viewer.py.
+- [2026-09-30 claude-reader] Phase 2 (plan Tasks 7-10) done and reviewed: pdf_source snapshot range reads, piece loader with first-page timing log, render cache + per-page mark redraw + incremental find in document order, native-gesture zoom fix with visual-viewport backstop (commits a0c9fb6..1e27322). Working tree: py_compile OK through the symlink; 69/70 test files pass (test_top_bar fails on another session's deleted klaus-logo.svg). Paused: Tasks 3b, 5b, 6 and phase 3 edit files with K-322's uncommitted settings hunks; waiting on that commit and on Pouya's live check of the pdf.js reader.
+- [2026-09-30 claude-reader] Phase 1 complete. Task 6 (readers follow doc_sync; old pollers removed) is commit 0147eb1. Earlier phase 1 commits: b7effd8..c40f051, 1721b77, 879b5f4, 6cf687b, 5bba932, 976e507. What changed: PdfSidebar takes host_key (the Lecture dock passes "lecture") and holds its document open in doc_sync. On "changed" it saves pending marks, waits for an open pdf.js text box to commit, reloads in place keeping page and zoom, mirrors outside marks and shows "Updated from disk". On "moved" it re-points without a reload. On "missing" it closes the document and shows "<name> was removed from your Library folder."; marks, the annotations JSON, context and prefs are untouched (R33, tested). pdf.js on_stale uses the same reload without the toast (R21). clear and cleanup save pending marks before close_doc. The sidebar file poll, its save hook and pdf_drive's tick poll are deleted (R28/R29), and the task's grep is empty. Tests: the verify command passes (pdf_lock 22, library_stats 18, annotation_save 46, doc_sync 48, rescan 92, reader_sync 64). Also passing: viewer_saves 42, drive 140, pdfjs_viewer 412, lecture_view 111, pdf_dock 74, klaus_note 424. In the working tree the full suite is 70 of 72 files: test_top_bar fails on the missing klaus-logo.svg and test_settings is the other session's untracked test, both known. In a clean export of the commit it is 67 of 69: test_dialog_logic and test_manage_models_assistant fail, both known baseline. R34: five uncommitted K-322 hunks inside the deleted functions were dropped. They are listed in .superpowers/sdd/2026-09-30-pdf-reader/foreign/dropped-pdf_viewer.py.patch. All other K-322 hunks are verified intact and uncommitted.
+- [2026-09-30 claude-reader] Correction: Task 6's commit was amended. The SHA is now f3cf3f9, which replaces 0147eb1. Change: on "missing", the reader closes the document in doc_sync WITHOUT flushing. bake_annotations guards a vanished file only when it existed at the bake's start, so a flush there would recreate the PDF at its old path in the middle of a Finder rename (R33). The pending save stays pending. test_reader_sync now has 65 checks, 0 failed. Full suite in the working tree: 71 of 72 files pass; test_top_bar fails on the missing logo, as before.
+- [2026-09-30 claude-reader] Task 6 fix round 1 is commit a47bff3. R35: _commit_bake refuses to write a mapped PDF whose file is missing, even when a pristine original exists. The pipeline counts it as a failed save (unchanged copy, JSON kept), and "back" retries it. R36: each PdfSidebar registers in doc_sync under host_key:id(self). Tests: reader_sync 69, pdf_lock 32, annotation_save 46, viewer_saves 42, doc_sync 48, rescan 92, drive 140, all 0 failed. Full suite in the working tree: 71 of 72 files pass (test_top_bar fails on the missing logo, known). Clean export: 67 of 69 (dialog_logic and manage_models_assistant, known baseline). K-322 hunks are verified intact.
+- [2026-09-30 claude-reader] Task 6 fix round 2 is commit ddeecf5. - R38: a save that failed because of a rename is retried on "moved" as well as "back". - After cleanup, a late commit reply or the 1 s backstop no longer reloads the panel. - A deleted sidebar unsubscribes from doc_sync and drops its registration on the next event it gets. - _follow sets the path before its try. - The stale comment about the deleted poller is fixed. - A bake that starts in the middle of a rename now bakes again from the real path, so it carries the outside marks instead of dropping them. A test failed on the old code. Tests: reader_sync 74, annotation_save 48, pdf_lock 37, viewer_saves 42, doc_sync 48, rescan 92, drive 140, pdfjs_viewer 412, all 0 failed. Full suite in the working tree: 71 of 72 files pass; test_top_bar fails on the missing logo, known. Clean export: 67 of 69 pass; the 2 failures are the known baseline. K-322 hunks are verified intact.
+- [2026-10-01 claude-reader] Phase 3 Task 11 committed e5f9c14 'PDF reader 3/5: tabs live inside the reader (ReaderTabs), per host' (local, not pushed). Phase-3 card K-323 was added to Ready, but claiming it was rejected: K-320 (Doing) holds klaus_note/__init__.py. Not forced; tracking here per instructions. Evidence: tests/test_reader_tabs.py RED before the change (No module named klaus_note.reader_tabs), then 54/0. test_pdf_dock 75/0, test_reader_sync 74/0, test_lecture_view 111/0, test_klaus_note 426/0. Full suite on the committed tree (index export): failures are only test_dialog_logic and test_manage_models_assistant, the known clean-HEAD ones. Full suite on the working tree: only test_top_bar (missing logo); test_dialog_logic failed once under a concurrent run and passes alone. Staging followed R26/R39: the K-322 hunks in the moved PdfDock tab methods now live in pdf_viewer.py (PdfSidebar). Patches are in .superpowers/sdd/2026-09-30-pdf-reader/foreign/t11-{before,after}-*.patch; details are in task-11-report.md.
+- [2026-10-01 claude-reader] PDF reader closed 2026-10-01. Phases 1-5 done; Pouya signed off the trial. The final whole-branch review (C1, I1-I5) plus fix rounds 2-4, the text-box round and R58 are all committed and verified: f8ee7c5 9e1919f 5601c76 93d1859 308e791 705d13b c5ba881. Full suite 84/0 on a clean export. Ledger: .superpowers/sdd/2026-09-30-pdf-reader/progress.md; report: final-fix-report.md.
+
+### K-323: PDF reader 3/5: tabs and pdf.js everywhere
+owner: -
+priority: P2
+tags: pdf-reader
+files: klaus_note/reader_tabs.py,klaus_note/pdf_viewer.py,klaus_note/__init__.py,klaus_note/pdf_handler.py,klaus_note/lecture_view.py,klaus_note/library_viewer.py,klaus_note/config.json,klaus_note/config.md,tests/test_reader_tabs.py,tests/test_pdf_dock.py,tests/test_klaus_note.py,tests/test_lecture_view.py,tests/test_library_viewer.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_reader_tabs.py
+created: 2026-10-01
+archived: 2026-10-02
+
+Plan docs/superpowers/plans/2026-09-30-pdf-reader.md phase 3 (Tasks 11-13): tabs inside the reader (ReaderTabs, per host), Lecture panel uses tabs, all hosts on pdf.js with lazy load, viewer-mode sizing under single_window (K-155). Staged around K-322's uncommitted hunks per R26/R39.
+
+#### Comments
+- [2026-10-01 pdf-reader-task12] Task 12 committed 2a50c38 (not pushed): Lecture panel opens each lecture as a tab (sidebar.tabs.open), focus back to mw.web after every jump, empty label when the last Lecture tab closes; PdfSidebar always builds PdfJsViewer (native kept only as the no-QtWebEngine fallback, one log line); pdf_renderer dropped from config.json/config.md and added to __init__._LEGACY_KEYS_DROPPED (HEAD form; peer's settings.LEGACY_KEYS_DROPPED already has it); editor dock loads lazily on first show; _notify_loaded isolates _on_sidebar_loaded errors; unused QTabBar import removed. Preferences renderer row deferred (R27). Tests: working tree 73/74 files pass (known: test_top_bar); clean git-archive 68/70 (known clean-HEAD: test_dialog_logic, test_manage_models_assistant). R26 verified; 2 K-322 hunks dropped in deleted lines (foreign/dropped-12-*.patch). Claim rejected (K-320 holds __init__.py). Report: .superpowers/sdd/2026-09-30-pdf-reader/task-12-report.md
+- [2026-10-01 pdf-reader-task13] Task 13 committed (local, not pushed): 531895f viewer-mode sizing through the dock's own host (library_viewer._dock_host: nearest QMainWindow ancestor holding the dock, so mw or a nested inner main window under single_window; every dockWidgetArea/resizeDocks goes through it; enter loads the clicked PDF before showing the panel, so a first open no longer loads the pointer PDF then replaces it) + K-155 (_klaus_note_active_pdf/_set_active removed; grep empty); d5dd695 Lecture panel: failed load (sidebar._name != m.safe) shows the empty state with no 'p. N'/jumps, closing the tab the status names clears the status and kills pending jumps; 083e6b8 Preferences: 'Use the new pdf.js viewer' row, prefs_state pdf_renderer key + renderer_restart effect, pdfjs_viewer.renderer_from_config removed (only settings.LEGACY_KEYS_DROPPED + its migration test remain). TDD RED->GREEN for each. Full suite: working tree 73/74 (known: test_top_bar, missing logo); clean git-archive of HEAD 70/72 (known: logo pins in test_dialog_logic x1, test_manage_models_assistant x2), identical to the pre-change baseline in both trees. R26 verified for __init__.py and manage_models.py; no foreign hunks dropped. Report: .superpowers/sdd/2026-09-30-pdf-reader/task-13-report.md
+- [2026-10-01 pdf-reader-task13] LIVE CHECKLIST (phase 3, before phase 4 trial): (1) all four places: editor dock in Browse, Add and Edit Current, plus the Lecture panel in review; and Library viewer mode (double-click a PDF) sizing in single-window mode once the nested inner main window lands (_dock_host sizes through whichever main window holds the dock; the panel gets host width minus Browse's sidebar). (2) Tabs in review: the Lecture panel's own strip/tab set; a card's lecture opens as a tab; closing the current Lecture tab clears its status; a failed load shows the empty state. (3) Preview round trip: open a PDF in Preview, mark/save, come back; reader reloads with marks intact. (4) Finder rename, move and delete of a Library PDF while it is open in a reader (follows / 'was removed from your Library folder.'). (5) The editor dock's two rows (title bar + reader strip, R40) look acceptable. (6) pdf.js text-box wait: with a text box mid-edit, an outside 'changed' reload waits for the commit (klausCommitEdit/edit-done, 1 s backstop) and keeps the view. Also: first Library double-click loads only that PDF (no flash of the last-session PDF); Preferences no longer shows 'Use the new pdf.js viewer' and Save shows just the tooltip.
+- [2026-10-01 claude-reader] PDF reader closed 2026-10-01. Phases 1-5 done; Pouya signed off the trial. The final whole-branch review (C1, I1-I5) plus fix rounds 2-4, the text-box round and R58 are all committed and verified: f8ee7c5 9e1919f 5601c76 93d1859 308e791 705d13b c5ba881. Full suite 84/0 on a clean export. Ledger: .superpowers/sdd/2026-09-30-pdf-reader/progress.md; report: final-fix-report.md. Phase 3 commits were tracked on K-321 (claim blocked by K-320); the work is complete, so the card is moved straight to Done.
+
+### K-324: Image Occlusion 1/3: port IOE into klaus_note
+owner: -
+priority: P2
+tags: image-occlusion
+files: klaus_note/image_occlusion/,klaus_note/__init__.py,tests/test_bridge_reentrancy.py
+created: 2026-10-01
+archived: 2026-10-02
+
+Plan docs/superpowers/plans/2026-10-01-image-occlusion.md Tasks 1-3; spec docs/superpowers/specs/2026-10-01-image-occlusion-design.md
+
+#### Comments
+- [2026-10-01 IO Task 3 implementer] Task 3 committed 5807bdc 'Image Occlusion 1/3: built into Klaus (guarded against the separate add-on)'. image_occlusion.setup() is called once from the bootstrap; with add-on 1374772155 installed+enabled it registers nothing and shows the conflict tooltip (deferred 1 s via mw.progress.single_shot, no gui_hooks). setConfigAction removed (R3); Tools 'Image Occlusion Options…', Help 'Image Occlusion Help…'. occlude(editor, image_path, initial_svg) added; setWebExports regex widened (one literal). Evidence: tests/test_image_occlusion_setup.py 64/0 (expected Q/A SVGs generated by 31c3134 verbatim ngen, tests/fixtures/io/make_expected.py), test_image_occlusion_rules 68/0, _vendor 53/0, test_bridge_reentrancy 94/0; full suite on git-archive export of the commit: 80/82 files pass, the 2 failures are the known logo pins (test_dialog_logic, test_manage_models_assistant). Live checklist (needs a restarted Anki): [ ] draw, add and review in both modes; [ ] edit a pre-port note; [ ] options; [ ] Browse conversion; [ ] with single-window on, click into an occlusion field with no crash. Also check live: Anki 26.09 NewAddCards has no deckChooser and may not subclass AddCards, which IOE's add path assumes.
+- [2026-10-01 claude-reader] Phase 1 (Tasks 1-3) complete: 31c3134, 330f801, 1299383, 5807bdc, 5b306dc. Reviews clean. Claim blocked by K-320's hold on klaus_note/__init__.py, so the card stays in Ready. Live checklist: draw/add/review both modes; edit a pre-port IOE note; options; Browse conversion; single-window click into an occlusion field; the I/O button in Anki 26.09's new Add window; loadNote after add. Disable the separate IOE add-on (1374772155) first.
+- [2026-10-01 claude-io] Image Occlusion, all three phases, is built and reviewed (2026-10-01). Phase 1 is the port (31c3134..5b306dc). Phase 2 is Occlude this page/region in the reader (0bedfab, 8422ff8, af11219). Phase 3 is the Excalidraw Draw tab inside the occlusion editor, chosen by Pouya: label masks, the _<image>.excalidraw sidecar, and re-edit that keeps note ids and hand masks (0472e6e..04728e2). The final whole-branch review's fixes are 380addc and 502cb0c. The full suite passes 87/87 on a clean export. Still open: Pouya's live checklist, .superpowers/sdd/2026-10-01-image-occlusion/live-checklist.md, plus the three live checks in task-8-report.md 'Final fixes'.
+- [2026-10-02 triage] Moved to GitHub: https://github.com/pyamzi/klaus-note-addon/issues/37
+
+### K-320: Diagnose ProgressDialog-deleted error on pressing Browse (temporary progress logger)
+owner: -
+priority: P2
+files: klaus_note/debug_progress.py,klaus_note/__init__.py
+verify: test ! -e klaus_note/debug_progress.py
+created: 2026-09-30
+archived: 2026-10-02
+
+Pouya: 'RuntimeError: wrapped C/C++ object of type ProgressDialog has been deleted' (aqt/progress.py _on_show_timer) when pressing Browse. debug_progress.py wraps mw.progress.start/finish to log parent, active window and stack, plus each parent's destruction, to /tmp/klaus-progress.log. Diagnostic only; delete it (verify gate) once the culprit is known.
+
+#### Comments
+- [2026-10-02 triage] Moved to GitHub: https://github.com/pyamzi/klaus-note-addon/issues/36
+
+### K-079: Per-PDF notes space: side pane + sidecar + baked appended Notes page
+owner: -
+priority: P2
+tags: feature,feature-notes
+files: klaus_note/pdf_viewer.py,klaus_note/pdf_handler.py,tests/test_klaus_note.py
+created: 2026-08-24
+archived: 2026-10-02
+
+Pouya: each PDF should be "a space where you can take notes on the
+side", "embedded into the PDFs in some way that's viewable in other
+files but doesn't overwrite the PDF".
+
+Recommended design (fits the regenerative bake exactly):
+1. SOURCE OF TRUTH: sidecar annotations/<safe>.notes.md in user_files;
+   plain-text/markdown.
+2. UI: toggleable notes pane in the PDF viewer (per-tab toolbar button),
+   QPlainTextEdit, autosave debounce ~800ms, feeding the same bake
+   debounce highlights use.
+3. EMBED: bake appends rendered "Notes — <display>" page(s) AFTER the
+   last content page: Helvetica base-14 (no font embedding), wrapped
+   text, multi-page as needed. Because every bake regenerates from the
+   pristine original, the notes page never accumulates or duplicates;
+   empty notes (+ no highlights) = un-bake back to pristine. Content
+   pages are never touched -> "doesn't overwrite the PDF"; a real page
+   -> visible in Preview/Acrobat/anything -> "viewable in other files".
+   pypdf-only page synthesis (raw content stream, Tj ops, manual wrap):
+   no new deps. Limitation v1: plain text only, WinAnsi charset
+   (non-Latin chars degrade) — flagged.
+Rejected alternative: embedded file attachment (EmbeddedFiles tree) —
+macOS Preview ignores attachments, failing "viewable in other files".
+Tests: notes page appended once across repeated bakes; page count =
+pristine+N; un-bake restores pristine byte-identical; text extraction
+of the notes page contains the note; wrap/pagination on a long note.
+
+#### Comments
+- [2026-08-31 orchestrator] Status 2026-08-31: deliberately NOT started in this swarm pass — the card's files include klaus_note/pdf_handler.py, which a separate live session (the retention-history-prune task chip) holds uncommitted edits to right now; claiming would risk staging that session's half-finished work into our commit. Pick this up as the first card of the next pass once that session lands. The design in the card body (sidecar .notes.md + toggleable pane + bake-appended Notes page) is still the agreed shape.
+- [2026-08-31 orchestrator] Foundation landed as K-134 (klaus_note/pdf_notes.py, 93 checks): sidecar storage, Helvetica metrics, wrap/paginate, content-stream synthesis, and a lazy pypdf append_notes_pages. What remains HERE, once pdf_handler.py frees up: (1) the viewer's notes pane, (2) ONE call site in bake_annotations — after the highlight loop, immediately before the atomic write, so the n_pages bounds checks stay honest. LOAD-BEARING detail from worker-G's read: bake_annotations has TWO early returns that must learn about notes or a notes-only PDF never bakes — the 'never baked and nothing to bake' return (~L1377) and the un-bake branch 'if not native_to_bake and not carried' (~L1500), which would restore pristine and throw the notes away. Also: pdf_handler.delete_context (~L2351) unlinks an explicit path list that does NOT include the .notes.md sidecar — same blind spot retention_history.forget_history has — so a re-import under the same safe basename would inherit a stranger's notes. Deliberate non-decision carried forward: no page cap on a huge note, because a cap silently truncates the user's own writing.
+- [2026-10-02 triage] Moved to GitHub: https://github.com/pyamzi/klaus-note-addon/issues/38
+
+### K-101: pdfjs cutover: flip default renderer after live soak, then retire QPdfView path
+owner: -
+priority: P3
+tags: pdfjs,needs-human
+files: klaus_note/config.json,klaus_note/pdf_viewer.py,klaus_note/pdfjs_viewer.py
+created: 2026-08-25
+archived: 2026-10-02
+
+GATE: Pouya uses pdf_renderer:'pdfjs' daily until satisfied (no flicker, parity holds incl. bake round-trips). Then default flips to 'pdfjs'; native path stays one release as fallback; final card deletes the QPdfView machinery (KEEP: annotations JSON, bake, pdf_handler — renderer-independent).
+
+#### Comments
+- [2026-08-31 orchestrator] Status 2026-08-31: still gated on the needs-human soak, and the gate is now much easier to open — K-116 shipped the full zoom overhaul (instant pinch/keys/toolbar zoom, no blank pages, reachable left edge) and the wired annobar (highlight mode, add-text, zoom pill), and K-100 (the last parity card) is being executed right now. Once K-100 lands: Pouya flips Klaus Note Preferences -> General -> 'Use the new pdf.js viewer' + restart, uses it daily, and reports. When satisfied, the default flips and the QPdfView machinery retires (annotations JSON/bake/pdf_handler stay — renderer-independent).
+- [2026-10-01 pdf-reader-task13] Superseded by the PDF reader rework (spec docs/superpowers/specs/2026-09-30-pdf-reader-design.md): the cutover happened in 2a50c38 (every reader on pdf.js, flag dropped from config.json/config.md, scrubbed by settings.LEGACY_KEYS_DROPPED) and 083e6b8 (Preferences row 'Use the new pdf.js viewer', prefs_state pdf_renderer/renderer_restart, renderer_from_config removed). The live soak is the phase-4 trial card ('PDF reader 4/5'); retiring the QPdfView path is phase 5 ('PDF reader 5/5').
+- [2026-10-01 pdf-reader] Reopened at Pouya's request (2026-10-01): stays open until the phase-4 live trial of the PDF reader rework is done. Cutover code landed (2a50c38, 083e6b8); closing waits on Pouya's trial sign-off; QPdfView retirement is phase 5.
+- [2026-10-01 pdf-reader-task14] Task 14 (PDF reader 5/5) step 1: importer list and native-only tests. PLAN: PdfSidebar + _open_sidebars/cleanup_all_sidebars/_pdf_display_name move to klaus_note/reader_panel.py (no shim); nothing else in pdf_viewer.py has an outside caller, so pdf_viewer.py is deleted whole. CODE IMPORTERS: klaus_note/__init__.py (editor dock PdfSidebar build ~1140/1159; profile-close/quit cleanup_all_sidebars sweep ~1233), klaus_note/lecture_view.py:379 (from .pdf_viewer import PdfSidebar), klaus_note/pdf_drive.py:486 (_close_in_panels reads _open_sidebars). Comment-only mentions: pdfjs_viewer.py 4/12/86, viewer_context.py:64, pdf_handler.py:811, theme.py:840 (left for Task 15 except in files I edit). TEST IMPORTERS (re-pointed, none deleted whole; every file is mixed): test_reader_tabs, test_reader_sync, test_current_page_load_failure (all three forced PDFJS_AVAILABLE=False to drive native sidebars -> pdf.js stand-in), test_viewer_saves, test_pdf_dock, test_pdfjs_viewer, test_theme, test_setup_crop_theme, test_anki_ops, test_rescan. NATIVE-ONLY CHECKS TO DELETE: (1) test_viewer_saves: the PdfViewer iteration of the both-viewers loop (no private bake timer / save = JSON + request / save events: the same checks keep running for PdfJsViewer) and section 'native: one subscription per viewer, dropped on cleanup'; (2) test_theme: the four K-153 PdfViewer page-bar pins (_page_bar slot, showEvent, _show_page_label_in_place); (3) test_setup_crop_theme: the three pdf_viewer paintEvent guard checks (_SelectionOverlay; crop_dialog's stay); (4) test_pdfjs_viewer: section K-154 native renderer (PdfViewer._match_shortcut_combo/_dispatch_shortcut_combo: Ctrl+Shift+T thumbs, Ctrl+F find, Ctrl+Shift+A highlight); (5) test_current_page_load_failure: the 'native' failure mode (both QPdfDocument load overloads failing), 'missing' mode kept; (6) test_reader_tabs: 'without QtWebEngine the native viewer stays' becomes the R45 pin (unavailable label, no viewer); (7) test_reader_sync: native scroll-position pin and PdfViewer._start_foreign_mirror pin become the pdf.js keep-view reload / load_annotations pins. The test_pdfjs_viewer renderer-flag gate is rewritten to: the one PdfJsViewer build site is in reader_panel.py inside an if on PDFJS_AVAILABLE. Counts before/after go in the task report.
+- [2026-10-01 pdf-reader-task14] Task 14 done: commit 20fe056 'PDF reader 5/5: delete the native renderer' (on abdf310, not pushed). klaus_note/pdf_viewer.py deleted whole (nothing left had an outside caller); PdfSidebar + _open_sidebars/cleanup_all_sidebars/_pdf_display_name now in klaus_note/reader_panel.py (no shim, public surface unchanged, imports nothing native). R45: no QtWebEngine -> the existing 'PDF viewer is unavailable' label, pinned in test_reader_tabs. Touched-test counts 1103 -> 1064: 40 native-only checks deleted as listed in step 1, 1 R45 check added; everything else re-pointed at a pdf.js stand-in. py_compile via symlink OK. Clean export: all pass but the known logo pins (test_dialog_logic, test_manage_models_assistant). Working tree: all pass but test_top_bar (known) and test_library_viewer, which failed once mid peer-edit and passes 29/0 on re-run. R26: __init__.py committed through the reverse-applied copy (mode 100644); HEAD..worktree equals the saved foreign patch. Report: .superpowers/sdd/2026-09-30-pdf-reader/task-14-report.md. Card not moved.
+- [2026-10-01 claude-reader] Task 15 (docs) committed c2cd124 'PDF reader 5/5: docs describe the one pdf.js reader' (CLAUDE.md, AGENTS.md, DESIGN.md; config.md needed no change, pdf_renderer already gone). Module map now has pdf_source/doc_sync/annotation_save/reader_tabs/reader_panel; pdf_viewer.py, chunked base64, 1200ms and the QPdfView-only gotchas are removed; render_page_png (QtPdf) kept. grep QPdfView|pdf_renderer|1200ms|chunk_b64|pdf_viewer.py leaves 4 historical lines only. R26: each doc's git diff HEAD equals its saved foreign patch (foreign/t15__*.patch); commit built via a temp index; the peer's staged D tests/test_pdf_dock.py is untouched. Full suite on a clean export: 71/73 pass, and the 2 failures are the known logo pins (test_dialog_logic, test_manage_models_assistant). Report: .superpowers/sdd/2026-09-30-pdf-reader/task-15-report.md. Card not moved; the controller closes it after review.
+- [2026-10-02 triage] Moved to GitHub: https://github.com/pyamzi/klaus-note-addon/issues/39
+
+### K-181: Four manifest readers still inline the preamble read_manifest replaced
+owner: claude-manifest
+priority: P3
+tags: cleanup,robustness
+files: klaus_note/card_index.py,klaus_note/pdf_index.py,klaus_note/retention.py,tests/test_klaus_note.py
+verify: python3 tests/test_klaus_note.py
+created: 2026-09-01
+claimed: 2026-09-17
+archived: 2026-10-02
+
+Surfaced by /simplify's reuse angle, 2026-09-01. The manifest preamble — open MANIFEST_FILE, json.load, check "version", bail on the same exception tuple — was hand-copied at SIX sites across three modules. The /code-review fix for a JSON-but-not-object manifest (null / [] / a bare string raising AttributeError straight through into Preferences) reached only the two stats_from_disk copies, because those were the two inside the reviewed diff.
+
+card_index.read_manifest(dir_path, version, manifest_file) -> dict | None now exists (isinstance gate, the drive_store.py idiom) and both stats_from_disk functions use it. THE OTHER FOUR still inline the preamble and still call m.get() on whatever json.load returned:
+
+  klaus_note/card_index.py  load()          (~line 115 in HEAD before this card)
+  klaus_note/card_index.py  load_row_map()  (~430)
+  klaus_note/pdf_index.py   load()          (~123)
+  klaus_note/retention.py   load_matches()  (~325, checks MATCHES_VERSION — pass it as `version`)
+
+Route all four through read_manifest. card_index imports nothing from the package, so neither pdf_index (already imports card_index after this card) nor retention (already does) can cycle. Each caller's own except tuple can then narrow to the field-read errors (KeyError/TypeError/ValueError) exactly as stats_from_disk's did.
+
+Fail-before: write "null" as the manifest and call each of the four; today load() and load_row_map() return None only by luck of a KeyError/TypeError downstream or raise AttributeError — pin the exit explicitly per function, watch it red, then route. Keep the pins in the modules' existing test files (test_klaus_note.py covers card_index/pdf_index; retention's matches cache is pinned in test_klaus_note too).
+
+Do NOT touch stats_from_disk again; it is done. Do not add AttributeError to any except tuple — that was the wrong idiom and it hides attribute typos as "no index".
+
+#### Comments
+- [2026-09-17 claude-manifest] DONE, committed 5e6876c. Routed card_index.load, card_index.load_row_map, pdf_index.load, and retention.load_matches through read_manifest, exactly as specified. Two things worth flagging beyond the card text: (1) empirically verified with real payloads before touching anything (measured, not assumed) - card_index.load, pdf_index.load, and retention.load_matches all genuinely raise AttributeError on null/[]/a bare string today; load_row_map does NOT (a prior review fix already gave it its own inline isinstance guard, see tests/test_card_index.py) - so for that one function this is pure de-duplication, not a live-bug fix, and I said so rather than claiming a fourth fail-before that was not real. (2) load() and pdf_index.load() keep OSError in their except tuple (they still read a vectors file after the manifest) while load_row_map and load_matches narrow to (ValueError, KeyError, TypeError) since they touch no other file - a blind copy of "narrow to KeyError/TypeError/ValueError" onto the first two would have silently swallowed a legitimate OSError from a missing/short vectors file. Nine new corruption pins (3 functions x null/[]/bare-string) in test_klaus_note.py, all confirmed red before the fix; one of my own pins was wrong on first write (the load_row_map round-trip inherited a manifest the preceding stats_from_disk loop left corrupted - fixed by rebuilding the fixture first). 433 checks in test_klaus_note, test_card_index and test_projection (both already exercise these loaders) unaffected, full sweep across every test file green, symlink compile OK.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. 5e6876c in HEAD: card_index.load/load_row_map, pdf_index.load and retention.load_matches route through read_manifest
+
+### K-322: Settings seam: one aqt-free settings module (read/patch/user_files/migrations) replaces the _pkg() helpers and USER_FILES copies
+owner: -
+priority: P2
+tags: architecture
+files: klaus_note/settings.py,klaus_note/__init__.py,klaus_note/anki_endpoint.py,klaus_note/anki_tools.py,klaus_note/annotation_save.py,klaus_note/browse_highlight.py,klaus_note/browse_toolkit.py,klaus_note/curation.py,klaus_note/dashboard.py,klaus_note/heatmap.py,klaus_note/index_queue.py,klaus_note/lecture_view.py,klaus_note/library_actions.py,klaus_note/library_sidebar.py,klaus_note/manage_models.py,klaus_note/pdf_drive.py,klaus_note/pdf_graph.py,klaus_note/pdf_handler.py,klaus_note/pdf_map.py,klaus_note/pdf_viewer.py,klaus_note/pdfjs_viewer.py,klaus_note/retention.py,klaus_note/retention_history.py,klaus_note/setup_flow.py,klaus_note/single_window.py,klaus_note/tag_migrate.py,klaus_note/tag_sync.py,klaus_note/top_bar.py,klaus_note/window_chrome.py,tests/test_settings.py,.claude/skills/klaus-test/scripts/anki_stubs.py,CONTEXT.md
+verify: env PYTHONDONTWRITEBYTECODE=1 python3 tests/test_settings.py
+created: 2026-09-30
+archived: 2026-10-02
+
+Spec docs/superpowers/specs/2026-09-30-settings-seam-design.md, plan docs/superpowers/plans/2026-09-30-settings-seam.md. Uncommitted in the main checkout until Pouya asks for the commit. Overlaps K-321's files (pdf_handler/pdf_drive/pdf_viewer/pdfjs_viewer/library_sidebar/lecture_view/annotation_save) only on USER_FILES -> settings.user_files() lines.
+
+#### Comments
+- [2026-09-30 claude-seam] Claim rejected by the disjointness gate: overlaps K-320 (__init__.py) and K-321 (annotation_save/lecture_view/library_sidebar/pdf_drive/pdf_handler/pdf_viewer/pdfjs_viewer). The seam is implemented and green in the main checkout (suite green except test_top_bar, which fails at HEAD on the deleted klaus-logo.svg); it stays uncommitted until Pouya asks. Card stays Ready so the overlap is visible.
+- [2026-10-01 claude-seam] Landed as d8a7025 (one combined commit with the Preferences state machine, the retention 0% change and the index resume pass). Suite green against the committed tree except the pre-existing logo pins (test_manage_models_assistant, test_dialog_logic 'sidebar identity'), which fail at HEAD before this commit too — the uncommitted logo rework in manage_models.py/top_bar.py. Card can move to Review.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. d8a7025 in HEAD; klaus_note/settings.py has read/user_files/patch/register_migration/migrate; tests/test_settings.py exists
+
+### K-214: Map: hover re-hit-tests under the sway (the lit node follows the projected position, not the last pointer sample)
+owner: swarm-214
+priority: P3
+tags: ui,phase-d,polish,feature-map
+files: klaus_note/pdf_map.py,tests/test_pdf_map.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_pdf_map.py
+created: 2026-09-02
+claimed: 2026-09-18
+archived: 2026-10-02
+
+Final review 2026-09-02 M3 (optional polish, accepted rather than fixed in the final round): the hover state is computed from the last pointer sample and is not re-hit-tested as the sway moves the projected nodes, so a still pointer can sit over a node that has drifted out from under it (or onto one) without the lit state following. Pin it with an _idle_tick() under a forced cursor position.
+
+#### Comments
+- [2026-09-18 orchestrator] Grouped under K-283.
+- [2026-09-18 swarm-214] Root cause: hover was a pure function of mouseMoveEvent — _hit_at was only ever called from mouseMoveEvent/mousePressEvent/mouseReleaseEvent/ leaveEvent. _idle_tick (the sway's own timer, IDLE_TICK_MS=33ms) re-posed self._cam every frame via sway_angle but never re-ran hit_test, so a motionless pointer could sit lit over a node that had since drifted away, or dark over one the sway carried underneath it, until the pointer next physically moved. RED (before fix, verify command run clean first — 314 passed, 0 failed, proving the existing suite did not cover this): added two real-Qt checks to tests/test_pdf_map.py right after the existing "_spin._idle_tick() ... camera re-poses" pin. Built a canvas on CLOUD, hovered lec1 by calling _update_hover at its exact projected screen point (and recording that point in _last_mouse, mirroring what mouseMoveEvent now also does), then advanced self._phase/self._cam directly (never the real QTimer, which is wall-clock and non-reproducible) until project_point on lec1's xyz moved outside _hit_radius of that fixed point — a sanity check asserts the drift itself actually happens. Calling _idle_tick() then had to leave _hover != "lec1". Symmetric second check: start just outside the hit radius (no hover), sway the node underneath that same still point, assert _idle_tick() lights it. Both failed as designed: FAIL K-214: one sway tick re-hit-tests the LAST KNOWN cursor position ... hover='lec1' FAIL ...and lights up a node the sway just carried UNDER a pointer ... hover=None (318 passed, 2 failed). I also re-verified true RED after implementing by reverting only the _idle_tick hook (keeping _last_mouse recording) and re-ran: same two FAILs reproduce identically, confirming the test pins the fix and not an artifact of how it was written. Fix (klaus_note/pdf_map.py): added self._last_mouse (screen point from the last real mouseMoveEvent, None before entry/after leaveEvent), recorded on every mouseMoveEvent (drag included, since a drag still has a real cursor position even though hover itself stays frozen mid-drag by existing design) and cleared in leaveEvent. _idle_tick now calls self._update_hover(*self._last_mouse, None) right after re-posing the camera, guarded on "_last_mouse is not None and not self._dragging" — the same hit-test the mouse itself would have triggered, run against the last real position instead of a new one. One fix at the shared timer tick (the only place the sway advances), not a patch on any individual caller. GREEN: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_pdf_map.py -> 320 passed, 0 failed. No discrepancy from the card's hinted shape: _idle_tick already existed exactly as described (the sway's QTimer callback), and forcing a cursor position on it was the natural test shape.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. pdf_map.py `_idle_tick` re-hit-tests `_last_mouse` (pdf_map.py:2551); map currently has no entry point
+
+### K-171: The map reshuffles on every re-index: PC2 and PC3 are not separated by the data
+owner: swarm-171
+priority: P2
+tags: phase-d,correctness,perf,feature-map
+files: klaus_note/projection.py,klaus_note/pdf_graph.py,tests/test_projection.py
+verify: python3 tests/test_projection.py
+created: 2026-09-01
+claimed: 2026-09-18
+archived: 2026-10-02
+
+Surfaced by K-167's fit-stability experiment, which was asked for as an experiment precisely because I did not believe it either way. It is not caused by the cache; the cache slightly REDUCES it. It has been true since K-058.
+
+THE MEASUREMENT (K-167, sign-aligned, normalized units where 0.003 is about one pixel at 700px):
+
+    50 of 28,670 notes deleted   median note moves  24 px, worst  70 px
+    50 notes added               median note moves  80 px, worst 197 px
+    same 28,670 vectors, only a different even-stride 4,000 sample:
+                                 median note moves 150 px, worst 391 px
+
+The last line is the one that matters: the DATA did not change at all, only which 4,000 rows the fit sampled, and the picture moved 150 px in the median.
+
+WHY, and this is the part that makes the fix obvious. The three component standard deviations are 0.1332 / 0.1236 / 0.1190. There is no eigengap. PC2 and PC3 are not separated by the data, so a different sample simply SWAPS them (|<v2,v3'>| = 0.86, against 0.45 for a diagonal). Only the 3-D SUBSPACE is stable — principal angles 5.9 / 9.6 / 17.9 degrees. The cloud is in the same place; the axes spin inside it.
+
+SO FITTING HARDER DOES NOT FIX IT. Fitting on all 28,670 rows instead of 4,000 is now affordable (it is a one-time cost behind K-167's cache) but near-degenerate axes stay near-degenerate: add fifty notes and PC2/PC3 can still swap. Do not spend the card on that unless the numbers say otherwise.
+
+THE FIX THAT MATCHES THE DIAGNOSIS is to make the picture CONTINUOUS rather than the axes canonical: align each new layout to the previous one. Orthogonal Procrustes over the notes present in both layouts — given old positions P_old and new P_new (n x 3), find the orthogonal R minimising ||P_new R - P_old||, which is the SVD of P_new^T P_old. That matrix is 3x3, so this is a tiny pure-Python computation, not a linear-algebra project, and K-167's cache already persists exactly the artifact you need to align against. Decide deliberately whether to allow reflections (det = -1): forbidding them keeps handedness, allowing them gives a closer fit. Argue it.
+
+VERIFY IT THE WAY THE DEFECT WAS FOUND: re-run K-167's three perturbations and report the same table after alignment. The number to beat is 150 px median on a pure resample; if alignment does not take that to a few pixels, it has not worked and you should say so rather than shipping it.
+
+CONSTRAINTS:
+- The alignment must not change WHAT is shown, only its orientation. A note's neighbours are the meaning; a rotation of the whole cloud is free. Pin that the pairwise distances are preserved to floating-point tolerance — an alignment that distorts is a bug, not a nicety.
+- No numpy. A 3x3 SVD (or an equivalent, e.g. eigendecomposition of a 3x3 symmetric matrix, or Kabsch via quaternions) in pure stdlib. projection.py's own power-iteration idiom is the house precedent for "small linear algebra, by hand, tested".
+- Degrade to unaligned rather than raising when there is no previous layout, when the overlap is too small to be meaningful (pick and justify a floor), or when the solve is degenerate.
+- Reading klaus_note/user_files read-only for measurement is allowed; writing is not. Tests use tempfile.mkdtemp.
+
+#### Comments
+- [2026-09-18 orchestrator] Grouped under K-283.
+- [2026-09-18 orchestrator] Recovered after the worker process was killed mid-run (file edits survived, in-process report did not). Independently reviewed: the Procrustes alignment (Higham polar-decomposition Newton iteration, pure stdlib, reflections deliberately allowed with a sound argument), the align-raw-then-normalize ordering fix (measured 97px vs 1px median — a second, subtler bug beyond the card's literal ask, caught and fixed), and the pdf_graph.py wiring were all read in full and hold up. Verify passes: 85/85 after one addition of my own (see below). Measured proof matches the card's own bar: unaligned 62.7px median / 206.8px worst -> aligned 0.9px / 2.7px median/worst. One real gap found by mutation-testing the wiring specifically (removing the align_to call from build_graph_data): the worker's own new tests all exercise projection.align_to/normalize_points directly and never through pdf_graph.build_graph_data itself, so a future accidental deletion of the wiring call would have left every existing test green. Added one integration-level test (spy on projection.align_to, cold build calls it 0 times, a second build over a re-embedded-but-identity-overlapping index calls it once) — confirmed genuinely RED against the mutation and GREEN against the real fix before adding it. 85 passed, 0 failed now.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. projection.align_to (projection.py:305) is wired in pdf_graph.py:417
+
+### K-230: Assistant page PNG: cache the render beside the page record (every Send re-rasterises on the main thread since K-226)
+owner: swarm-230
+priority: P2
+tags: api-first,plan2,feature-assistant
+files: klaus_note/page_store.py,klaus_note/assistant_dock.py,tests/test_page_store.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_page_store.py
+created: 2026-09-15
+claimed: 2026-09-18
+archived: 2026-10-02
+
+#### Comments
+- [2026-09-18 orchestrator] Grouped under K-284.
+- [2026-09-18 swarm-230] Implemented. TDD: added failing tests to tests/test_page_store.py first (AttributeError: no cached_page_png), confirmed RED, then implemented, confirmed GREEN (92/92 in test_page_store.py). klaus_note/page_store.py: added _png_path/cached_page_png/store_page_png, placed above the QtPdf divider (pure file I/O, no Qt needed). Cache lives at the same record_dir as the page's JSON, same 0000-style stem, .png extension instead of .json — so it moves/expires with the record automatically via record_dir's existing pointer/legacy resolution, no separate invalidation logic. cached_page_png never raises (mirrors load_record's contract: try/except Exception -> None). store_page_png writes atomically (tmp + os.replace, matching every other writer in the module) and never raises into the caller (logs and returns). klaus_note/assistant_dock.py: _page_context now checks page_store.cached_page_png(...) first; only calls render_page_png + store_page_png on a miss. Docstring updated (removed the stale 'not cached yet' note, replaced with the K-230 cache contract). The existing try/except around the whole PNG block is unchanged, so the "neither half can fail the turn" contract from before is untouched — cache read/store failures fall through the same net a render failure already used. New tests added to tests/test_page_store.py (RED before, GREEN after): - cached_page_png/store_page_png section: miss->None, store->readback byte-for-byte, path/extension check (sibling of the .json record), atomic write (no leftover .tmp), unresolvable-path read never raises, and a forced write failure (record dir's base path replaced by a plain file, so os.makedirs fails) proving store_page_png swallows the error. - _page_context caching section: monkeypatched klaus_note.page_store.render_page_png with a call counter (imported via importlib fresh, same module object assistant_dock's lazy `from . import page_store` resolves to since no sys.modules purge occurred) and called AssistantDock._page_context as an unbound function against a minimal fake `self` (only `_user_files` is read) plus a fake view stub — avoided building the whole QDockWidget/QApplication machinery since _page_context only touches self._user_files. Proved: (a) a miss renders once and the render lands in the on-disk cache, (b) a second call is a cache hit and render_page_png is NOT called again (count stays 1), (c) a forced store_page_png failure still returns the freshly-rendered PNG for that turn (no regression on the send), and a forced cached_page_png failure degrades to png=None with text still populated (never crashes _page_context). Verification: full tests/test_page_store.py (92 passed) and tests/test_assistant_dock.py (193 passed, unmodified, confirming no regression) both green. py_compile through the addons21 symlink clean. Ran the whole suite: two unrelated pre-existing failures in tests/test_anki_endpoint.py and tests/test_assistant_sessions.py, both against files (klaus_note/anki_endpoint.py, klaus_note/assistant_sessions.py) that git status shows modified by a DIFFERENT concurrent session outside my claimed files (page_store.py, assistant_dock.py, test_page_store.py) — not caused by and not fixed by this change. No discrepancy from the card's reconstructed spec — render_page_png and _page_context matched the description exactly.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. page_store.cached_page_png/store_page_png (page_store.py:390/402), shipped via c282d94, consumed at anki_endpoint.py:373; the dock half is gone (9425dc0)
+
+### K-207: assistant: semantic note search (card_index.top_k over the query embedding) beside the lexical search_notes
+owner: swarm-207
+priority: P3
+tags: assistant,backlog,feature-assistant
+files: klaus_note/anki_endpoint.py,klaus_note/assistant_sessions.py,tests/test_anki_endpoint.py
+verify: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_anki_endpoint.py
+created: 2026-09-02
+claimed: 2026-09-18
+archived: 2026-10-02
+
+Final review (2026-09-02) I3: search_notes is Anki's own lexical search but was advertised as semantic in the tool description, the system prompt, spec §5.2 and AGENTS.md; the fix wave relabelled it. This card adds the semantic one for real: embed the query (the same paid embed-per-call _semantic_pdf_search already makes), card_index.top_k over the card index, map rows to note ids, the 'index stale → skip' rule; a new tool name so the lexical one keeps its precise Anki-syntax role. The verify above must gain a pin for the new tool that fails before the work.
+
+#### Comments
+- [2026-09-18 orchestrator] Grouped under K-284.
+- [2026-09-18 swarm-207] Implemented klausSearchNotesSemantic: real semantic note search over the CARD index (card_index.top_k), distinct from klausSearchNotes (lexical, untouched) and klausSearchLecturePdfs (semantic over the PDF page index). Discrepancy from the card body: _semantic_pdf_search actually lives in klaus_note/anki_tools.py (not anki_endpoint.py). Since anki_tools.py is outside this card's file list, I read it for the pattern (embeddings.provider_from_config -> provider.embed([query], kind="query") -> embeddings.normalize; card_index.load + embeddings.index_signature + card_index.check_signature for the stale-index rule; card_index.top_k for ranking) and reimplemented the same pattern natively inside anki_endpoint.py's own _a_klaus_search_notes_semantic, rather than touching anki_tools.py. What changed: - klaus_note/anki_endpoint.py: new handler _a_klaus_search_notes_semantic + Action("klausSearchNotesSemantic", "search_notes_semantic", ...), registered in ACTIONS/mcp_tools same as every other action (one registry, no drift). Embeds the query via embeddings.provider_from_config(...).embed([query], kind="query"), normalizes it, loads card_index.load(os.path.join(ctx['user_files'], 'card_index')), and skips cleanly (returns []) when the index is missing OR embeddings.check_signature fails against embeddings.index_signature(cfg) -- the same 'index stale -> skip' rule _semantic_pdf_search/curation.ensure_index use elsewhere, because a score from a different embedding space is meaningless, not just smaller. Ranks via card_index.top_k. A provider embed failure (e.g. no OpenAI key) is caught as embeddings.EmbeddingError and re-raised as ActionError(str(exc)) -- same clean, unprefixed error treatment ActionError/ToolError already get in Endpoint.handle. klausSearchNotes's own registration, description and handler are completely untouched. - klaus_note/assistant_sessions.py: SYSTEM_PROMPT_VERSION bumped 2 -> 3, and the tool list in _SYSTEM_PROMPT_BODY now names search_notes_semantic alongside search_notes and search_lecture_pdfs, describing when to reach for it (paraphrase/meaning over notes) and that an empty result means the card index isn't built, not that nothing exists. - tests/test_anki_endpoint.py: new pins under 'K-207: real semantic note search' -- registry shape (distinct name/mcp_name, read-only, description text, no drift between /mcp and the registry, klausSearchNotes's own description pin still holds), a real card_index fixture on disk (card_index.CardIndex + card_index.save, 2 notes, engineered query vector) proving actual ranking through card_index.top_k, the stale-signature skip, the missing-index skip, the no-key clean-error path (embeddings.EmbeddingError, no 'EmbeddingError:' prefix), and the blank-query rejection. Also extended ctx_factory's 'user_files' from the old placeholder '/tmp/none' to a real tempdir (needed since this tool actually reads a real path now), and added the new action to the 'exact supported set' pin. RED confirmed before implementing: temporarily removed just the ACTIONS registration line (handler left in place) and reran -- 'klausSearchNotesSemantic embeds the query and ranks the CARD index...' failed with TypeError: 'NoneType' object is not subscriptable (r['result'] was None, action unsupported), exactly as expected for a tool that doesn't exist in the registry yet. Restored the registration and reran: all 101 checks pass (was 89 before this card; +12 new). Verify command passes in full: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_anki_endpoint.py -> 101 passed, 0 failed. python3 -m py_compile through the addons21 symlink also clean. Known fallout OUTSIDE this card's file list (not touched, per the ground rules -- 'touch nothing else'): tests/test_assistant_sessions.py hard-pins SYSTEM_PROMPT_VERSION == 2 and the literal '<!-- klaus-system-prompt v2 -->' marker string in 3 places. Bumping to v3 (required by this card, since the prompt text changed) makes those 3 pins fail: 'SYSTEM_PROMPT_VERSION is 2', 'starts with the v2 version marker...', and the two ensure_system_prompt rewrite pins. Ran that file to confirm: 58 passed, 4 failed, all four failures are exactly the stale v2 literal. This needs a tiny follow-up (bump the 4 literals from v2 to v3 in tests/test_assistant_sessions.py) by whoever can touch that file -- it is not in my claimed file list so I left it alone rather than touch it out of scope.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. klausSearchNotesSemantic / search_notes_semantic registered at anki_endpoint.py:437; the assistant_sessions half is gone (9425dc0)
+
+### K-237: Queue-side priced confirm before any from-scratch card-index embed (declining the Preferences sweep still bills the next PDF add)
+owner: swarm-237
+priority: P2
+tags: api-first,money,feature-matching
+files: klaus_note/index_queue.py,tests/test_index_queue.py
+verify: grep -q 'card-index confirm' klaus_note/index_queue.py
+created: 2026-09-16
+claimed: 2026-09-18
+archived: 2026-10-02
+
+#### Comments
+- [2026-09-18 orchestrator] Grouped under K-285.
+- [2026-09-18 swarm-237] Fixed. curation.ensure_index had no price gate of its own; a declined offer_model_sweep only delayed the from-scratch re-embed to the next PDF add, silent and unpriced. Added a queue-side confirm at the phase-one call site in index_queue.py._run. New: card_index_from_scratch(cfg) — reads curation.index_stats() (manifest-only, no vector load) and returns True when no manifest exists or its stored (provider, model, dims) no longer matches embeddings.index_signature(cfg), via the existing signature_changed()/embeddings.signature_matches() helper (never a hand-spelled tuple compare — same rule offer_model_sweep already follows). card_index_confirm_message() builds the text (Plus-aware, like sweep_message). ask_card_index_confirm(parent, text, answer) is architecturally identical to ask_judge (Embed/Skip, Skip is the default button, window-modal .open() never .exec(), K-114) — NOT offer_model_sweep's shape, since this fires deep in the autonomous queue chain, never from an open Preferences window with a real parent. Wiring in _run: before calling curation.ensure_index, if kind == JOB_PDF and not plus.active(cfg) and card_index_from_scratch(cfg), show the confirm; only call curation.ensure_index on Embed. On Skip, publish a status line saying matching may miss recent cards and jump straight to after_card_index(None, True) so the rest of the chain (this PDF's own page embedding, matching, judging, tag write) still runs against whatever card index already exists. Scoping decision (kind == JOB_PDF only): a plain JOB_CARDS entry only ever reaches this queue via offer_model_sweep's own priced confirm in Preferences — asking again here would double-prompt for a spend the user already approved. The gate only guards the SILENT path: a PDF add's own phase one, where today there is no confirm at all. Decline-behaviour decision, explicit: mirrors pertinence's Skip precedent, not an abort. Declining does not abort the PDF add — the PDF still gets its own pages embedded (phase two), matched (phase three) and tagged (phase five), just against a stale/missing card index, which the status line names as "matching may miss recent cards." A raise or a silent hang would be strictly worse than a documented degradation; the user can always finish the rebuild later from Preferences' Index Now or the next model sweep. Estimate: reused sweep_estimate([]) as-is (no PDFs, so it's exactly the note-half scalar `select coalesce(sum(length(flds)),0) from notes` sweep_estimate already runs) — no new pricing logic, same KeyError-for-unknown-model / "cost unknown for this model" fallback pattern as offer_model_sweep. TDD evidence: RED — before the fix, `grep -q 'card-index confirm' klaus_note/index_queue.py` exited 1, and tests/test_index_queue.py's new "K-237: the card-index confirm" section crashed with `AttributeError: module 'klaus_note.index_queue' has no attribute 'card_index_from_scratch'` (verified by temporarily reverting index_queue.py to its pre-fix content and re-running — the rest of the suite, defined before that section, still passed 100+ checks, confirming the fake Pipeline's new index_stats() default didn't regress anything on its own). GREEN — after the fix: `grep -q 'card-index confirm' klaus_note/index_queue.py` passes; `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_index_queue.py` → 191 passed, 0 failed. New behavioral tests: (1) from-scratch + not-Plus asks BEFORE ensure_index runs, pipe.calls == [] until answered; (2) Skip never calls ensure_index but the rest of the chain (ensure_pdf_index → ensure_matches → ensure_judged → tag_sync) still completes; (3) Embed does call ensure_index, chain completes normally; (4) Klaus Plus active skips the confirm entirely, straight to ensure_index; (5) a bare JOB_CARDS job (the sweep's own first entry) never gets asked a second time. Pipeline fake's index_stats() defaults to a FRESH, signature-matching manifest so every pre-existing test in the file (unaware this gate exists) is unaffected. Full suite: ran `for t in tests/test_*.py; do python3 "$t"; done` — everything green except tests/test_assistant_sessions.py (4 pre-existing failures, a "klaus-system-prompt v3" marker/version drift, unrelated to index_queue/curation, not in my claimed files, not touched by this change). Files touched: klaus_note/index_queue.py, tests/test_index_queue.py only. curation.py was read-only reference, untouched.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. index_queue.card_index_from_scratch/ask_card_index_confirm exist; verify `grep 'card-index confirm'` passes; 4aa2e4b keeps the Embed/Skip ask (pricing obsolete)
+
+### K-298: Simplify local model settings for students
+owner: codex
+priority: P2
+files: klaus_note/manage_models.py,klaus_note/ollama_client.py,tests/test_local_model_settings.py,tests/test_ollama_client.py
+verify: env QT_QPA_PLATFORM=offscreen python3 tests/test_local_model_settings.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+Basic student tasks, collapsed advanced controls, capability labels, unified transcription inventory, and live Anki verification after each edit round. RED observed in /tmp/klaus-student-red.log.
+
+#### Comments
+- [2026-09-19 codex] RED 164 passed/5 failed before implementation. GREEN full suite: 51 files, 4893 checks and 36 unittest cases, all passed. Restarted actual Anki after both edit rounds; verified real model capability labels, basic page, advanced expansion, search, and native transcription file picker. No live model downloads, deletions, or indexing were triggered. Evidence: /tmp/klaus-student-suite, /tmp/klaus-student-round2.png, /tmp/klaus-student-search.png.
+- [2026-09-19 codex] Local commit 969faa8 contains only the four scoped code/test files. Pre-existing logo and other dirty changes remain unstaged. Verification and limits recorded in /tmp/klaus-student-settings-verification.md. Ready for review.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. 969faa8 in HEAD (transcription half later removed by K-314)
+
+### K-299: Apply Apple design principles across Klaus frontend
+owner: codex
+priority: P2
+files: klaus_note/theme.py,klaus_note/manage_models.py,klaus_note/dashboard.py,klaus_note/heatmap.py,klaus_note/web/pdfjs_viewer.html,tests/test_apple_design.py,DESIGN.md,docs/reference/apple-design.md
+verify: env QT_QPA_PLATFORM=offscreen python3 tests/test_apple_design.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+Apply attached Apple design skill to shared native and web surfaces: calm action hierarchy, stable focus, readable typography, immediate press feedback, and motion/transparency/contrast preferences. Verify in real Anki after edit rounds. Transcription engine question answered separately, no backend migration in this card.
+
+#### Comments
+- [2026-09-19 codex-mcp] User authorized five MCP improvements. I will own endpoint/bridge/tests/docs on a new card. Preferences connection-test hook overlaps your manage_models.py claim; please leave MCP block intact and release that file when finished so I can add a Test connection button. Backend work can proceed independently.
+- [2026-09-19 codex] Local commit b6bedcc. Applied attached apple-design skill across shared frontend controls; see docs/reference/apple-design.md. RED gate 1 pass/16 failures; final design gate 17/0. Full run 53 files initially found dock drag-strip regression and concurrent MCP endpoint mismatches. Dock padding fixed: 107/0. Endpoint recheck after separate work updated tests: 117/0. All 53 files now have passing results with focused rechecks. Restarted actual Anki after each edit round, inspected settings/search and Library; PDF document live appearance not verified because automated opening did not succeed. Full evidence /tmp/klaus-apple-verification.md. No transcription backend change.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. b6bedcc in HEAD; tests/test_apple_design.py exists
+
+### K-300: MCP source binding, validated protocol, page retrieval, batch notes and diagnostics
+owner: codex-mcp
+priority: P2
+tags: mcp
+files: klaus_note/anki_endpoint.py,klaus_note/scripts/mcp_stdio_bridge.py,tests/test_mcp_updates.py,tests/test_anki_endpoint.py,tests/test_mcp_stdio_bridge.py,tests/test_current_page.py,tests/integration_mcp_sdk.py,klaus_note/config.md,docs/reference/mcp-interface.md
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mcp_updates.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+Implement all five user-approved updates. Explicit PDF/page provenance for MCP creates; validated arguments and supported protocol negotiation with structured results; imported-PDF get_page and optional images; bounded add_notes behind one approval with per-note outcomes; real stdio handshake diagnostics. Preserve AnkiConnect result compatibility and token/Origin/write approval gates. Preferences integration follows once K-299 releases manage_models.py. Scratch fixtures only. Verify regression tests before and after, relevant existing suites and syntax through installed symlink. No external client config writes or user collection mutations.
+
+#### Comments
+- [2026-09-19 codex-mcp] RED test_mcp_updates.py exposed viewer-dependent provenance and malformed arguments crash. Implemented explicit imported source validation, get_page with optional images, MCP-only required source_pdf, bounded add_notes with per-note outcomes, protocol version negotiation and structured results. 39 focused checks green; existing suite compatibility and diagnostics next. AnkiConnect legacy source inference/result shape retained. Awaiting K-299 Preferences file release.
+- [2026-09-19 codex-mcp] Official MCP Python SDK 2.2.0 integration: 10/10 passes against scratch HTTP Endpoint via actual stdio subprocess, including automatic fallback negotiation to 2025-06-18, schemas, get_page, validation error, approved fake batch and restart reconnect. Endpoint 117/117, bridge including diagnostics 37/37, new contracts 40/40, current page 11/11. No runtime dependency added; SDK gate uses uv isolated development environment. Full suite running.
+- [2026-09-19 codex-mcp] Backend complete: all 53 repository test files passed, log /private/tmp/klaus-mcp-tests.r14pJN. Focused contract 40, endpoint 117, bridge 37, current-page 11 checks pass. Official SDK 2.2.0 integration 10 checks pass. Syntax through Anki add-on symlink and git diff --check pass. Committed exact owned files; UI Test connection follows on K-301 when K-299 releases Preferences.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. 1de2764 in HEAD; tests/test_mcp_updates.py exists
+
+### K-301: MCP Preferences connection test and client verification
+owner: codex-mcp
+priority: P2
+tags: mcp,preferences
+files: klaus_note/manage_models.py,tests/test_external_client_settings.py,klaus_note/config.md,docs/reference/mcp-interface.md
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_external_client_settings.py
+created: 2026-09-19
+claimed: 2026-09-19
+archived: 2026-10-02
+
+After K-299 releases manage_models.py, add Test connection beside Copy configuration using bridge.test_connection in collection-free QueryOp. Disable during lookup/test, show actionable status, ignore callbacks after close/profile cancel. Preserve concurrent frontend edits. Test actual Qt click/callback and closed dialog lifecycle. Backend implemented by K-300.
+
+#### Comments
+- [2026-09-19 codex-mcp] Implemented Test connection beside Copy configuration after K-299 moved to Review. Runs actual bridge diagnostic off the UI thread without collection access. RED 18 passes/2 failures before hook; GREEN 30/0 including exact copied paths, running/disabled/success/failure and late-close lifecycle. Dialog/local-model/transcription/switch/retired-assistant/Apple design regression gates also pass. Compiled through installed symlink; diff check clean. Committed only MCP hunks, leaving preexisting logo edit in manage_models.py unstaged. Backend SDK 2.2.0 test 10/10; combined source requires Anki restart and client tool-list refresh. No user collection or external app config writes.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. 4179904 in HEAD; tests/test_external_client_settings.py exists
+
+### K-302: Match precision: nomic task prefixes, Text-only cloze cards, best-lecture assignment
+owner: claude-match
+priority: P2
+tags: feature-matching,local-model
+files: klaus_note/embeddings.py,klaus_note/card_index.py,klaus_note/curation.py,klaus_note/browse_toolkit.py,klaus_note/retention.py,klaus_note/tag_sync.py,klaus_note/index_queue.py,klaus_note/config.json,klaus_note/config.md,tests/test_match_precision.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_match_precision.py
+created: 2026-09-24
+claimed: 2026-09-24
+archived: 2026-10-02
+
+Pouya: heme-deck matching too sensitive. (1) send nomic-embed-text task prefixes (embed() ignored kind); (2) cloze notetypes embed only the Text field with cloze markup resolved to the answer (Extra/resource fields swamped Text); (3) a card's match on a lecture counts only if within delta of its best score across all indexed lectures. Signature bump forces one full re-embed of cards and PDFs. Judge model deferred (K-281) pending a hand-labelled set.
+
+#### Comments
+- [2026-09-24 claude-match] Evaluated before shipping (scripts/eval/, read-only, real 43,483-note collection, proxy keyword labels on the B12/Folate and RCT lectures; FP = wrong-topic heme cards at the recall raw 0.75 had). Raw today: AUC 0.906, FP 35. nomic prefixes: no gain (0.904) -> NOT shipped. Text-only cloze: small gain (0.920; 0.955 vs 0.939 with centering) but needs a full re-embed -> NOT shipped, offered as follow-up. Centered cosine (card-mean subtracted, Fable's idea): AUC 0.939, FP 8 -> SHIPPED (card_index.mean_vector + Centered; retention.match_scores and pdf_index.best_page/lecture_view center alike). Default threshold 0.75 -> 0.50 (B12 @0.50: 186 matched vs 279, recall 0.58 vs 0.64, FP 5 vs 35; Bootcamp Heme 1939 -> 745). One-time _threshold_scale migration resets global + clears per-PDF overrides; MATCHES_VERSION 3 + setup_flow._rematch_stale_matches re-matches quietly on profile open (no embedding). Best-lecture delta rule shipped OFF (pdf_match_best_delta -1): cuts 3+-lecture cards 81->11 but pulls B12 cards onto the Bootcamp review lecture. Extra files touched beyond the card: pdf_index.py, lecture_view.py, setup_flow.py, scripts/eval/*, tests/test_klaus_note.py, tests/test_projection.py. Suite 53/54; test_top_bar fails on another session's deleted klaus-logo.svg. Nothing committed.
+- [2026-09-26 claude-match] Ground-truth check (Fable, AnKing #Bootcamp lesson tags as labels, AnKing notes only; results in scratchpad bootcamp_review/). Centering: B12 lecture wrong-lesson heme matches 65 -> 20 at equal recall (real gain, within-subject); Bootcamp Heme/Onc PDF subject-level matching is a wash at equal recall (P 0.82 both). Default 0.50 was too strict (Heme recall 0.30) -> lowered to 0.45 (Heme: 1,126 matched, P 0.92, R 0.49; raw 0.75 was 1,939, P 0.82, R 0.66). Text-only cloze would have HURT (AUC 0.96 -> 0.88); not shipped, correctly. Found: Bootcamp Heme PDF chapter 08 (pp 65-74, 108) text layer is font-shifted garbage, so its 462 tagged cards cannot match; spun off as a separate task. Suite 53/54 (test_top_bar: other session's deleted logo).
+- [2026-09-26 claude-match] Committed as ec400b5 (14 files, K-302 only; other sessions' uncommitted work left unstaged). Not pushed.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. ec400b5 in HEAD (centered cosine, threshold migration)
+
+### K-303: Garbled PDF text layers: detect unmapped fonts, OCR flagged pages with glm-ocr
+owner: claude-ocr
+priority: P2
+tags: feature-matching,local-model,ocr
+files: klaus_note/pdf_handler.py,klaus_note/ollama_client.py,tests/test_garbled_text.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_garbled_text.py
+created: 2026-09-26
+claimed: 2026-09-26
+archived: 2026-10-02
+
+Bootcamp Heme/Onc ch. 8 (pp 65-74, 108) extracts as glyph IDs: Type0/Identity-H TrueType subsets with empty ToUnicode CMaps and no cmap/post table, so pypdf emits raw GIDs (Mac glyph order, Unicode-29). Detect by C0 control-char share; at ingest (save_pdf, rescan_root) OCR flagged pages through local Ollama glm-ocr, else blank them so they stop embedding as noise. Spun off from K-302.
+
+#### Comments
+- [2026-09-26 claude-ocr] Root cause: ch.8 pages use Type0/Identity-H CIDFontType2 subsets whose /ToUnicode CMaps declare a codespace and map nothing (embedded TrueType has no cmap/post table), so pypdf emits raw glyph IDs (Mac glyph order, Unicode-29: space->\x03). Fix: pdf_handler.looks_garbled (C0-control share >0.05, >=3 controls) + repair_garbled_pages, applied at save_pdf and rescan_root only (anki_endpoint request-time fallback keeps raw layer). Flagged pages -> glm-ocr via local Ollama (ollama_client.generate restored from 27e78c4 shape), else ''. Evidence: on the real PDF the detector flags exactly 1-based 65-74 and 108; 0 flags across the other 35 stored PDFs (639 pages). Live OCR against a scratch Ollama on :11499 (glm-ocr, ~5 s/page warm): all 11 pages clean text, none still flagged. Tests: test_garbled_text 18/18; suite 54/55, test_top_bar fails on another session's deleted klaus_note/web/klaus-logo.svg (pre-existing). Existing data unchanged until the PDF is re-imported/rescanned; new text -> new page-record dir (no segments in 5c5fd49cac04, nothing orphaned). Not committed.
+- [2026-09-26 claude-ocr] Correction: rescan_root only ingests UNMAPPED files, so the already-mapped Hematology PDF is fixed only by re-dropping it into Anki (import_pdf_file -> save_pdf re-import branch), with the managed Ollama up and glm-ocr pulled (~1 min freeze for 11 pages); the index re-runs via on_pdf_imported. Stale strings for a doc card (not on this card's files): __init__.py:645 'OCR is not yet supported' and CLAUDE.md 'OCR and Voyage remain out of scope'. Live check used a scratch 'ollama serve' on :11499, killed afterwards (11434 was down before).
+- [2026-09-26 claude-ocr] Committed as bf28bf1 on claude/repo-root-casing (3 files only; other sessions' uncommitted work left unstaged). Not pushed.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. bf28bf1 in HEAD. Leftover wording: "OCR is not yet supported" (klaus_note/__init__.py:539) and CLAUDE.md "OCR and Voyage remain out of scope"
+
+### K-304: anki-qt-dev audit fixes: endpoint ops, map build off the collection, Preferences profile close
+owner: claude-audit
+priority: P2
+tags: anki-qt-dev,threading
+files: klaus_note/anki_endpoint.py,klaus_note/pdf_map.py,klaus_note/pdf_drive.py,klaus_note/manage_models.py,tests/test_anki_ops.py,.claude/skills/anki-qt-dev
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_anki_ops.py
+created: 2026-09-28
+claimed: 2026-09-28
+archived: 2026-10-02
+
+From the anki-qt-dev skill audit (3 reviewers): (1) endpoint writes skipped CollectionOp -> open editor could overwrite Klaus's change, ~20 undo entries per addNotes; (2) semantic searches ran on the main thread and blocked on Ollama; (3) map graph build held the collection ~17 s; (4) profile switch left Preferences open with its preview. Also installs the anki-qt-dev project skill.
+
+#### Comments
+- [2026-09-28 claude-audit] Committed 94c8242 (anki-qt-dev skill) and 4f65ac1 (fixes). manage_models.py carried another session's uncommitted logo hunks: left in the working tree untouched, and only K-304's two hunks were staged (git apply --cached of a mine-only patch; full pre-commit diff kept in scratchpad parked-manage_models-full.patch). Existing pins in test_drive/test_pdf_map/test_bridge_reentrancy updated to the new start_graph_build/_close_for_profile shape with their intent kept. Suite 55/56 (test_top_bar: other session's deleted logo). Not verified in live Anki: editor reload after an MCP write, and map build timing.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. 94c8242 + 4f65ac1 in HEAD
+
+### K-305: anki-qt-dev audit: smaller findings (scan off collection, prefs lock, cleanup gaps, dead code)
+owner: claude-audit
+priority: P3
+tags: anki-qt-dev,cleanup
+files: klaus_note/__init__.py,klaus_note/pdf_drive.py,klaus_note/tag_migrate.py,klaus_note/tag_sync.py,klaus_note/retention.py,klaus_note/browse_toolkit.py,klaus_note/pdf_viewer.py,klaus_note/manage_models.py,klaus_note/index_queue.py,klaus_note/anki_tools.py,klaus_note/lecture_recorder.py,klaus_note/page_store.py,tests/test_anki_ops.py,tests/test_anki_tools.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_anki_ops.py
+created: 2026-09-28
+claimed: 2026-09-28
+archived: 2026-10-02
+
+Follow-up to K-304: duplicate scan off the collection, prefs.json RMW lock, card index loaded once for batch retags, upper-case background extensions, per-profile tag migration, viewer cleanup gaps, menus/threshold dialog freed, preview timer stopped on close, dead anki_tools exec path deleted, /tmp debug log removed.
+
+#### Comments
+- [2026-09-28 claude-audit] Committed a565260 (15 files; manage_models.py staged mine-only, the other session's logo hunks left unstaged). Suite 55/56 (test_top_bar: other session's deleted logo). Not changed, by decision: (a) undoing a Klaus tag change does not stick because !Library tags are re-derived from matches+threshold by design; (b) a write already running when the client times out can still land (only not-yet-started ops are cancelled) - needs idempotency keys; (c) with 2+ profiles, the shared user_files Library reconciles against each profile's tags - a design question, single profile today; (d) Preferences dialog not deleteLater'd on close: several QueryOps are parented to it and can outlive it; (e) page_store/pdf_viewer keep PyQt6 QtCore/QtGui imports where they feed QtPdf (one binding); (f) _image_thumb dpr=2 left - it sits inside another session's uncommitted manage_models hunk.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. a565260 in HEAD
+
+### K-306: Library in Browse 1/3: tag-sync hardening (empty tags, live reconcile, folder renames, disk moves, delete prompt + Trash)
+owner: claude-library
+priority: P2
+tags: library-in-browse,tag-sync
+files: klaus_note/tag_sync.py,klaus_note/pdf_handler.py,klaus_note/pdf_drive.py,klaus_note/__init__.py,tests/test_library_sync.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_library_sync.py
+created: 2026-09-28
+claimed: 2026-09-28
+archived: 2026-10-02
+
+Spec: docs/superpowers/specs/2026-09-28-library-in-browse-design.md, Part 1.
+
+#### Comments
+- [2026-09-28 claude-library] Done, uncommitted. plan_library_sync replaces plan_reconcile (pure, 20 planner checks); reconcile_from_tags applies moves (drive_store + disk via move/rename_mapped_file, folders via apply_folder_change), registers zero-note tags with set_collapsed, and confirms deletes (QMessageBox open(), Yes -> pdf_drive.delete_pdf with files to the Trash, No -> _reapply_missing). Live via operation_did_execute on changes.tag, debounced 300 ms. Verify: tests/test_library_sync.py 29/29, errored on HEAD (no plan_library_sync). Mutations of the empty-exclusion and existing-folder guards each fail it. Also touched outside the file list: tests/test_tag_migrate.py and tests/test_klaus_note.py (plan_reconcile checks migrated). Full suite green except test_top_bar (another session's logo deletion). Not verified in live Anki.
+- [2026-09-28 claude-library] Advisor pass: tag presence is now casefolded (Anki respells parents via adjusted_case_for_parents; exact compare would re-register forever), 3 case checks added, 32/32. set_collapsed registering a missing tag verified in rslib tags/tree.rs:30. pdf_originals copy also goes to the Trash on delete. Suite still green except test_top_bar.
+- [2026-09-28 claude-library] Committed 7bed127.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. 7bed127 in HEAD
+
+### K-309: Folder scan: match renamed PDFs by content, run the rescan in the background
+owner: claude-library
+priority: P2
+tags: library-in-browse,rescan
+files: klaus_note/pdf_handler.py,klaus_note/pdf_drive.py,klaus_note/__init__.py,tests/test_rescan.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_rescan.py
+created: 2026-09-28
+claimed: 2026-09-28
+archived: 2026-10-02
+
+A bulk Finder rename (16 missing vs 40 new) made plan_rescan ambiguous, so nothing moved or ingested since Sep 18. Pair missing/new by (page_count, first page text) from contexts/<safe>.json; ingest the rest. Move walk + fingerprint + extraction into QueryOp.without_collection (review finding #2).
+
+#### Comments
+- [2026-09-28 claude-library] Done, uncommitted. plan_rescan pairs by page_fingerprint (page count + first 3 non-empty pages; unique both ways); prepare_rescan reads/OCRs off-thread; start_library_rescan = QueryOp.without_collection, applied on main; profile open, watcher tick and _refresh_rows use it. tests/test_rescan.py 19/19, AttributeError on HEAD. Dry run on a COPY of the real map + real root: all 13 renamed lectures matched, 27 new ingestable, not ambiguous. INCIDENT: my first K-306 test runs wrote into the REAL user_files (anki_stubs.install does not redirect USER_FILES): fake PDFs a1/anemia/e1 and folders Heme/Onc/Renal/Kidney in drive.json, library_map.json, pdf_index/prefs.json, contexts/*.txt. Removed; originals backed up in the session scratchpad (user_files-backup-k306). Real PDFs untouched.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. f956f30 in HEAD; tests/test_rescan.py exists
+
+### K-310: Test harness: anki_stubs.install() must redirect USER_FILES away from the real Library
+owner: claude-userfiles
+priority: P2
+tags: tests,safety
+files: .claude/skills/klaus-test/scripts/anki_stubs.py,tests/test_user_files_guard.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_user_files_guard.py
+created: 2026-09-28
+claimed: 2026-09-28
+archived: 2026-10-02
+
+install() stubs aqt but curation/retention/anki_tools compute USER_FILES from __file__, and klaus_note/ is symlinked into addons21, so any test writing through them hits the real Library (2026-09-28 test_library_sync incident). Fix: install_package_stub points the package at a temp mirror of klaus_note/ (symlinks, fresh user_files/), so every __file__-derived path lands in scratch. Guard test asserts it.
+
+#### Comments
+- [2026-09-28 claude-userfiles] Done. anki_stubs.install_package_stub now imports klaus_note from a temp mirror (symlinks to every entry of klaus_note/ except user_files/__pycache__, plus an empty user_files/); pkg.USER_FILES points there; exec_klaus_note_under_qt defaults to the mirror so __init__.py's submodule imports resolve there too. New tests/test_user_files_guard.py: 14/14; with the old behaviour forced it fails 12/14. Full suite: 59/60 pass; the one failure is test_top_bar (klaus_note/web/klaus-logo.svg is deleted in the working tree by someone else's uncommitted change, unrelated). Real klaus_note/user_files: ls -la of it + contexts/ + pdf_index/ identical before/after, and find -newer marker over the whole suite window lists nothing (Anki was running and did not write during the window either). Not covered: test_klaus_note/test_projection/test_drive/test_tag_migrate hand-roll their own package stub; they wrote nothing this run.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. a440507 in HEAD; tests/test_user_files_guard.py exists
+
+### K-311: Convert the four hand-rolled test bootstraps to anki_stubs.install_package_stub (scratch USER_FILES)
+owner: claude-userfiles
+priority: P2
+tags: tests,safety
+files: tests/test_klaus_note.py,tests/test_projection.py,tests/test_drive.py,tests/test_tag_migrate.py
+verify: for t in tests/test_klaus_note.py tests/test_projection.py tests/test_drive.py tests/test_tag_migrate.py; do PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 $t || exit 1; done
+created: 2026-09-29
+claimed: 2026-09-29
+archived: 2026-10-02
+
+Follow-up to K-310: these four build their own klaus_note package on the real dir, so install()'s scratch mirror never reached them. Swap the package block for install_package_stub(); keep each file's own aqt stubs (mw=None, RecordingOp, projection's no-aqt import proof).
+
+#### Comments
+- [2026-09-29 claude-userfiles] Done. The four now call anki_stubs.install_package_stub() and bind pkg = sys.modules['klaus_note']; each keeps its own aqt stubs (mw=None, RecordingOp, projection's no-aqt import proof), which is why not full install(). No test left with a hand-rolled pkg.__path__. Results: test_klaus_note 416/0, test_projection 85/0, test_drive 361/0, test_tag_migrate 113/0. Full suite 59/60 (test_top_bar: klaus-logo.svg deleted in working tree, unrelated). Real user_files: first run saw mcp_connection.json + runtime/ollama.pid vanish at 23:54:01-02, followed by the collection write at 23:54:06 = Anki quitting mid-run (no test kills processes; the real-collection reads are immutable=1). Re-run with Anki closed: find -newer empty, ls -la of user_files, contexts/, pdf_index/, runtime/ identical.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. b754eb4 in HEAD
+
+### K-307: Library in Browse 2/3: sidebar UI (menus, retention %, warning icons, drop import, Import button, status line)
+owner: claude-library
+priority: P2
+tags: library-in-browse,ui
+files: klaus_note/library_sidebar.py,klaus_note/__init__.py,tests/test_library_sidebar.py
+created: 2026-09-28
+claimed: 2026-09-28
+archived: 2026-10-02
+
+Spec Part 2. After 1/3.
+
+#### Comments
+- [2026-09-28 claude-library] First slice done, uncommitted: library_sidebar.py installs LibraryNameDelegate on Browse's sidebar (browser_will_show); initStyleOption draws the PDF's display name (no .pdf), folder names and 'Library' for the root; EditRole/search/drag still use the tag. tests/test_library_sidebar.py 11/11 (ModuleNotFoundError without it). Still to do in K-307: retention %, warning icons, menus, drop import, Import button, status line, click-to-load.
+- [2026-09-29 claude-library] Retention % done, uncommitted: every tag row paints a right-aligned muted % (mean FSRS recall of studied cards, parents include children, new + suspended excluded, '—' when none); computed collection-wide in a QueryOp on Browse open and 1.5 s after card/note/tag ops while Browse is open. card_retrievability gains skip_suspended (default off). tests/test_library_sidebar.py 23/23. Offscreen render at 2x checked, selected-row contrast fixed.
+- [2026-09-30 claude-library] Rest of Part 2 done, uncommitted. library_actions.py: window-free actions (open in panel, rename, sensitivity with QueryOp-loaded matches, history, re-embed, suspend, Show in Finder, delete confirm, folders, import = copy into root + background rescan; QFileDialog instance). library_sidebar.py: context menus (root/PDF/folder; empty folders get Rename/Remove), click -> PDF panel if visible, PdfDropFilter on the viewport + footer, Footer (index_queue status line + cancel + Import PDFs...), warning icons (not embedded/stale/indexing via retention.index_status shared with priority_rows + index_queue.pending_names) with helpEvent tooltips. pdf_drive: rescan-ingested PDFs get page records, auto-index and a tag (_after_ingest). Tests: test_library_sidebar 46/46, test_rescan 22/22. Also touched: index_queue.py, retention.py, pdf_drive.py. Limits: no per-PDF 'failed' state (runner reports failures without a PDF name); DriveWindow keeps duplicate action bodies until K-308; not verified in live Anki.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. 95a5e77, 244a299, 718a780 in HEAD
+
+### K-308: Library in Browse 3/3: remove DriveWindow, library_tab, top-bar link; migrate tests
+owner: claude-library
+priority: P2
+tags: library-in-browse,cleanup
+files: klaus_note/pdf_drive.py,klaus_note/library_tab.py,tests/test_drive.py,tests/test_library_explorer.py
+created: 2026-09-28
+claimed: 2026-09-30
+archived: 2026-10-02
+
+Spec Part 3. After 2/3.
+
+#### Comments
+- [2026-09-30 claude-library] Done, uncommitted. Deleted: DriveWindow and the tree/drop-zone/empty-state widgets (pdf_drive.py 3.2k -> ~340 lines, now the disk half only), library_tab.py, library_explorer.py, theme.library_qss/accent_mix + their chevron-right/sort svgs, the top-bar link, the map button, pdf_drive.setup. Kept: refresh_open_library (Preferences calls it; now repaints the sidebar). Fixed: delete_folder only trashes an EMPTY directory and _move_to_trash never rmtree's (the Week 1 folder holds .md notes) + regression in test_rescan. Sidebar recomputes only while a Browse is open. Tests migrated: test_drive (window sections removed, K-114/K-125/K-132 rules re-pinned on pdf_drive/library_actions/library_sidebar), test_library_explorer deleted, test_theme/test_anki_ops/test_bridge_reentrancy/test_index_queue/test_pdfjs_viewer pins moved to the sidebar; test_local_model_settings + test_local_transcription_settings fixtures seeded as already threshold-migrated (retention now imports after the test's mw, so its one-time migration write showed up in their 'nothing written' checks). CLAUDE.md/AGENTS.md updated. Suite green except test_top_bar (other session).
+- [2026-09-30 claude-library] Follow-up from Pouya: Library is now its own first sidebar section (library_sidebar.on_build_tree claims the TAGS stage, builds Anki's _tag_tree, split_library_section moves the !Library branch out; rows stay TAG items) with library/folder/PDF icons (web/library-*.svg). Disclosure arrows were invisible: sidebar_tree_qss styled ::branch without an image, so Qt drew none; now branch-closed/open-{day,night}.svg, square SVGs so Qt's stretch keeps the chevron small (chevron-right svgs deleted again). Selected-row % uses the theme text under Klaus's sheet (was white on a light band). test_library_sidebar 58/58; renders at 2x light+dark checked. Spec + CLAUDE.md updated.
+- [2026-09-30 claude-library] Committed 8ea202c.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. 8ea202c in HEAD; library_tab.py and library_explorer.py gone
+
+### K-312: Library sidebar: one Tags section with AnkiHub, PDF icons for orphaned rows, delete prompt only after a real sidebar delete
+owner: -
+priority: P2
+tags: library-in-browse,bug
+files: klaus_note/library_sidebar.py,klaus_note/tag_sync.py,klaus_note/pdf_drive.py,tests/test_library_sidebar.py,tests/test_library_sync.py,tests/test_rescan.py
+created: 2026-09-30
+archived: 2026-10-02
+
+Live report 2026-09-30. (1) AnkiHub builds the Tags section at the TAGS stage ignoring handled -> two Tags sections; Klaus now wraps sidebar._root_tree per instance and splits after every stage. (2) PDFs whose stored tag was missing showed folder icons; icon now structural (leaf = PDF unless a known folder). (3) A reconcile read the collection while Klaus's own rename op was in flight and asked to delete 4 renamed lectures (records deleted, files trashed then present again in the folder). Deletes now require note_user_deleted from the wrapped sidebar.remove_tags within 120 s; anything else is restored; _reconcile_now waits for _own_ops; _after_ingest schedules instead of reconciling inline. Tests: library_sync 37, library_sidebar 60, rescan 25.
+
+#### Comments
+- [2026-09-30 claude-library] Committed bc654cc.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. bc654cc in HEAD
+
+### K-313: Browse viewer mode: double-click a Library PDF to view it in place of the cards; single click or Esc returns
+owner: -
+priority: P2
+tags: library-in-browse
+files: klaus_note/library_viewer.py,klaus_note/library_sidebar.py,klaus_note/library_actions.py,tests/test_library_viewer.py,tests/test_library_sidebar.py
+created: 2026-09-30
+archived: 2026-10-02
+
+library_viewer.enter hides Browse's central widget (table + editor), shows Klaus's PdfDock filling it with the PDF; Library sidebar stays. leave on a single sidebar click (ignoring the release that ends the double-click), Esc (event filter on Browse, which otherwise closes on Esc), the panel's own close, or Browse closing. A floating panel is docked with signals blocked so its placement memory is untouched. Single click no longer loads the panel; Open PDF enters viewer mode; open_in_panel removed. tests/test_library_viewer.py 19/19 real Qt. Uncommitted.
+
+#### Comments
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. 1ca40bf in HEAD; library_viewer.enter/leave exist (later reworked onto reader_host in 71e6c79)
+
+### K-315: Browse sidebar retention % counts suspended cards
+owner: -
+priority: P2
+files: klaus_note/library_sidebar.py,klaus_note/retention.py,tests/test_library_sidebar.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_library_sidebar.py
+created: 2026-09-30
+archived: 2026-10-02
+
+Pouya 2026-09-30: the % on every Browse sidebar tag row is the mean FSRS recall of the tag's studied cards, suspended ones included (new cards still left out). Removed card_retrievability's skip_suspended flag; the sidebar was its only user.
+
+#### Comments
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. d5df150 in HEAD; no `skip_suspended` left in klaus_note
+
+### K-314: Remove lecture recording and transcripts (moves to the Klaus app)
+owner: -
+priority: P2
+files: klaus_note/lecture_recorder.py,klaus_note/local_transcription.py,klaus_note/__init__.py,klaus_note/lecture_view.py,klaus_note/pdf_viewer.py,klaus_note/pdfjs_viewer.py,klaus_note/web/pdfjs_viewer.html,klaus_note/theme.py,klaus_note/page_store.py,klaus_note/anki_endpoint.py,klaus_note/manage_models.py,klaus_note/config.json,klaus_note/config.md
+verify: test ! -e klaus_note/lecture_recorder.py && test ! -e klaus_note/local_transcription.py && ! grep -rqE "lecture_recorder|local_transcription|append_segment|transcript_strip|record_btn" klaus_note tests --include=*.py --include=*.html
+created: 2026-09-30
+archived: 2026-10-02
+
+Pouya 2026-09-30: recording and embed-into-lecture is out of scope for the add-on; it belongs to the Klaus app. Remove the recorder, whisper transcription, both Record buttons, the transcript strip, transcription settings, transcript segments in page records (none stored), and user_files/recordings (3 WAV clips, moved to Trash).
+
+#### Comments
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. 66f56f2 in HEAD; the card's verify command passes
+
+### K-316: Simpler Library menu; Anki's Delete deletes any PDF
+owner: -
+priority: P2
+files: klaus_note/library_sidebar.py,klaus_note/library_actions.py,klaus_note/tag_sync.py,tests/test_library_sidebar.py,tests/test_library_sync.py,tests/test_drive.py,klaus_note/README.md,AGENTS.md,docs/superpowers/specs/2026-09-28-library-in-browse-design.md
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_library_sync.py && env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_library_sidebar.py
+created: 2026-09-30
+archived: 2026-10-02
+
+Pouya 2026-09-30: PDF right-click keeps only Match Sensitivity…, Retention History…, Show in Finder. Removed Open PDF (double-click), Rename PDF… and Delete PDF… (Anki's own items), Re-embed/Re-embed All (auto-embed), Suspend/Unsuspend (Cmd+A Cmd+J). Anki's Delete on a card-less PDF tag now asks to delete the PDF too (plan_library_sync deleted=).
+
+#### Comments
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. 27dd827 in HEAD
+
+### K-317: Viewer mode keeps the Browse sidebar's width
+owner: -
+priority: P2
+files: klaus_note/library_viewer.py,tests/test_library_viewer.py
+verify: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_library_viewer.py
+created: 2026-09-30
+archived: 2026-10-02
+
+Pouya 2026-09-30: toggling the double-click viewer resized the left sidebar (260 -> 127 px, and it stayed small). Width captured on enter; sidebar and panel resized together in one resizeDocks, and pinned back on leave.
+
+#### Comments
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. c8f1085 in HEAD
+
+### K-318: PR #9 Copilot review: page PNG cache (store + source stamp), :latest signature alias, board init ROLES.md
+owner: -
+priority: P2
+tags: review-fix
+files: klaus_note/page_store.py,klaus_note/anki_endpoint.py,klaus_note/embeddings.py,board/board.py
+created: 2026-09-30
+archived: 2026-10-02
+
+c282d94, pushed to PR #9; 4 threads replied to and resolved. Clean checkout of c282d94: 54/56, the two failures being the already-disclosed sidebar-logo pins (fix sits in uncommitted manage_models.py/top_bar.py).
+
+#### Comments
+- [2026-09-30 claude-userfiles] Round 2 (Codex): c7d157a keeps a PDF in place when the Trash refuses it (was os.remove) and warns; label_for casefolds the !Library root. Pushed, 3 threads replied/resolved (render-caching one was already fixed in c282d94). Clean checkout 54/56, same two sidebar-logo pins. Incident: my insert helper opened files for write before reading, truncating tests/test_library_sidebar.py (01:41:06) and tests/test_drive.py (01:42:03) to 0 bytes; both restored from HEAD. test_drive was clean; test_library_sidebar had been committed in K-316 at 01:39:45, so only an edit made in those 81 s could be lost.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): landed. c282d94 + c7d157a in HEAD
+
+### K-157: Assistant capabilities not yet reachable: card_forge (batch card drafting) has no UI surface
+owner: -
+priority: P2
+tags: assistant,design,feature-assistant
+files: klaus_note/__init__.py,klaus_note/manage_models.py
+verify: env QT_QPA_PLATFORM=offscreen python3 tests/test_card_forge.py
+created: 2026-09-01
+archived: 2026-10-02
+
+The four engine layers landed 2026-09-01 (f74a09e, 120293f, a494f2d, f1b330b, e1c023c) and are wired to NOTHING — importable, tested, unreachable by a user. Remaining work is the surface plus its registration.
+
+BLOCKED ON A DECISION, not on code: Pouya deliberately deferred the UI. His words were that he is 'thinking something along the lines of when you have the PDF viewer showing up like that panel, you can have AI show up at the bottom of the PDF viewer, but I'm not sure yet. I don't want to jump to anything yet in terms of UI.' Do NOT pick a surface on his behalf.
+
+Files listed are what the surface will need when it exists (hook + menu registration in __init__.py, settings rows for assistant_backend/assistant_token in manage_models.py). NOT claimed now — the other lane is editing both and should not be blocked for work that is waiting on a human.
+
+Quality bar, from the same conversation: the failure mode to avoid is 'creating a bunch of shitty cards that you're not sure if it's good or not'. card_forge already enforces mandatory slide provenance, drops cards citing unselected slides, dedups against the existing collection before display, and writes nothing without a per-card accept. The surface must not route around any of that.
+
+#### Comments
+- [2026-09-18 orchestrator] Grouped under K-284.
+- [2026-09-18 orchestrator] Retitled: the original title named llm_client.py and entitlement.py, both deleted in the 2026-09-02 convergence -- confirmed gone on disk. card_forge.py and anki_tools.py are the two surviving engine layers this card is actually about. Not dispatching this to a swarm. The card's own body is an explicit human-decision gate ("BLOCKED ON A DECISION, not on code... Do NOT pick a surface on his behalf"), written 2026-09-01 before the Klaus Assistant dock (Ctrl+Shift+K, assistant_dock.py) shipped as CLAUDE.md's own words put it, "the decided one." anki_tools.py is already wired into that dock's tool registry via anki_endpoint.py (create_note/update_note/search_notes/search_notes_semantic as of K-207 today). card_forge's batch-drafting capability is not. Question for Pouya, not a swarm task: does exposing card_forge as another mcp__klaus__* action through the EXISTING dock/anki_endpoint surface count as using the decided surface (not picking a new one), or does batch drafting still want its own thing? Left in Backlog pending that answer rather than guessed at.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. Assistant dock deleted (9425dc0); card_forge.py has no importer; batch writes for external clients exist as MCP add_notes (K-300, 1de2764)
+
+### K-180: The mounted Library tree answers AX clients with 0 rows mid-rebuild: hundreds of out-of-bounds warnings per walk
+owner: -
+priority: P3
+tags: accessibility,library,robustness,feature-library
+files: klaus_note/pdf_drive.py,tests/test_drive.py
+verify: python3 tests/test_drive.py
+created: 2026-09-01
+archived: 2026-10-02
+
+Observed by fable-ui (K-175/K-179 owner) while driving live Anki through the macOS accessibility tree, 2026-09-01: every entire-contents AX walk over the MOUNTED embedded Library emitted hundreds of Qt warnings from the tree —
+
+    Cell requested for row 2 is out of bounds for table with 0 rows
+
+Client-only: invisible to a mouse-and-keyboard user, but it means QTreeWidget's QAccessibleTableInterface is answering "0 rows" while an AX client is asking for row 2. Two consequences: (1) a VoiceOver user gets an inconsistent tree (real accessibility defect on the Library screen); (2) any AX-driven verification of that screen — the peer's live-probe method, the only way to check focus/keyboard paths on the real event loop — is slow and flaky, which is exactly what stopped K-179's arrow-key check from completing cleanly.
+
+LIKELY MECHANISM, to be confirmed not assumed: the AX interface is being queried while the model is mid-rebuild. rebuild_tree() clears then repopulates (K-076 says it preserves expansion/selection/scroll, which implies clear+refill rather than diff), and it runs on mount, on every _on_index_state finished, on the watcher tick and on refresh_open_library — so an AX client walking the tree during any of those sees a table that momentarily has 0 rows while its cached row indices are still >0. Alternative: the _LibraryEmptyState overlay (K-132, WA_TransparentForMouseEvents, a sibling over the tree) or the hidden header confusing the table interface's row/column accounting. Reproduce first: an offscreen QAccessible walk (QAccessible.queryAccessibleInterface(tree) -> tableInterface() -> rowCount/cellAt) around a rebuild_tree() should show the 0-row window and the warning; a walk on a quiescent tree should not.
+
+FIX SHAPE, whichever mechanism holds: never leave the model empty across an event-loop turn during rebuild (build the new items, then swap under one setUpdatesEnabled(False)/model reset pair), or emit a proper model reset so AX clients invalidate their cached indices. Pin with an offscreen AX walk that counts Qt warnings via qInstallMessageHandler — zero during and after rebuild.
+
+NOT URGENT for Pouya, who does not use AX. Real for anyone who does, and real for every future live verification of this screen.
+
+#### Comments
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. The tree it was seen on (pdf_drive rebuild_tree) was deleted in 8ea202c; the Add tab's LibraryTree.refresh does clear+refill synchronously on a QStandardItemModel (model reset), the card's own proposed fix
+
+### K-281: Evaluate TypeSafe (System One / Jev) for the pertinence Judge and the duplicate similarity tiers
+owner: -
+priority: P3
+tags: assistant,api-first,evaluation,feature-matching
+created: 2026-09-17
+archived: 2026-10-02
+
+Pouya installed the typesafe@typesafe-ai skill at user scope on 2026-09-17 and asked that it be used on this project. TypeSafe is a hosted third-party API returning typed judgments (Choice, Noul yes/no probability, Score on ordered levels) rather than generated text. The two genuine fits here are the pertinence Judge (does a card belong to a lecture - a Choice/Noul shape; likely the pertinence core landed in Plan 2 T1, K-253) and the duplicate similarity tiers in duplicates.py (a Score shape; see K-233 for the calibration debt). THE TENSION, stated so the evaluation decides it rather than assumes it away: K-226 pivoted the addon to exactly two API keys, OpenAI and Anthropic, and AGENTS.md says not to resurrect provider choice. TypeSafe would be a third paid vendor with its own key, billing and outage surface. Pouya accepted that knowingly, so the bar is not "it is available" but "it beats the existing Anthropic Messages judge on real lecture data." Scope: a SPIKE, not an integration. Pick one of the two candidates, run it against the same real inputs the current judge sees, compare verdict quality, latency and cost per call, and write the numbers down. Integrate only if the numbers win. Do not declare files until the spike scopes them; the skill needs a fresh session to be loaded (installed mid-session).
+
+#### Comments
+- [2026-09-18 orchestrator] Grouped under K-285.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. Pertinence judge deleted (20a51da); local-model reversion (3dafb28); duplicates.py has no UI since browse_toolkit.py was deleted (4aa2e4b)
+
+### K-283: The Embedding Map: make the constellation trustworthy, not just pretty
+owner: -
+priority: P2
+tags: orchestrator,feature-map
+created: 2026-09-18
+archived: 2026-10-02
+
+The Library's Map button (pdf_graph.py + pdf_map.py) draws the constellation of PDFs and matched notes — Pouya's ask was 'make it look like I'm accessing the matrix.' It looks right; three things under it don't hold up yet. K-145: Refresh doesn't actually rebuild the graph, and collapsing the panel only works by dragging it shut. K-171: the layout reshuffles on every re-index because PC2 and PC3 have no eigengap and swap between samples (projection.py's own docstring warns not to 'tune' MAX_ITERATIONS for exactly this reason) — the map needs a stability strategy, not a parameter tweak. K-214: hover re-hit-tests under the sway animation using the last pointer sample instead of the node's current projected position, so the lit node lags the mouse. Done looks like: Refresh rebuilds for real, the reshuffle either stops or is explained to the user as expected, and hover tracks the swaying node.
+
+#### Comments
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. Umbrella: map button and DriveWindow map removed in 8ea202c (no entry point); children K-171/K-214 landed, K-145 obsolete
+
+### K-284: The Klaus Assistant: close the gaps between 'it works' and 'it's a feature'
+owner: -
+priority: P2
+tags: orchestrator,feature-assistant
+created: 2026-09-18
+archived: 2026-10-02
+
+The assistant dock (Ctrl+Shift+K, K-205 in Review) runs end to end — Claude Code as a child process, the page in view attached to every turn, writes behind an approval dialog. Four things stand between that and a feature a user reaches for daily. K-157: card_forge (batch card drafting) and anki_tools have no UI surface a user can touch — NOTE, this card's own title still names llm_client.py and entitlement.py, both deleted in the 2026-09-02 convergence; whoever scopes this should retitle it to the two modules that actually survive before claiming it. K-207: klausSearchNotes is lexical only (col.find_notes) — a real semantic note search over card_index.top_k belongs beside it, not instead of it. K-230: the page PNG re-rasterises on the main thread on every Send since page_ocr.py's cache went with the API-first turn — cache it beside the page record. K-282: AgentHost._read clears _running with no generation check, so stop() can silently no-op on a still-live child. Done looks like: card drafting is reachable, note search means what its name says, Send doesn't block on a redundant render, and Stop actually stops.
+
+#### Comments
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. Umbrella: assistant dock, agent_host and sessions deleted (9425dc0)
+
+### K-285: Semantic matching: calibrate for OpenAI, and close the billing gaps the API-first turn left open
+owner: -
+priority: P2
+tags: orchestrator,feature-matching
+created: 2026-09-18
+archived: 2026-10-02
+
+The embedding-driven card<->PDF matching stack (retention.py, duplicates.py, the pertinence Judge) moved to OpenAI on 2026-09-15, and two pieces of it are still tuned for the machine it replaced. K-233: duplicates.py's similarity tiers are calibrated on nomic-embed-text (768-d, local) — the band edges need re-reading off text-embedding-3-large at 1024 dims, or duplicate detection is scoring against the wrong distribution. K-237: index_queue has no queue-side priced confirm before a from-scratch card-index embed, so declining the Preferences sweep doesn't actually stop the next PDF add from billing the same rebuild. K-281: whether TypeSafe (System One / Jev) should back the Judge's verdicts and the duplicate tiers is still an open evaluation, not a decision — scope it as a spike, not a rewrite. Done looks like: duplicate tiers agree with the model actually in use, no embed happens unpriced, and TypeSafe is either adopted with a reason or shelved with one.
+
+#### Comments
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. Umbrella: OpenAI/API-first reverted to local Ollama (3dafb28); children K-233/K-281 obsolete, K-237 landed
+
+### K-239: Paid smokes behind KLAUS_LIVE_API=1 do not exist (spec testing list): embed one string, transcribe a 3 s WAV, one Messages turn
+owner: swarm-livetest
+priority: P2
+tags: api-first,tests
+files: tests/test_live_api.py
+verify: test -e tests/test_live_api.py
+created: 2026-09-16
+claimed: 2026-09-17
+archived: 2026-10-02
+
+#### Comments
+- [2026-09-17 swarm-livetest] Built tests/test_live_api.py: three paid, opt-in smokes against klaus_note.openai_client.embed() (text-embedding-3-small, 256 dims, asserts vector length), klaus_note.openai_client.transcribe() (a real ~3s WAV of actual speech synthesized via macOS `say`, not silence/a tone, so "non-empty text" is a meaningful assertion), and klaus_note.anthropic_client.Client.complete() (model claude-sonnet-5 per this repo's own documented default; max_tokens=256, not 16, because Sonnet 5 runs adaptive thinking by default and a tiny budget risks the reply getting crowded out). Whole file SKIPs+exits 0 before any klaus_note import unless KLAUS_LIVE_API=1; each section additionally SKIPs (not fails) on its own if OPENAI_API_KEY/ANTHROPIC_API_KEY is missing. Keys come only from those env vars, never from meta.json. Two things to flag honestly: 1) Commit location: this worker's session is pinned to worktree cranky-taussig-29e82a, and the harness's Write tool refused to write the file directly into the main checkout ("may corrupt the user's primary working copy"). Committed instead on branch claude/upbeat-moser-d85455 (commit 6078286) - needs merging/cherry-picking into the main checkout, matching how this swarm's other work has been integrated. Also worth noting: that worktree's own klaus_note/ is a stale snapshot that predates openai_client.py/anthropic_client.py entirely (no api-first pivot), so the file cannot be run live from inside that worktree even after the merge lands - it needs the current klaus_note/ package alongside it, which the main checkout has (confirmed the addons21 symlink points there). 2) Live verification: py_compile passed for tests/test_live_api.py and for the real addon through the addons21 symlink; running with KLAUS_LIVE_API unset exits 0 on the SKIP path. I additionally verified (read-only, via a scratch script, no writes to the main checkout) that install_package_stub + importing klaus_note.openai_client/anthropic_client from the ACTUAL main-checkout klaus_note/ succeeds and that embed/transcribe/Client.complete/text_of/error-class shapes match exactly what the test calls. I could NOT exercise an actual live run: no OPENAI_API_KEY or ANTHROPIC_API_KEY is set anywhere in this environment, and I deliberately did not read klaus_note/meta.json (Read is denied on it by this repo's own settings, and it holds API keys) to go hunting for credentials there. So all three smokes would print SKIP as-is here - the real paid wire calls are unexercised until someone runs this with actual keys.
+- [2026-09-17 orchestrator] Orchestrator: the file now lives in the main checkout too (commit above, copied unchanged from 6078286 on the worktree branch). Re-verified here: py_compile clean, skip path exits 0, all five referenced symbols exist in the current openai_client/anthropic_client with matching signatures. Live path stays unverified on purpose — Pouya confirmed there are no provider keys and will be none until the subscription system (Klaus Plus, K-249 rollout) is live. Leaving in Review until keys exist; the verify gate (file exists) passes.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. tests/test_live_api.py deleted in 3dafb28; paid OpenAI/Anthropic clients gone (3dafb28, 20a51da)
+
+### K-282: agent_host: AgentHost._read clears _running without a generation check, so stop() can silently no-op on the live child
+owner: swarm-282
+priority: P3
+tags: assistant,lifecycle,follow-up,feature-assistant
+files: klaus_note/agent_host.py,tests/test_agent_host.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_agent_host.py
+created: 2026-09-17
+claimed: 2026-09-18
+archived: 2026-10-02
+
+Flagged by the K-211 worker (2026-09-17) while adding the generation guard to the dock side, and deliberately left out of that card as out of scope. One AgentHost object is reused across PDF switches. K-211 made the dock ignore a stale exited(rc) by threading a `generation` counter through the exited callback. But one level lower, AgentHost._read itself still sets self._running = False in its finally block and in the "result" branch with NO generation compare - so when the OUTGOING child's reader thread finishes late (it joins the successor's stderr thread first, which is the same delay K-211 documented), it flips _running to False on the object that now represents the LIVE child. Consequence: stop() sees _running False and returns without signalling, so the live child cannot be stopped from the UI until it exits on its own. Fix shape: reuse the same capture-and-compare idiom (_stop_gen/_poll_stop, and now `generation`) - capture the generation at _read start and only clear _running if it still matches. The verify must gain a pin that fails before the work: drive two overlapping _read lifetimes with a fake child and assert the stale one does not clear the live one's _running. Read the K-211 commit first; do not re-guard what it already guards.
+
+#### Comments
+- [2026-09-18 orchestrator] Grouped under K-284.
+- [2026-09-18 swarm-282] Read K-211's existing code first (agent_host.py): the `generation` counter is bumped only in start() (self._generation += 1, before spawning the new proc/reader), exposed via the `generation` property, and passed as the second arg of the `exited(rc, generation)` callback (captured locally in _read() at `generation = self._generation`, top of the method, same pattern as _proc). The actual compare-and-guard for that callback lives one level UP, in assistant_dock.AgentDock._on_exited (dock's own `current = self._host.generation`, `if generation != current: return`) plus the dock's separate `_stop_gen`/_poll_stop idiom for its own QTimer chain — neither of those touches AgentHost internals. Confirmed the bug as described: _read()'s `finally` block and its "result" branch both wrote `self._running = False` unconditionally, with NO comparison against the captured `generation` local — so a stale reader thread whose child was superseded by a respawn (start() bumps self._generation, spawns a new proc+reader) could still flip _running to False on the AgentHost object that by then describes the NEW, live child. Confirmed stop() really does no-op when _running is False (`if proc is None or not self._running: return`), matching the user-visible symptom (Stop button dead on a live child). RED (test written first, failed against unfixed code): == K-282: a stale reader thread must not clear the LIVE child's _running == ok the stale (generation-1) reader thread finished FAIL its write attempt does NOT clear the LIVE (generation-2) child's _running -- stop() must still be able to signal it ok the stale thread's own exited callback still fires, carrying ITS generation 94 passed, 1 failed Test (tests/test_agent_host.py, new section after the existing "generation counter" section): a BlockingProc (FakeProc subclass with ManualStream stdout/stderr, reusing the file's existing ManualStream helper) is used for TWO overlapping _read lifetimes. host.start() (gen 1, reader A blocks on proc_a.stdout). host.start() again (gen 2, reader A is still alive+blocked; reader B blocks on proc_b.stdout). proc_b.stderr.close() lets gen-2's stderr thread finish quickly so the old thread's _drain_stderr join doesn't have to wait out the full STOP_GRACE_S. host._running set True (simulating the live gen-2 child mid-turn). proc_a.stdout.close() lets thread A hit EOF and run its `finally` — this naturally exercises the exact delay K-211 documented (finally calls _drain_stderr, which joins self._stderr_thread — by now the SUCCESSOR's stderr thread). Asserts thread A finished, then asserts host._running is still True (not clobbered), then asserts thread A's own exited callback still fired carrying generation 1. Fix (klaus_note/agent_host.py, _read()): reused the exact capture-and-compare idiom already established for `generation` (captured as a local at the top of _read, same as `proc`) — guarded both `self._running = False` writes with `if self._generation == generation:`, one in the "result" branch (line ~533-541 old numbering) and one in the `finally` block (line ~542-544 old numbering). Did NOT touch resume_failed/session_id writes, decide_permission, the dock's _on_exited/_stop_gen, or anything else — strictly the two unguarded _running writes named in the card. Did not re-guard anything K-211 already guards. GREEN (full suite, same file, after the fix): == K-282: a stale reader thread must not clear the LIVE child's _running == ok the stale (generation-1) reader thread finished ok its write attempt does NOT clear the LIVE (generation-2) child's _running -- stop() must still be able to signal it ok the stale thread's own exited callback still fires, carrying ITS generation 95 passed, 0 failed Verified syntax through the symlink Anki loads (python3 -m py_compile on addons21/klaus_note/agent_host.py) — clean. Files touched: klaus_note/agent_host.py, tests/test_agent_host.py only, matching the card's file-disjointness grant. No discrepancy from the card's described shape — the real code matched (generation counter, its bump site in start(), and the two unguarded _running writes in _read) exactly as the card predicted.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. agent_host.py deleted (9425dc0)
+
+### K-233: duplicates.py similarity tiers are calibrated on nomic-embed-text (768-d local); re-read the band edges off text-embedding-3-large at 1024 dims
+owner: swarm-233
+priority: P2
+tags: api-first,calibration,feature-matching
+files: klaus_note/duplicates.py,tests/test_duplicates.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_duplicates.py
+created: 2026-09-15
+claimed: 2026-09-18
+archived: 2026-10-02
+
+#### Comments
+- [2026-09-18 orchestrator] Grouped under K-285.
+- [2026-09-18 swarm-233] Scoped down from 'recalibrate the band edges' to 'make the staleness undismissable' — this environment has no OpenAI key and no real collection, so any new 0.95/0.90/0.85-style numbers for text-embedding-3-large would be fabricated, not measured, which is worse than the honest stale-comment status quo. Did NOT touch DUPLICATE/NEAR/CLOSE (still 0.95/0.90/0.85, still the 768-dim nomic-embed-text numbers). Built instead: klaus_note/duplicates.py now knows what model it was calibrated for and can tell when it's scoring someone else's vectors. - CALIBRATION_SIGNATURE = ("ollama", "nomic-embed-text:latest", 768) — the historical local-model signature these floors were read off (matches the (provider, model, dims) shape embeddings.index_signature/card_index already use everywhere else). - Tiers gained a fourth field, calibration: tuple = CALIBRATION_SIGNATURE — extends the existing frozen dataclass, does not change duplicate/near/close or name_for(), so make_pair/DEFAULT_TIERS callers are untouched. - tiers_calibrated(index, tiers=DEFAULT_TIERS) -> bool — one-liner delegating to card_index.check_signature(index, tiers.calibration), the exact same sanctioned comparison index_is_current already uses (never a hand-spelled tuple ==). Checks the INDEX's actual on-disk signature, not config, same reasoning as index_is_current. - _warn_if_uncalibrated(index, tiers) — log-once per distinct (provider, model, dims), print("[klaus_note] duplicate tiers calibrated for ollama/nomic-embed-text:latest@768 but this index is openai/text-embedding-3-large@1024 — tier names (duplicate/near/close) are uncalibrated for it"). Wired into both entry points that hold an index: duplicates_of and scan_index. - ScanStats grew tiers_calibrated: bool, set once per scan — the data surface a future K-170 Browse UI can read without re-deriving it. - Rewrote the comment block above the three constants: it now documents the mismatch-detection mechanism and says plainly that real re-calibration needs a live OpenAI pass over real note pairs, tagged as this card's follow-up (needs KLAUS_LIVE_API=1 and a real collection). Did not touch the module's top docstring or its pinned measured figures (28,670 / 411 / 2,067 / 13,389 / 50,955 / nomic-embed-text all still pinned by tests/test_duplicates.py's line-368 loop). Out of scope, deliberately: browse_toolkit.py imports this module (from . import duplicates) and would be the place a Browse-surfaced '(uncalibrated)' badge would go, per the card's 'bonus, only if trivial' language — but browse_toolkit.py is outside this card's file-disjointness grant (klaus_note/duplicates.py, tests/test_duplicates.py only), so it was left untouched. ScanStats.tiers_calibrated is there for exactly that future surface. TDD: added a 'calibration' section to tests/test_duplicates.py (8 new checks) asserting tiers_calibrated is True for an ollama/nomic-embed-text:latest/768 index, False for an openai/text-embedding-3-large/1024 index, False for None, that the warning prints exactly once across three calls (two duplicates_of + one scan_index) sharing one signature, that it names both models, and that a calibrated index never prints anything. Confirmed AttributeError RED before implementing (Tiers had no .calibration yet), then GREEN. Full suite: 109 passed, 0 failed. Compiled clean through the addons21 symlink. FLAG FOR THE NEXT READER: this card does NOT fix the calibration. DUPLICATE/NEAR/CLOSE are unchanged and still describe the 768-dim local-model space per the module's own docstring. The real re-read needs a live OpenAI text-embedding-3-large pass over real note pairs on a real collection (KLAUS_LIVE_API=1) to find where duplicate/near/close pairs actually land in 1024-dim cosine space — that's an open follow-up card, not something safely producible headlessly.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. Default model is nomic-embed-text again (embeddings.DEFAULT_MODELS, config.json), the model the tiers were calibrated on; OpenAI removed (3dafb28); no duplicates UI (4aa2e4b)
+
+### K-145: Map dock: Refresh does not rebuild the graph, and collapse is drag-only
+owner: swarm-145
+priority: P3
+tags: ui,phase-d,feature-map
+files: klaus_note/pdf_drive.py,tests/test_drive.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py
+created: 2026-09-01
+claimed: 2026-09-18
+archived: 2026-10-02
+
+Two deliberate omissions from K-143, flagged rather than dropped. (1) The docks graph is a per-window snapshot; the Librarys Refresh rebuilds the tree but not the map, because a rebuild is ~17s — this becomes cheap once the Map-button async card lands, and should then be wired. (2) Collapsing the dock is drag-only: the handle was widened to 6px with a tooltip, but there is no chevron affordance. Worker-L called it a judgement call and flagged it; decide with Pouya once he has used it.
+
+#### Comments
+- [2026-09-18 orchestrator] Grouped under K-283.
+- [2026-09-18 swarm-145] Fixed item (1) only — item (2) (chevron affordance for the drag-only collapse) is untouched, confirmed by grep: the only 'collaps' hit in the diff is prose explaining _refresh_map's own no-op guard. DISCREPANCY from the dispatch premise: the dispatch pointed me at pdf_map.py's module singleton (_instance / open_map_window, the STANDALONE Map-button window). That's the wrong target. board/ARCHIVE.md's K-143 close comment is explicit: "K-145 (Refresh does not rebuild the dock's graph; collapse is drag-only)" — "the dock" is pdf_drive.DriveWindow's OWN embedded map box (self.map_canvas, built once by _ensure_map/_install_map, bottom-left "MAP" section), not the standalone pdf_map._instance window opened by the Map button. I verified this against the actual K-143 archive entry before implementing, per the "trust the code, note the discrepancy" instruction. RED (before fix — tests/test_drive.py, new "K-145 (1)" section): FAIL _refresh_rows calls a dedicated map-refresh seam FAIL the map refresh is its own QueryOp — never inline on the caller of _refresh_rows... FAIL RED-then-GREEN: Refresh with an open map queues a graph_data rebuild for the dock too... map ops queued by _refresh_rows = 0 FAIL ...and the rebuilt graph actually REPLACES the canvas content (lec2, not last session's lec1)... pdfs on canvas = ['lec1'] (negative case — no map open, Refresh doesn't touch graph_data — already passed pre-fix, as expected.) Fix (klaus_note/pdf_drive.py): - New DriveWindow._refresh_map(): no-op if self.map_canvas is None or no mw.col; otherwise queues a QueryOp(parent=mw, op=lambda _col: pdf_map.graph_data(), success=done) — the exact async shape _ensure_map already uses. done() calls _install_map(graph) with the fresh data. - _install_map() now drops any existing canvas widget (removeWidget/setParent(None)/deleteLater) before installing the new one, so a refresh SWAPS the picture instead of stacking a second canvas in the box; also sets map_status visible + disables Fit on the empty/canvas-fail branches now that this path can be re-entered. - _refresh_rows() calls self._refresh_map() right after rebuild_tree(), as its own independent background op (does not block the tree's own QueryOp or the main thread). - Updated one pre-existing K-143 source pin (_D143.count("graph_data()") == 1) to == 2, since there are now legitimately two QueryOp-wrapped call sites (build + refresh) — both still verified to be exactly this async QueryOp shape, never inline. GREEN (after fix): PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py -> 378 passed, 0 failed (371 baseline + 7 new checks, 0 regressions). py_compile through the Anki symlink also clean. Files touched: klaus_note/pdf_drive.py, tests/test_drive.py only.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. The fix landed in DriveWindow, which was then deleted (8ea202c)
+
+### K-287: Klaus Plus accounts: users/api_keys schema + login/logout/reset endpoints
+owner: klausbook-fable
+priority: P1
+tags: accounts
+files: service/klausplus/db.py,service/klausplus/auth.py,service/klausplus/app.py,service/klausplus/proxy.py,service/klausplus/billing.py,service/klausplus/templates.py,service/klausplus/email.py,service/pyproject.toml,service/tests/test_auth.py
+verify: cd service && .venv/bin/python -m pytest -q tests/test_auth.py tests/test_brand.py tests/test_pages.py
+created: 2026-09-18
+claimed: 2026-09-18
+archived: 2026-10-02
+
+Full plan at /Users/pyamzi/.claude/plans/i-m-thinking-about-starting-zesty-haven.md (user-approved). Add users + api_keys tables (extend SCHEMA + _migrate(), guarded ALTER TABLE pattern). api_keys is one row per signed-in device, all pointing at the same customers row -- NOT a rotate-on-login single key (that would kill one app's session the moment the other signs in, defeating the shared-subscription point). proxy.authenticate() swaps customers.key_hash lookup for an api_keys join; migration step backfills one label='legacy' api_keys row per existing customers.key_hash so pasted keys in the wild keep working. New auth.py router: POST /v1/login (bcrypt-verify, mint new api_keys row, rate-limited by email -- RateLimiter in proxy.py is keyed by int customer_id so needs a small str-keyed sibling, not a reuse), POST /v1/logout (revoke just that row). Account creation ONLY via /welcome (post-Stripe-checkout, re-validate session_id) or the emailed forgot/reset-password token flow (mirrors claim_recovery/release_recovery's cooldown pattern) -- never by bare email match, that's an account-takeover hole a design review already caught once. bcrypt for hashing (hashlib.scrypt confirmed unavailable on this machine's Python build, checked directly, so it's not stdlib-free here). /recover repointed to insert an api_keys row instead of overwriting key_hash directly, otherwise unchanged.
+
+#### Comments
+- [2026-09-18 klausbook-fable] Server side done: users + api_keys tables (additive, no migration/backfill needed -- authenticate() checks customers.key_hash first, api_keys second, so /welcome and /recover keep working completely unchanged, confirmed by all 131 pre-existing tests passing unmodified). New: POST /v1/login (bcrypt, per-device key), POST /v1/logout (revokes one device), GET+POST /forgot-password -> GET+POST /reset-password (the only account-creation path, emailed-token possession required). 10 new tests in test_auth.py, including the critical one: signing in on a second device does not revoke the first. Full suite: 141 passed, 3x for flake-check. Note for K-288/KB-022: the service venv's pip had silently drifted to a homebrew python3.14 install while .venv/bin/python stayed 3.9 -- use .venv/bin/pip3.9 for any future dependency installs here, not bare pip.
+- [2026-09-18 klausbook-fable] Actually ran the service locally (uvicorn, fake upstream) and drove it through the real browser, not just pytest: landing page, forgot-password form, reset-password form, all render correctly in both light and dark. Found and fixed a real bug this way -- the email-disabled fallback on the set-password pages reused /recover's 'Key recovery is by email to...' copy verbatim, which is confusing on a page that isn't about key recovery. Fixed with a dedicated _password_by_email_line(). Also did a full live round trip against the real HTTP server (not TestClient): seeded a subscribed customer + reset token directly in the dev sqlite file, set a password through the actual /reset-password form, POST /v1/login from two different curl calls as two 'devices', confirmed both keys authenticate against /v1/me simultaneously, then logged one out and confirmed only that one 401s while the other stays live -- the core guarantee this whole feature exists for, now verified end to end, not just in unit tests.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. Klaus Plus service deleted (790aac0)
+
+### K-288: klaus_note: Sign In/Out UI replacing manual Klaus Plus key paste
+owner: klausbook-fable
+priority: P2
+tags: accounts
+files: klaus_note/plus.py,klaus_note/manage_models.py
+verify: manual: Anki Preferences dialog, Sign In stores a working key via plus.active(), Sign Out clears it and a second device's session stays live
+created: 2026-09-18
+claimed: 2026-09-18
+archived: 2026-10-02
+
+Depends on K-287's POST /v1/login + /v1/logout contract. Add plus.login(email, password, get_config, write_config, urlopen) posting device=klaus_note, storing the returned key via the EXISTING remember() path (same one refresh() already uses) so the ~45 existing call sites across openai_client.py/embeddings.py/index_queue.py/etc. need zero changes -- they still just read plus.key(cfg)/plus.active(cfg). Add plus.logout(cfg, urlopen) POSTing /v1/logout then clearing locally regardless of response. In manage_models.py, replace the raw plus_key_edit paste box (~line 713) with a 'Signed in as {email}' status line + Sign In.../Sign Out buttons; Sign In opens a small QDialog (email + password field, QLineEdit.Password echo) -- plain Qt, no browser hop, unlike Subscribe.../Manage subscription... (~line 1775, 1790) which stay as openLink() since those are genuinely Stripe-hosted pages. No OS keychain available via aqt/anki (confirmed) -- key still lands in the same plain-JSON addon config as today, that's a pre-existing constraint, not a regression.
+
+#### Comments
+- [2026-09-18 klausbook-fable] Done: plus.py gained login()/logout() (patch-writer, clears cache on login, matches remember()'s contract exactly). manage_models.py's paste box replaced with Signed-in-as status + Sign In/Sign Out buttons, small QDialog for email+password, off-main-thread via taskman like Check. The K-152 first-key-offers-a-sweep and changed-key-clears-cache rules moved from save_embed to on_plus_sign_in since the key left this form's Save cycle. Also updated test_dialog_logic.py and test_manage_models_assistant.py -- both are exhaustive source-pinning suites that transcribe this dialog's exact shape line-by-line; my change broke 11+ of their pins and I fixed each one rather than deleting them, so they stay meaningful for the next person who touches this file. All 50 klaus_note test files green, run 3x for flake-check.
+- [2026-10-02 triage] Closed at the move to GitHub Issues (2026-10-02): obsolete. plus.py deleted (20a51da); Klaus Plus retired

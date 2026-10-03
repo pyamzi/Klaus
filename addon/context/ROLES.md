@@ -1,5 +1,7 @@
 # Roles and the card lifecycle
 
+> Retired for the add-on on 2026-10-02: add-on work lives in GitHub Issues (`docs/agents/issue-tracker.md`). This file still describes the board that the Website, Auth and Agenda planning boards use.
+
 Three tiers work this repo through one shared board. The tiers exist to
 isolate context, not to divide labour by job title: each tier sees only what
 its decisions need, so no session carries the whole project in its window.

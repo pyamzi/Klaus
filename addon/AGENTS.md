@@ -408,6 +408,20 @@ No numpy either — Anki's venv doesn't have it, so `card_index.py`/
 4. Webview JS: `QTWEBENGINE_REMOTE_DEBUGGING=8080` → Chrome DevTools at `http://localhost:8080`.
 5. Anki debug console: `pp(obj)`; avoid `traceback.print_exc()` inside `QueryOp` success/failure callbacks (prints `NoneType: None` outside active `except` blocks).
 
+### Agent skills
+
+#### Issue tracker
+
+Issues live in GitHub Issues on `pyamzi/klaus-note-addon` (via `gh`). See `docs/agents/issue-tracker.md`. The kanban board in `board/` is retired; `board/ARCHIVE.md` keeps its history.
+
+#### Triage labels
+
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), plus `P1`/`P2`/`P3`. See `docs/agents/triage-labels.md`.
+
+#### Domain docs
+
+See `docs/agents/domain.md`: read `CONTEXT.md` before exploring.
+
 ### Packaging
 
 ```sh
