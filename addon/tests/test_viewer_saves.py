@@ -56,7 +56,7 @@ rp = importlib.import_module("klaus_note.reader_panel")
 pj = importlib.import_module("klaus_note.pdfjs_viewer")
 COPY = "Marks couldn't be saved into the file yet; they're kept and will retry."
 
-section("user_files_dir(): settings seam when present, USER_FILES otherwise")
+section("user_files_dir(): the settings seam")
 pkg = sys.modules["klaus_note"]
 _MISSING = object()
 saved_mod = sys.modules.get("klaus_note.settings", _MISSING)
@@ -68,10 +68,6 @@ try:
     pkg.settings = fake_settings
     check("with a settings module: settings.user_files()",
           src.user_files_dir() == os.path.join(TMP, "from-settings"))
-    sys.modules["klaus_note.settings"] = None  # import raises ImportError
-    if hasattr(pkg, "settings"):
-        del pkg.settings
-    check("without one: the package's USER_FILES", src.user_files_dir() == TMP)
 finally:
     if saved_mod is _MISSING:
         sys.modules.pop("klaus_note.settings", None)

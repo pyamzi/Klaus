@@ -40,11 +40,8 @@ CLOSING = [
     "klaus_note/lecture_view.py::const-loud::CARD_INDEX_SUBDIR@34",
     # 8. the resolver's cache invalidation
     "klaus_note/lecture_view.py::gut::LectureResolver.invalidate@130",
-    # 9. save_notes reporting success on failure
-    "klaus_note/pdf_notes.py::boolflip::bool@146:19@146",
-    "klaus_note/pdf_notes.py::boolflip::bool@160:15@160",
 ]
-MODULES = "background,dashboard,lecture_view,pdf_notes"
+MODULES = "background,dashboard,lecture_view"
 
 out = os.path.join(tempfile.mkdtemp(), "audit.json")
 run = subprocess.run(

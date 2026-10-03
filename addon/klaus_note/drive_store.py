@@ -172,32 +172,6 @@ def rename_folder(user_files_dir: str, old: str, new: str) -> bool:
     return True
 
 
-def remove_folder(user_files_dir: str, path: str) -> None:
-    """Drop a folder; its PDFs and subfolders reparent to the parent."""
-    data = load(user_files_dir)
-    parent = path.rsplit("/", 1)[0] if "/" in path else None
-
-    def reparent(p: str | None) -> str | None:
-        if p is None:
-            return None
-        if p == path:
-            return parent
-        if p.startswith(path + "/"):
-            rest = p[len(path) + 1:]
-            return f"{parent}/{rest}" if parent else rest
-        return p
-
-    data["folders"] = sorted(
-        {q for q in (reparent(p) for p in data["folders"]) if q}
-    )
-    for entry in data["pdfs"].values():
-        entry["folder"] = reparent(entry.get("folder"))
-    data["excluded"]["folders"] = [
-        p for p in data["excluded"]["folders"] if p != path and not p.startswith(path + "/")
-    ]
-    _save(user_files_dir, data)
-
-
 def remove_pdf(user_files_dir: str, safe: str) -> None:
     data = load(user_files_dir)
     if safe in data["pdfs"] or safe in data["excluded"]["pdfs"]:
@@ -246,19 +220,6 @@ def set_excluded(user_files_dir: str, kind: str, key: str, on: bool) -> bool:
     return True
 
 
-# --------------------------------------------------------------- window
-
-
-def get_window_state(user_files_dir: str) -> dict:
-    return load(user_files_dir).get("window") or {}
-
-
-def save_window_state(user_files_dir: str, geom: dict) -> None:
-    data = load(user_files_dir)
-    data["window"] = dict(geom or {})
-    _save(user_files_dir, data)
-
-
 # ----------------------------------------------------------------- tree
 
 
@@ -300,29 +261,3 @@ def build_tree(context_names: list[str], data: dict) -> dict:
         items.sort(key=lambda p: p["display"].lower())
     root.sort(key=lambda p: p["display"].lower())
     return {"folders": dict(sorted(folders.items())), "root": root}
-
-
-def retention_level(fraction: float) -> str:
-    """Bucket a retention fraction: ``"low"`` < 0.70 <= ``"mid"`` < 0.85
-    <= ``"high"``.
-
-    Replaces the K-117 HSV hue ramp (K-127): a continuous red->green
-    sweep gave every row its own arbitrary tertiary hue — 59% rendered
-    chartreuse — with no meaning attached to any of them. Three semantic
-    levels instead: FSRS desired retention sits around 0.9, so >= 0.85
-    reads "at target" (high), < 0.70 is genuinely poor (low), and the
-    wide middle band is simply fine — the caller gives it no ink at all.
-
-    Deliberately returns a level name, never a colour, so this stays
-    aqt-free/Qt-free and headlessly testable; the theme-token mapping
-    lives with the one consumer (pdf_drive._set_retention_color).
-    Out-of-range values clamp into [0, 1] exactly like the old ramp;
-    non-numeric input raises like ``float()`` does, into that caller's
-    guard.
-    """
-    frac = max(0.0, min(1.0, float(fraction)))
-    if frac < 0.70:
-        return "low"
-    if frac < 0.85:
-        return "mid"
-    return "high"

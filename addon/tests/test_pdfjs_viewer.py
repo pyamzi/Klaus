@@ -451,7 +451,7 @@ section("duck-typed viewer surface")
 # poll against the pdfjs renderer).
 for attr in ("load_path", "set_page_texts", "load_annotations",
              "clear_document", "go_to_page",
-             "toggle_thumbnails", "_apply_mirror",
+             "_apply_mirror",
              "_refresh_highlight_overlay", "_start_foreign_mirror"):
     check(f"PdfJsViewer has {attr}", hasattr(pv.PdfJsViewer, attr))
 

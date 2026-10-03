@@ -418,12 +418,6 @@ check("list_by_recency: untouched entries fall back to ctx mtime, newest first",
 check("list_by_recency: limit caps the result",
       pdf_handler.list_by_recency(rec_tmp, limit=1) == ["Old"])
 
-# ensure_active_pdf must repair from the same last_used ranking, not an
-# independent max-mtime scan: "Middle" is the mtime-newest context, but
-# "Old" is the most recently USED one, and no active pointer is set yet.
-repaired = pdf_handler.ensure_active_pdf(rec_tmp)
-check("ensure_active_pdf repairs from last_used rather than mtime",
-      repaired == "Old", str(repaired))
 shutil.rmtree(rec_tmp, ignore_errors=True)
 
 print("== pdf_handler: save_pdf touches last_used ==")

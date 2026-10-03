@@ -103,7 +103,6 @@ check("...and no tmp file is left",
 fsyncs = []
 ph.os.fsync = lambda fd: fsyncs.append(fd)
 try:
-    ph.set_active_pdf(uf, "lecture0")
     ph.touch_last_used(uf, "lecture0")
     ph.save_library_map(uf, {"keep": "keep.pdf"})
 finally:

@@ -669,17 +669,10 @@ class PdfSidebar(QWidget):
         except Exception:
             pass
 
-    def _set_active_pointer(self, name: str) -> None:
+    def _touch_recency(self, name: str) -> None:
         from . import pdf_handler
         from . import settings
 
-        # The active PDF is the editor dock's pointer (what it opens next
-        # session); another host's reader must not move it.
-        if self.host_key == "editor":
-            try:
-                pdf_handler.set_active_pdf(settings.user_files(), name)
-            except Exception:
-                pass
         try:
             # Recency signal for the ＋ menu's most-recent-first ordering.
             pdf_handler.touch_last_used(settings.user_files(), name)
@@ -698,7 +691,7 @@ class PdfSidebar(QWidget):
         finally:
             self._syncing = False
         self._persist()
-        self._set_active_pointer(name)
+        self._touch_recency(name)
 
     @_guarded
     def _on_tab_changed(self, name: str) -> None:
@@ -709,7 +702,7 @@ class PdfSidebar(QWidget):
             self._last_page[prev] = self._current_page
         if self.is_loaded(name):
             self._switch = None  # back before a pending switch answered
-            self._set_active_pointer(name)
+            self._touch_recency(name)
             return
         self.load_pdf(name)
         page = self._last_page.get(name, 0)
@@ -734,14 +727,6 @@ class PdfSidebar(QWidget):
                 self._after_commit(self.clear)
             except Exception:
                 pass
-            if self.host_key == "editor":
-                try:
-                    from . import pdf_handler
-                    from . import settings
-
-                    pdf_handler.clear_active_pdf(settings.user_files())
-                except Exception:
-                    pass
 
     @_guarded
     def _show_add_menu(self, *_args) -> None:

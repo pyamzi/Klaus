@@ -92,19 +92,11 @@ LIGHT: dict = {
 
     # ── Red (danger / destructive) ───────────────────────────────────────
     "red":          "#FF3B30",
-    "red_hover":    "#D7261E",
     "red_bg":       "#FFEBEB",
     "red_text":     "#D32F2F",
-    # Text-weight green, red_text's sibling: "green" is the vivid
-    # system green (#28CD41) — right for fills and dots, neon as INK,
-    # especially on dark where red_text is a soft #FFCCCC. K-127's
-    # retention column pairs these two as calm semantic text colours.
-    "green_text":   "#1F7A3D",
 
     # ── Green (success) ──────────────────────────────────────────────────
     "green":        "#28CD41",
-    "green_bg":     "#E8F8F5",
-    "green_border": "#C1E1D9",
 }
 
 DARK: dict = {
@@ -137,15 +129,11 @@ DARK: dict = {
 
     # ── Red (danger / destructive) ───────────────────────────────────────
     "red":          "#FF3B30",
-    "red_hover":    "#D7261E",
     "red_bg":       "#5A1E1E",
     "red_text":     "#FFCCCC",
-    "green_text":   "#B9E8C9",
 
     # ── Green (success) ──────────────────────────────────────────────────
     "green":        "#28CD41",
-    "green_bg":     "#1E3A2E",
-    "green_border": "#2D5A45",
 }
 
 
@@ -918,158 +906,6 @@ def pdf_panel_qss(night: bool) -> str:
     QWidget#KlausPdfPanel QLabel {{
         color: {c['text_muted']};
         background: transparent;
-    }}
-    """
-
-
-def assistant_dock_qss(night: bool) -> str:
-    """The Claude Code assistant dock, objectName ``KlausAssistantDock``
-    (K-198, replacing the retired ``KlausAssistantPanel`` third-pane —
-    see ``library_qss``'s history). Joins the ``dialog_qss`` family:
-    ground on ``chrome`` like the top/bottom bars and every other Klaus
-    panel; header, selection chip and status dot in ``text_muted``; the
-    transcript itself ALSO on ``chrome`` (its edges dissolve into the
-    dock instead of reading as a separate white card sitting on it),
-    with `text` body copy and `surface`-boxed ``<pre>`` blocks for the
-    markdown-lite renderer's fenced code; the input on ``surface`` with
-    a quiet ``grey_light`` hairline; and buttons following
-    :func:`dialog_qss`'s own roles verbatim (blue-primary Send/Stop,
-    grey ``SecondaryButton`` for New Session and Re-check).
-
-    The focus ring is ``blue_bright``, not ``blue_border``: every other
-    ``:focus`` rule in this module (QComboBox/QLineEdit, QPushButton,
-    the LibraryGlyph action, SettingsSearch) uses ``blue_bright``
-    specifically because it is visible in BOTH palettes — ``blue_border``
-    is ``"none"`` in light mode (a button's resting-state chrome, not an
-    accent ring), and a focus indicator that disappears in light mode
-    fails the same P1 this module's own dialog_qss comment already
-    fixed once for buttons. Kept consistent here rather than forked.
-    """
-    c = palette(night)
-    return f"""
-    QDockWidget#KlausAssistantDock {{
-        background: {c['chrome']};
-        color: {c['text']};
-        font-size: 13px;
-    }}
-    QDockWidget#KlausAssistantDock QLabel#KlausAssistantHeader {{
-        color: {c['text_muted']};
-        font-size: 12px;
-        font-weight: 600;
-        background: transparent;
-    }}
-    QDockWidget#KlausAssistantDock QLabel#KlausAssistantChip {{
-        color: {c['text_muted']};
-        font-size: 11px;
-        background: transparent;
-    }}
-    QDockWidget#KlausAssistantDock QLabel#KlausAssistantStatusDot {{
-        color: {c['text_muted']};
-        font-size: 11px;
-        background: transparent;
-    }}
-    QDockWidget#KlausAssistantDock QTextEdit#KlausAssistantTranscript {{
-        background-color: {c['chrome']};
-        color: {c['text']};
-        border: none;
-        font-size: 13px;
-    }}
-    QDockWidget#KlausAssistantDock QTextEdit#KlausAssistantTranscript pre {{
-        background-color: {c['surface']};
-        border: 1px solid {c['grey_light']};
-        border-radius: 8px;
-        padding: 6px;
-    }}
-    QDockWidget#KlausAssistantDock QPlainTextEdit#KlausAssistantInput {{
-        background-color: {c['surface']};
-        color: {c['text']};
-        border: 1px solid {c['grey_light']};
-        border-radius: 8px;
-        padding: 6px 8px;
-        font-size: 13px;
-    }}
-    QDockWidget#KlausAssistantDock QPlainTextEdit#KlausAssistantInput:focus {{
-        border: 1px solid {c['blue_bright']};
-    }}
-    QDockWidget#KlausAssistantDock QPushButton {{
-        background-color: {c['blue']};
-        color: {c['on_accent']};
-        border: {c['blue_border']};
-        border-radius: 8px;
-        padding: 6px 16px;
-        font-weight: 600;
-        font-size: 13px;
-    }}
-    QDockWidget#KlausAssistantDock QPushButton:hover {{ background-color: {c['blue_hover']}; }}
-    QDockWidget#KlausAssistantDock QPushButton:pressed {{ background-color: {c['blue_pressed']}; }}
-    QDockWidget#KlausAssistantDock QPushButton:focus {{ border: 1px solid {c['blue_bright']}; }}
-    QDockWidget#KlausAssistantDock QPushButton:disabled {{
-        background-color: {c['grey_light']};
-        color: {c['text_faint']};
-    }}
-    QDockWidget#KlausAssistantDock QPushButton#SecondaryButton {{
-        background-color: {c['grey_light']};
-        color: {c['text']};
-        border: none;
-    }}
-    QDockWidget#KlausAssistantDock QPushButton#SecondaryButton:hover {{
-        background-color: {c['grey_mid']};
-    }}
-    QDockWidget#KlausAssistantDock QPushButton#SecondaryButton:pressed {{
-        background-color: {c['grey_dark']};
-    }}
-    QDockWidget#KlausAssistantDock QPushButton#SecondaryButton:disabled {{
-        background-color: {c['grey_light']};
-        color: {c['text_faint']};
-        border: none;
-    }}
-    """
-
-
-def drop_zone_qss(
-    night: bool, object_name: str, idle_border: bool = True
-) -> str:
-    """The shared drop-square language (Library drop zone; the deck-screen
-    squares in deck_curate render the same values as HTML). Dashed grey
-    idle border that turns solid accent on drag-over.
-
-    ``idle_border=False`` keeps the drag-over half and drops the idle
-    dashed box, for a surface that is a drop target but must not
-    ADVERTISE as a box while idle — the Library's empty state (K-132),
-    which is quiet muted guidance text until a .pdf drag arrives, in a
-    pane that already carries one dashed square below the tree (two
-    would read as two targets). The idle border is not removed but made
-    TRANSPARENT: the box model stays identical, so the text cannot
-    shift by a pixel when the accent border appears under the drag.
-    """
-    c = palette(night)
-    idle_edge = (
-        f"1px dashed {c['grey_mid']}" if idle_border else "1px solid transparent"
-    )
-    return f"""
-    #{object_name} {{
-        border: {idle_edge};
-        /* Container role (a droppable card, not a button/chip) — 12px
-           per the design scale above; this had drifted to a bespoke
-           10px. */
-        border-radius: 12px;
-        background: transparent;
-    }}
-    #{object_name}[dragOver="true"] {{
-        border: 1px solid {c['blue_bright']};
-        background: {c['selection_bg']};
-    }}
-    #{object_name} QPushButton {{
-        border: 1px solid {c['grey_mid']};
-        border-radius: 6px;
-        font-size: 12px;
-        padding: 3px 10px;
-        background: transparent;
-        color: {c['text']};
-    }}
-    #{object_name} QPushButton:hover {{
-        border-color: {c['blue_bright']};
-        background: {c['hover_subtle']};
     }}
     """
 

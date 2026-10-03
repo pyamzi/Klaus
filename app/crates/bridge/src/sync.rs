@@ -148,10 +148,6 @@ impl Bridge {
         *self.sync.outcome.lock().unwrap() = klaus::SyncOutcome { id, background, finished_ms: now_ms(), ..result };
     }
 
-    pub fn sync_running(&self) -> bool {
-        self.sync.outcome.lock().unwrap().state() == klaus::sync_outcome::State::Running
-    }
-
     /// Starts klausSync / klausFullSync on its own thread and returns at once: a
     /// sync can take minutes, longer than a request should stay open.
     pub(crate) fn start_sync(self: &Arc<Self>, method: &str, input: &[u8]) -> Result<(), CallError> {

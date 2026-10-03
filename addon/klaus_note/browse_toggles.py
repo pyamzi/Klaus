@@ -7,11 +7,7 @@ Extracted from __init__.py (K-024, slice 2 of the K-006 file split). Until
 the status bar they sat in Browse's search-bar row.
 
 This module is imported by __init__.py at package load time, so it must
-never import __init__ (this package) at module load — only from inside a
-function, after the package has finished loading. _pkg() below is that
-lazy accessor (same pattern as curation.py's and manage_models.py's
-_pkg()); it reaches a Browse helper that still lives in __init__.py:
-_reset_browse_layout_to_defaults.
+never import __init__ (this package) at module load.
 
 These buttons are NOT gated on ``klausbook_design`` — they are a
 functional affordance, so they ship in native mode too, sitting directly
@@ -26,6 +22,7 @@ from typing import Any, Callable
 from .slot_guard import guarded
 from aqt.qt import (
     QColor,
+    QDockWidget,
     QEvent,
     QObject,
     QPainter,
@@ -38,12 +35,6 @@ from aqt.qt import (
     QToolButton,
     QWidget,
 )
-
-
-def _pkg():
-    import importlib
-
-    return importlib.import_module(__package__)
 
 
 # ── Pure geometry + copy (aqt-free) ────────────────────────────────────
@@ -368,6 +359,99 @@ class _VisibilityWatcher(QObject):
         return False
 
 
+# One-time-per-session guard for the sidebar self-heal. A prior broken
+# build of this add-on could persist a zero-width / detached sidebar into
+# the profile; we force it back open the first time Browse opens in a
+# session, then respect the user's toggle on every subsequent open so the
+# sidebar toggle button's state actually sticks.
+_KLAUS_BROWSE_LAYOUT_HEALED = False
+
+
+def _reset_browse_layout_to_defaults(browser: Any) -> None:
+    """Force the Browse window's sidebar + splitter back to Anki's stock
+    layout, undoing any leftover state from the now-removed dock-
+    wrapping helpers.
+
+    Anki persists ``QMainWindow.saveState()`` + ``QSplitter.saveState()``
+    to the user's profile on browser close (see
+    ``aqt/browser/browser.py:433-434``). If a previous build of this
+    add-on moved the sidebar around or collapsed the editor splitter,
+    that broken layout is restored on every subsequent open even after
+    the offending code is gone. This helper re-anchors the sidebar to
+    the side Anki originally docked it on and reinstates a sane
+    splitter ratio if one pane is collapsed.
+
+    On browser close, Anki re-saves the corrected state — so after one
+    open this normally only no-ops on subsequent runs.
+    """
+    # ---- sidebar ----
+    global _KLAUS_BROWSE_LAYOUT_HEALED
+    dock = getattr(browser, "sidebarDockWidget", None)
+    if dock is not None:
+        try:
+            # Snapshot the visibility Anki restored from the profile (or
+            # the user last chose) BEFORE we touch the dock — addDockWidget
+            # can implicitly re-show a hidden dock.
+            was_visible = dock.isVisible()
+            rtl = (
+                browser.layoutDirection()
+                == Qt.LayoutDirection.RightToLeft
+            )
+            area = (
+                Qt.DockWidgetArea.RightDockWidgetArea
+                if rtl
+                else Qt.DockWidgetArea.LeftDockWidgetArea
+            )
+            # Restore Anki's original constraints (in case a prior
+            # build of this add-on unlocked them).
+            dock.setAllowedAreas(area)
+            dock.setFloating(False)
+            dock.setFeatures(
+                QDockWidget.DockWidgetFeature.DockWidgetClosable
+            )
+            # Re-anchor to the correct side regardless of the layout
+            # restoreState() pulled out of the profile.
+            browser.addDockWidget(area, dock)
+            # Anki uses an empty title-bar widget to suppress the
+            # drag-handle. Re-establish that.
+            dock.setTitleBarWidget(QWidget())
+            if not _KLAUS_BROWSE_LAYOUT_HEALED:
+                # First Browse open this session: force the sidebar open
+                # once to self-heal any zero-width/hidden state left by an
+                # earlier build.
+                dock.setVisible(True)
+                _KLAUS_BROWSE_LAYOUT_HEALED = True
+            else:
+                # Subsequent opens: preserve the user's last choice so the
+                # sidebar toggle button's state persists across reopens.
+                dock.setVisible(was_visible)
+            print("[klaus_note] sidebar re-anchored to default position")
+        except Exception as exc:
+            print(f"[klaus_note] sidebar reset failed: {exc}")
+
+    # ---- editor splitter ----
+    form = getattr(browser, "form", None)
+    splitter = getattr(form, "splitter", None) if form is not None else None
+    if splitter is not None and splitter.count() >= 2:
+        try:
+            sizes = list(splitter.sizes())
+            # A pane of < 4 px is a degenerate state — likely a leftover
+            # from when the editor was extracted into a dock and the
+            # splitter was forced to [width, 0]. Restore the form's
+            # ~3:1 default ratio.
+            if any(s < 4 for s in sizes):
+                total = max(1, sum(sizes)) or 800
+                splitter.setSizes(
+                    [int(total * 0.75), int(total * 0.25)]
+                )
+                print(
+                    f"[klaus_note] editor splitter reset from {sizes} "
+                    "to 3:1 default"
+                )
+        except Exception as exc:
+            print(f"[klaus_note] editor splitter reset failed: {exc}")
+
+
 def on_browser_will_show(browser: Any) -> None:
     """``gui_hooks.browser_will_show`` callback: repair leftover broken
     layout state from earlier add-on builds
@@ -392,7 +476,7 @@ def on_browser_will_show(browser: Any) -> None:
         # Re-anchor the sidebar to the left and undo any zero-width
         # splitter pane. No-op on a clean profile.
         try:
-            _pkg()._reset_browse_layout_to_defaults(browser)
+            _reset_browse_layout_to_defaults(browser)
         except Exception as exc:
             print(f"[klaus_note] browse layout reset failed: {exc}")
 

@@ -111,7 +111,6 @@ check("the bootstrap installs the Anki store, the main-thread hop and the profil
 
 section("no module reaches back for config or the user-files path")
 import glob  # noqa: E402
-import re  # noqa: E402
 
 offenders = {}
 for path in sorted(glob.glob("klaus_note/*.py")):
@@ -119,10 +118,6 @@ for path in sorted(glob.glob("klaus_note/*.py")):
     if name in ("settings.py", "__init__.py"):
         continue
     src = open(path).read()
-    # A reach-back that is only an `except ImportError:` fallback (pdf_source,
-    # K-321, written to run at HEAD before the seam lands) is not a reader of
-    # the deleted names; it dies with the fallback once the seam is committed.
-    src = re.sub(r"except ImportError:\n(\s+from \. import USER_FILES\n)", "except ImportError:\n", src)
     hits = [t for t in ("addonManager.getConfig", "addonManager.writeConfig", "from . import USER_FILES",
                         "_pkg().get_config()", "_pkg().write_config(", "_pkg().USER_FILES",
                         "curation.USER_FILES", "retention.USER_FILES", "curation.INDEX_DIR", "retention.INDEX_DIR")

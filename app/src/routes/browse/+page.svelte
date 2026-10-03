@@ -9,15 +9,14 @@
     cardsOfNote,
     getCard,
     getConfigBool,
-    getConfigJson,
     getNote,
     searchCards,
     searchNotes,
     setActiveBrowserColumns,
     setConfigBool,
-    setConfigJson,
   } from "@generated/backend";
   import { ConfigKey_Bool } from "@generated/anki/config_pb";
+  import { getJson, setJson } from "$lib/config";
   import {
     BrowserColumns_Sorting as Sorting,
     BrowserRow_Color as Color,
@@ -68,14 +67,6 @@
   const first = $derived(Math.max(0, Math.min(ids.length, Math.floor(scrollTop / ROW_HEIGHT) - 10)));
   const last = $derived(Math.min(ids.length, Math.ceil((scrollTop + viewHeight) / ROW_HEIGHT) + 10));
   const visible = $derived(ids.slice(first, last));
-
-  async function getJson<T>(key: string, fallback: T): Promise<T> {
-    const json = await getConfigJson({ val: key });
-    return JSON.parse(new TextDecoder().decode(json.json)) ?? fallback;
-  }
-  function setJson(key: string, value: unknown) {
-    return setConfigJson({ key, valueJson: new TextEncoder().encode(JSON.stringify(value)), undoable: false });
-  }
 
   async function loadMode() {
     notesMode = (await getConfigBool({ key: ConfigKey_Bool.BROWSER_TABLE_SHOW_NOTES_MODE })).val;

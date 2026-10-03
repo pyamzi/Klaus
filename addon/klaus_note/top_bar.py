@@ -161,7 +161,7 @@ def _push_chrome_colour() -> None:
         # variable, and an off state should not be evaling into Anki's
         # toolbar at all. A toggle rebuilds the toolbar page outright,
         # so no stale value survives being un-pushed.
-        if not background.design_enabled(background.effective_cfg(_config())):
+        if not background.design_enabled(_config()):
             return
 
         def _send() -> None:
@@ -189,9 +189,12 @@ def _addon() -> str:
 
 
 def _config() -> dict:
+    """Stored config through the preview seam, like dashboard's and
+    heatmap's: an unsaved Preferences preview paints before Save."""
+    from . import background
     from . import settings
 
-    return settings.read()
+    return background.effective_cfg(settings.read())
 
 
 def _background_css() -> str:
@@ -204,16 +207,16 @@ def _background_css() -> str:
     try:
         from . import background
 
-        # effective_cfg: an unsaved Preferences preview wins over stored
+        # _config(): an unsaved Preferences preview wins over stored
         # config, so appearance edits render live before Save.
         # The design gate lives HERE, at the paint funnel, and NOT in
         # background.resolve(): Preferences seeds its widgets through
         # resolve(stored config) and writes that spec back on Save, so
         # a resolve-level gate would show "theme" for a stored image
         # background and Save would silently wipe it.
-        if not background.design_enabled(background.effective_cfg(_config())):
+        if not background.design_enabled(_config()):
             return ""
-        spec = background.resolve(background.effective_cfg(_config()))
+        spec = background.resolve(_config())
         url = background.image_url(_addon(), spec["image"])
         return background.main_css(spec, url)
     except Exception as exc:
@@ -231,9 +234,9 @@ def _reviewer_background_css() -> str:
     try:
         from . import background
 
-        if not background.design_enabled(background.effective_cfg(_config())):
+        if not background.design_enabled(_config()):
             return ""
-        cfg = background.effective_cfg(_config())
+        cfg = _config()
         spec = background.resolve(cfg, prefix="reviewer_background")
         url = background.image_url(_addon(), spec["image"])
         return background.reviewer_css(spec, url)
@@ -273,7 +276,7 @@ def _on_main_webview_content(web_content: Any, context: Any) -> None:
                 # (nothing there has that id) and in theme mode (empty).
                 from . import background
 
-                spec = background.resolve(background.effective_cfg(_config()))
+                spec = background.resolve(_config())
                 web_content.body += background.panel_js(spec)
                 # Inside `if css` on purpose: css non-empty is the
                 # design gate having passed — handles must never
@@ -304,7 +307,7 @@ def _on_main_webview_content(web_content: Any, context: Any) -> None:
                 if background.grad_edit_active():
                     web_content.body += background.gradient_edit_js(
                         background.resolve(
-                            background.effective_cfg(_config()),
+                            _config(),
                             prefix="reviewer_background",
                         ),
                         "reviewer",
@@ -406,7 +409,7 @@ def refresh() -> None:
                 if background.grad_edit_active():
                     editor_js = background.gradient_edit_eval_js(
                         background.resolve(
-                            background.effective_cfg(_config()),
+                            _config(),
                             prefix="reviewer_background",
                         ),
                         "reviewer",
@@ -430,7 +433,7 @@ def _on_left_tray(content: list, toolbar: Any) -> None:
 def _bar_zoom_css() -> str:
     """The top bar's and the bottom row's size (``bar_scale``; the
     Preferences preview wins), with Anki's own body zoom multiplied in."""
-    from . import background, dashboard, theme
+    from . import dashboard, theme
 
     try:
         from aqt import mw
@@ -438,7 +441,7 @@ def _bar_zoom_css() -> str:
         anki_zoom = float(mw.web.app_zoom_factor())
     except Exception:
         anki_zoom = 1.0
-    scale = dashboard.bar_scale_from_cfg(background.effective_cfg(_config()))
+    scale = dashboard.bar_scale_from_cfg(_config())
     return theme.bar_zoom_css(scale, anki_zoom)
 
 
@@ -462,7 +465,7 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
         # themselves through the same check; this return also covers
         # the theme.*_css restyles.
         if not background.design_enabled(
-            background.effective_cfg(_config())
+            _config()
         ):
             return
 

@@ -16,9 +16,6 @@ from .ollama_client import OllamaClient
 
 PlatformKind = Literal["macos", "windows", "linux", "other"]
 
-OLLAMA_DOWNLOAD_URL = "https://ollama.com/download"
-
-
 @dataclass(frozen=True)
 class InstallMethod:
     """A package-manager install option (not the browser download)."""

@@ -64,9 +64,6 @@ except Exception:
 # (Preview text boxes, highlights) from Klaus's own regenerated bakes.
 _KLAUS_NM = "klaus_note:"
 
-_ACTIVE_PDF_FILE = "active_pdf.txt"
-
-
 # ------------------------------- atomic writes ----------------------------
 #
 # Shared by every store below that can be written from more than one call
@@ -277,72 +274,6 @@ def _safe_basename(name: str) -> str:
     if base.lower().endswith(".pdf"):
         base = base[:-4]
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in base)
-
-
-def _active_pdf_path(user_files_dir: str) -> str:
-    return os.path.join(user_files_dir, _ACTIVE_PDF_FILE)
-
-
-def get_active_pdf(user_files_dir: str) -> str | None:
-    """Return the canonical basename of the single active PDF, or None."""
-    path = _active_pdf_path(user_files_dir)
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            name = f.read().strip()
-    except OSError:
-        return None
-    if not name:
-        return None
-    base = _safe_basename(name)
-    txt = os.path.join(user_files_dir, "contexts", base + ".txt")
-    return base if os.path.isfile(txt) else None
-
-
-def set_active_pdf(user_files_dir: str, name: str) -> None:
-    base = _safe_basename(name)
-    # Plain text (a bare basename), not JSON — routed through the same
-    # tmp+replace primitive as _atomic_write_json rather than that helper
-    # itself, so the on-disk format of this live user file doesn't change.
-    _atomic_write(_active_pdf_path(user_files_dir), lambda f: f.write(base))
-
-
-def clear_active_pdf(user_files_dir: str) -> None:
-    path = _active_pdf_path(user_files_dir)
-    if os.path.isfile(path):
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-
-
-def ensure_active_pdf(user_files_dir: str) -> str | None:
-    """Make sure the active-PDF pointer references a stored context.
-
-    Multi-PDF model: several contexts coexist and nothing is ever deleted
-    here (this replaced the old ``migrate_to_single_pdf``, which pruned
-    the store down to one file). If the pointer is missing or stale,
-    repoint it at the newest stored context.
-    """
-    names = list_contexts(user_files_dir)
-    if not names:
-        clear_active_pdf(user_files_dir)
-        return None
-    active = get_active_pdf(user_files_dir)
-    if active and active + ".txt" in names:
-        return active
-    # Repair from the same recency ranking the ＋ menu uses (last_used,
-    # falling back to ingest time) rather than an independent mtime scan —
-    # otherwise the repointed pointer could disagree with what the menu
-    # calls "most recent".
-    ranked = list_by_recency(user_files_dir)
-    if ranked:
-        base = ranked[0]
-    else:
-        base = names[0][:-4] if names[0].endswith(".txt") else names[0]
-    set_active_pdf(user_files_dir, base)
-    return base
 
 
 _OPEN_TABS_FILE = "pdf_tabs.json"
@@ -673,7 +604,6 @@ def _save_pdf(user_files_dir, name, raw_path, root, replace) -> dict:
     # next bake re-captures from the fresh copy).
     _drop_stale_original(user_files_dir, safe)
 
-    set_active_pdf(user_files_dir, safe)
     # A re-import under the same basename must sort as freshly ingested,
     # not at its old recency slot (or worse, by the copied file's SOURCE
     # mtime — see list_by_recency).
@@ -3375,6 +3305,4 @@ def delete_context(user_files_dir: str, name: str, remove_file=os.remove) -> Non
             retention_history.forget_history(user_files_dir, base)
         except Exception as exc:
             print(f"[klaus_note] retention history cleanup failed for {base}: {exc}")
-        if get_active_pdf(user_files_dir) == base:
-            clear_active_pdf(user_files_dir)
 

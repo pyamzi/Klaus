@@ -31,7 +31,7 @@ COL = os.path.expanduser(os.environ.get("KLAUS_COLLECTION") or "~/Library/Applic
 OLLAMA = "http://127.0.0.1:11434/api/embed"
 
 
-def strip_html(s: str) -> str:  # mirrors klaus_note._strip_html
+def strip_html(s: str) -> str:  # mirrors klaus_note.curation._strip_html
     if not s:
         return ""
     s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)

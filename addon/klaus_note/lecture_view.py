@@ -83,7 +83,7 @@ def load_prefs(user_files_dir: str) -> dict:
 
 def tag_to_safe(prefs: dict) -> dict[str, str]:
     """Invert the safe→tag map (tag_sync.reconcile_from_tags' inversion
-    — exact and lossless, unlike _tag_to_folder_display). Keys are
+    — exact and lossless, unlike tag_sync._restore's underscore guess). Keys are
     casefolded because Anki tags compare case-insensitively."""
     inv: dict[str, str] = {}
     for safe, entry in prefs.items():

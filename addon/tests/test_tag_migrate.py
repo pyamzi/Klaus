@@ -410,7 +410,7 @@ finally:
 #
 # Qt cannot instantiate headlessly, so none of the four real event
 # entry points (sync_after_matches, sync_after_threshold,
-# sync_after_clear_overrides, sync_after_rename/_folder_rename,
+# sync_after_clear_overrides, sync_after_folder_rename,
 # sync_after_delete) can be driven end-to-end here — each does a deferred
 # `from . import retention` (which pulls in curation.py's own aqt.qt/
 # gui_hooks/anki.collection surface) the moment it needs an actual PDF's
@@ -547,19 +547,6 @@ check(
 check("no-op when old is falsy (nothing ever indexed)", ts.apply_rename(FakeCol(), None, "!Library::X") is False)
 check("no-op when old already equals new", ts.apply_rename(FakeCol(), "!Library::X", "!Library::X") is False)
 
-print("== tag_sync.apply_renames: batched, skips no-ops ==")
-col13 = FakeCol(membership={"!Library::A": {1}, "!Library::B": {2}})
-done13 = ts.apply_renames(
-    col13,
-    [
-        ("!Library::A", "!Library::A2"),
-        (None, "!Library::ignored"),
-        ("!Library::B", "!Library::B"),
-    ],
-)
-check("only the real, changed pair is reported done", done13 == [("!Library::A", "!Library::A2")])
-check("only that pair actually hit col.tags.rename", col13.tags.renames == [("!Library::A", "!Library::A2")])
-
 print("== tag_sync.apply_removal ==")
 col14 = FakeCol(tags=["!Library::Gone"], membership={"!Library::Gone": {1, 2, 3}})
 check("reports removal", ts.apply_removal(col14, "!Library::Gone") is True)
@@ -619,9 +606,9 @@ finally:
 # tag_sync (K-054) — reverse !Library tag -> PDF sync
 # =========================================================================
 #
-# Same boundary as the K-053 section above: plan_library_sync and the three
-# small pure helpers it leans on (_is_reserved_tag, _tag_to_folder_display,
-# _display_with_ext) need nothing beyond string/set logic, so they are
+# Same boundary as the K-053 section above: plan_library_sync and the two
+# small pure helpers it leans on (_is_reserved_tag, _display_with_ext)
+# need nothing beyond string/set logic, so they are
 # fully exercised here. reconcile_from_tags's own body (prefs.json load,
 # drive_store writes, the ambiguous-case CollectionOp) does a deferred
 # `from . import retention` the moment there is any real stored tag to
@@ -642,22 +629,6 @@ check(
     ts._is_reserved_tag("!Library::Foo::Curating") is False,
 )
 check("an ordinary root tag is not reserved", ts._is_reserved_tag("!Library::Biostatistics") is False)
-
-print("== tag_sync._tag_to_folder_display: reverse of desired_tag's shape ==")
-check(
-    "root tag -> (None, leaf)",
-    ts._tag_to_folder_display("!Library::Biostatistics") == (None, "Biostatistics"),
-)
-check(
-    "nested folder segments reconstructed with / separators",
-    ts._tag_to_folder_display("!Library::Anatomy::Week_3::Renal_Physiology")
-    == ("Anatomy/Week 3", "Renal Physiology"),
-)
-check(
-    "LOSSY CAVEAT: an underscore in the tag always reads back as a space "
-    "(cannot distinguish a sanitized space from a genuine underscore)",
-    ts._tag_to_folder_display("!Library::Week_3_Notes") == (None, "Week 3 Notes"),
-)
 
 print("== tag_sync._display_with_ext: preserves the OLD display's real extension ==")
 check(

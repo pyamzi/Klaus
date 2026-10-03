@@ -51,9 +51,8 @@ every caller of that op crashes before its success callback ever runs):
    ``sync_after_clear_overrides`` (manage_models' "apply to all tuned
    PDFs" path, batched into one undo entry) — sensitivity changes re-diff
    membership at the new cut.
-3. ``sync_after_rename`` (display rename / move to folder) and
-   ``sync_after_folder_rename`` (batched across every PDF the folder move
-   affects, in ONE undo entry) — renames the STORED tag to the newly
+3. ``sync_after_folder_rename`` (batched across every PDF a rename or
+   move affects, in ONE undo entry) — renames the STORED tag to the newly
    computed desired one.
 4. ``sync_after_delete`` — removes the stored tag entirely. Must run
    BEFORE pdf_handler.delete_context, which calls retention.forget_prefs
@@ -209,33 +208,6 @@ def _is_reserved_tag(tag: str) -> bool:
     return len(parts) == 2 and parts[0] == "!Library" and parts[1].lower() in RESERVED_LEAVES
 
 
-def _tag_to_folder_display(tag: str) -> tuple[str | None, str]:
-    """Reverse of desired_tag's shape: split a ``!Library::...::Leaf`` tag
-    back into (folder path with '/' separators, or None at the root; the
-    leaf as a display string).
-
-    LOSSY ON PURPOSE, and this is the one place it matters: desired_tag's
-    sanitizer (``_sanitize_segment``) turns every space into an
-    underscore before a name ever reaches a tag, so once a name is inside
-    a tag string there is no way to tell "this underscore used to be a
-    space" from "this was a genuine underscore in the display name" —
-    reversing it can only ever guess "space". A PDF named
-    "cell_biology.pdf" whose tag gets renamed in the sidebar will
-    therefore round-trip its RECOMPUTED leaf as "cell biology" (a space)
-    — a rare, purely cosmetic surprise, accepted rather than building an
-    escaping scheme for it (see the card notes on this — do not add one).
-    """
-    parts = [p for p in tag.split("::") if p]
-    if parts and parts[0] == "!Library":
-        parts = parts[1:]
-    if not parts:
-        return None, ""
-    restored = [p.replace("_", " ").strip() for p in parts]
-    leaf = restored[-1]
-    folder = "/".join(restored[:-1]) if len(restored) > 1 else None
-    return folder, leaf
-
-
 def _display_with_ext(new_leaf: str, old_display: str) -> str:
     """The display name to actually store for a confident rename: the
     tag's reconstructed leaf, with whatever real filename extension the
@@ -262,7 +234,9 @@ def _lib_segments(tag: str) -> list[str]:
 
 
 def _restore(segment: str) -> str:
-    # Same lossy underscore -> space guess as _tag_to_folder_display.
+    # Lossy on purpose: desired_tag's sanitizer turns every space into an
+    # underscore, so a genuine underscore can't be told apart from a former
+    # space and this can only guess "space". Accepted; don't add escaping.
     return segment.replace("_", " ").strip()
 
 
@@ -637,16 +611,6 @@ def apply_rename(col, old: str | None, new: str) -> bool:
         return True
     col.tags.rename(old, new)
     return True
-
-
-def apply_renames(col, pairs: list[tuple[str | None, str]]) -> list[tuple[str, str]]:
-    """Batch form of apply_rename for one undo entry covering many PDFs
-    (folder rename). Returns the pairs that actually renamed."""
-    done: list[tuple[str, str]] = []
-    for old, new in pairs:
-        if apply_rename(col, old, new):
-            done.append((old, new))
-    return done
 
 
 def apply_removal(col, tag: str | None) -> bool:
@@ -1106,46 +1070,6 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
         _run_sync_op(parent, "KlausNote: retag PDFs for new default sensitivity", work, on_done=done)
     except Exception as exc:  # noqa: BLE001
         print(f"[klaus_note] tag_sync: sync_after_clear_overrides failed: {exc}")
-
-
-def sync_after_rename(parent, pdf_name: str) -> None:
-    """Event 3 (single PDF) — pdf_drive._rename_pdf / _move_pdf. Call
-    AFTER drive_store has already recorded the new display name/folder.
-    A no-op (no CollectionOp fired at all) when the PDF has never been
-    indexed — there is no stored tag to rename, and event 1 will create
-    the right one the first time it is.
-    """
-    try:
-        cfg = settings.read()
-        if not library_tags_enabled(cfg):
-            return
-        safe = _safe(pdf_name)
-        stored = get_stored_tag(safe)
-        if not stored or _clash_skip(safe):
-            return
-        folder, display = _folder_and_display(safe)
-        desired = desired_tag(folder, display)
-        if desired == stored:
-            return
-        keep = _shared(safe, stored)
-
-        def work(col):
-            if keep:
-                _retag_from_cache(col, safe, desired, cfg)
-                _rebuild_shared(col, stored, {safe}, cfg)
-            else:
-                apply_rename(col, stored, desired)
-            set_stored_tag(safe, desired)
-            return {"renamed": True}
-
-        _run_sync_op(
-            parent,
-            f"KlausNote: rename !Library tag for “{display}”",
-            work,
-            on_done=lambda _r: tooltip(f"“{display}”: !Library tag renamed.", parent=parent),
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"[klaus_note] tag_sync: sync_after_rename failed for {pdf_name!r}: {exc}")
 
 
 def sync_after_folder_rename(parent, safes: list[str]) -> None:

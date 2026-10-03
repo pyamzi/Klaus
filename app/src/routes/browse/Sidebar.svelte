@@ -1,7 +1,8 @@
 <script lang="ts">
   // The browser sidebar (Anki's aqt/browser/sidebar): saved searches, today, flags,
   // card states, decks, note types and tags. A click replaces the search.
-  import { getConfigJson, getDeckNames, getNotetypeNames, setConfigJson, tagTree } from "@generated/backend";
+  import { getDeckNames, getNotetypeNames, tagTree } from "@generated/backend";
+  import { getJson, setJson } from "$lib/config";
   import {
     SearchNode,
     SearchNode_CardState as State,
@@ -75,11 +76,10 @@
   }
 
   async function loadSaved() {
-    const json = await getConfigJson({ val: "savedFilters" });
-    saved = JSON.parse(new TextDecoder().decode(json.json)) ?? {};
+    saved = await getJson<Record<string, string>>("savedFilters", {});
   }
   async function storeSaved() {
-    await setConfigJson({ key: "savedFilters", valueJson: new TextEncoder().encode(JSON.stringify(saved)), undoable: false });
+    await setJson("savedFilters", saved);
   }
 
   export async function refresh() {

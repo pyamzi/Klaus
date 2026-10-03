@@ -39,6 +39,7 @@ embeddings.py. Long work runs on QueryOp workers; the embedding phases run
 from __future__ import annotations
 
 import os
+import re
 import threading
 from typing import Any, Callable
 
@@ -50,8 +51,6 @@ from aqt.utils import showWarning, tooltip
 
 from . import card_index, embeddings
 from . import settings
-
-ADDON_DIR = os.path.dirname(__file__)
 
 
 def index_dir() -> str:
@@ -72,8 +71,8 @@ _FIELD_SEP = "\x1f"  # anki notes.flds separator
 # one-way (ensure_index never checked retention's), and ensure_matches
 # checked neither.
 #
-# The ``_reentrant`` kwarg those functions carry let ONE caller hold the
-# token across several phases; K-146 removed that caller (run_curation).
+# Each of those functions takes and releases the token itself; K-146
+# removed the one caller (run_curation) that held it across several phases.
 # index_queue._run composes the same phases but lets each take the token
 # in turn, because its cancellation branches return without a release
 # and a held token would leak, bricking indexing for the session — see
@@ -85,10 +84,21 @@ _busy = False
 ProgressFn = Callable[[str, int, int], None]  # (label, done, total)
 
 
-def _pkg():
-    import importlib
-
-    return importlib.import_module(__package__)
+def _strip_html(s: str) -> str:
+    """Strip HTML tags so sibling-field content goes into prompts as plain text."""
+    if not s:
+        return ""
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"</?(div|p|span|li|ul|ol|h[1-6])\b[^>]*>", "\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"<[^>]+>", "", s)
+    # Common HTML entities (don't pull in html.parser just for this).
+    s = (s.replace("&nbsp;", " ")
+           .replace("&amp;", "&")
+           .replace("&lt;", "<")
+           .replace("&gt;", ">")
+           .replace("&quot;", '"'))
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
 
 
 # ------------------------------------------------------------ pure helpers
@@ -112,7 +122,7 @@ def _snapshot_with_col(col, force_rebuild: bool):
     rows = col.db.all("select id, mod, flds from notes")
     mods = {int(r[0]): int(r[1]) for r in rows}
     flds = {int(r[0]): str(r[2]) for r in rows}
-    strip = _pkg()._strip_html
+    strip = _strip_html
 
     def text_fn(nid: int) -> str:
         return card_index.note_text(flds[nid].split(_FIELD_SEP), strip)
@@ -158,7 +168,6 @@ def ensure_index(
     on_done: Callable[[card_index.CardIndex, bool], None] | None = None,
     on_error: Callable[[Exception], None] | None = None,
     cancel: threading.Event | None = None,
-    _reentrant: bool = False,
 ) -> None:
     """Bring the card index up to date. All callbacks fire on main thread.
 
@@ -183,24 +192,16 @@ def ensure_index(
     instead of racing it — a PDF dropped mid-Index-Now would otherwise
     be refused here and take a whole queued batch down as a "failure"
     the user never caused.
-
-    ``_reentrant``: for a caller that already holds ``_busy`` across a
-    larger composed pipeline this is one phase of — skips the
-    guard/release here so the single token is acquired exactly once.
-    No caller sets it today (see ``_busy``); the kwarg stays because
-    retention's two phases carry the matching one.
     """
     global _busy
-    if not _reentrant:
-        if _busy:
-            _fail(on_error, RuntimeError("KlausNote is already indexing — try again in a moment."))
-            return
-        _busy = True
+    if _busy:
+        _fail(on_error, RuntimeError("KlausNote is already indexing — try again in a moment."))
+        return
+    _busy = True
 
     def release() -> None:
         global _busy
-        if not _reentrant:
-            _busy = False
+        _busy = False
 
     def finish_err(exc: Exception) -> None:
         release()

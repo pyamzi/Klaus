@@ -7,8 +7,6 @@ from array import array
 from typing import Callable, Iterator
 
 DEFAULT_MODELS = {"ollama": "nomic-embed-text"}
-DEFAULT_PROVIDER = "ollama"
-DEFAULT_DIMENSIONS = 0
 BATCH_SIZE = 64
 GetConfig = Callable[[], dict]
 
@@ -31,10 +29,6 @@ def provider_name(cfg: dict) -> str:
 
 def embedding_model(cfg: dict) -> str:
     return str(cfg.get("embedding_model") or "").strip() or DEFAULT_MODELS["ollama"]
-
-
-def embedding_dimensions(cfg: dict) -> int:
-    return 0
 
 
 def index_signature(cfg: dict) -> tuple[str, str, int]:
