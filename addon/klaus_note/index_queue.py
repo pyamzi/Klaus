@@ -341,14 +341,17 @@ def request(jobs: list[tuple[str, str]], *, announce: bool = True) -> int:
             continue  # already running — re-queueing would re-embed it
         if _queue.enqueue(job):
             added += 1
-    if not added:
+    # #22: an idle runner with a non-empty queue always pumps, even when
+    # nothing new was added — that is how a queue the busy-wait gave up
+    # on gets picked up again.
+    if not added and (_current is not None or not _queue.pending()):
         return 0
     _waits = 0  # a fresh request re-opens the wait-for-the-token window
     if _current is None:
         _pump_soon()
     else:
         _publish(_state._replace(pending=_queue.pending()))
-    if announce:
+    if announce and added:
         first = jobs[0][1] if jobs and jobs[0][0] == JOB_PDF else ""
         ahead = _queue.pending() - 1 + (1 if _current is not None else 0)
         tooltip(queued_message(display_name(first), ahead))
@@ -435,9 +438,13 @@ def refresh(parent: Any = None) -> int:
         print(f"[klaus_note] refresh failed: {exc}")
         tooltip("Couldn't check the Library for new PDFs.", parent=parent)
         return 0
-    added = request(jobs, announce=False) if jobs else 0
-    n_pdfs = sum(1 for kind, _n in jobs if kind == JOB_PDF)
-    tooltip(refresh_message(n_pdfs, bool(jobs) and not n_pdfs), parent=parent)
+    # Always through request(): with no new jobs it still restarts a queue
+    # the busy-wait gave up on (#22). The tooltip counts everything queued
+    # or running, so it never says "Everything is indexed" over live work.
+    added = request(jobs, announce=False)
+    n_pdfs = len(pending_names())
+    busy = _current is not None or _queue.pending() > 0
+    tooltip(refresh_message(n_pdfs, busy and not n_pdfs), parent=parent)
     return added
 
 
@@ -540,7 +547,7 @@ def _pump() -> None:
             _pump_soon(BUSY_RETRY_MS)
         else:
             # Give up POLLING, not the work: the queue is untouched, so
-            # the next add — or the next job that finishes — picks it up.
+            # the next request() or ⟳ picks it up, new job or not (#22).
             _publish(
                 _state._replace(
                     active=False,
@@ -603,30 +610,43 @@ def _run(job: tuple[str, str]) -> None:
             )
         )
 
+    def excluded_now() -> bool:
+        """#31: excluded while this job ran. Its index goes, so call this
+        BEFORE live(): a cancelled phase may still have saved one."""
+        return kind == JOB_PDF and _drop_if_excluded(name)
+
+    def end_excluded() -> None:
+        # Not a failure: the jobs queued behind it keep running.
+        _job_done(f"“{label}” is excluded from the index.")
+
     def on_error(exc: Exception) -> None:
-        if kind == JOB_PDF:
-            _drop_if_excluded(name)  # phase two may already have saved it
+        excluded = excluded_now()
         if not live():
+            return
+        if excluded:
+            end_excluded()  # e.g. "isn't embedded yet" after its index went
             return
         _fail(exc)
 
     def after_matches(matches: Any) -> None:
+        excluded = excluded_now()
         if not live():
+            return
+        if excluded:
+            end_excluded()  # exclusion leaves card tags as they were
             return
         try:
             tag_sync.sync_after_matches(mw, name, matches)
         except Exception as exc:
             print(f"[klaus_note] tag sync after index failed: {exc}")
-        _drop_if_excluded(name)
         _job_done(f"Indexed “{label}”.", finished=name)
 
     def after_pdf_index(idx: Any) -> None:
-        # Before live(): a cancelled run still saved its partial index.
-        excluded = _drop_if_excluded(name)
+        excluded = excluded_now()
         if not live():
             return
         if excluded:
-            _job_done(f"“{label}” is excluded from the index.")
+            end_excluded()
             return
         if not idx.is_complete():
             # Reachable only if something set the shared cancel event
@@ -653,6 +673,9 @@ def _run(job: tuple[str, str]) -> None:
             return
         if kind == JOB_CARDS:
             _job_done("Card index up to date.")
+            return
+        if excluded_now():
+            end_excluded()  # never embed a PDF excluded during phase one
             return
         retention.ensure_pdf_index(
             mw,
