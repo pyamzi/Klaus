@@ -8,13 +8,13 @@
 	type Card = { q: string; a: string; intervals: [string, string, string, string] };
 	const deck: Card[] = [
 		{
-			q: 'What is Klaus Note?',
+			q: 'What is KlausNote?',
 			a: 'A study app built on Anki’s own engine: your cards and their scheduling (FSRS included), with the lecture PDFs and notes they came from kept beside them.',
 			intervals: ['<1m', '<6m', '<10m', '4d']
 		},
 		{
 			q: 'Do I have to give up Anki?',
-			a: 'No. Klaus Note uses the same Collection and is being built to sync through AnkiWeb, so AnkiMobile and AnkiDroid keep working. Or stay in Anki: the Klaus Addon brings the lecture library there.',
+			a: 'No. KlausNote uses the same Collection and is being built to sync through AnkiWeb, so AnkiMobile and AnkiDroid keep working. Or stay in Anki: KlausNote for Anki brings the lecture library there.',
 			intervals: ['<1m', '<6m', '<10m', '4d']
 		},
 		{
@@ -89,7 +89,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions (key events bubble up from its buttons) -->
 <section
 	class="review"
-	aria-label="Try a review: questions about Klaus Note"
+	aria-label="Try a review: questions about KlausNote"
 	tabindex="-1"
 	bind:this={root}
 	{onkeydown}

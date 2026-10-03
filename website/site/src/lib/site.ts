@@ -3,7 +3,7 @@
 // feature off; the site still builds and works without it.
 export const site = {
 	url: 'https://klausnote.com',
-	name: 'Klaus Note',
+	name: 'KlausNote',
 
 	// Waitlist signups go to the "Klaus" Supabase project, through its public
 	// join_waitlist() function; the table itself is closed to the public. The

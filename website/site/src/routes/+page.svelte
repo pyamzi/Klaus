@@ -17,35 +17,35 @@
 		setTimeout(() => document.getElementById('waitlist-email-hero')?.focus({ preventScroll: true }));
 	}
 
-	const title = 'Klaus Note — Anki flashcards that remember the lecture';
+	const title = 'KlausNote — Anki flashcards that remember the lecture';
 	const description =
-		'Klaus Note is a spaced-repetition app built on Anki’s own engine, with FSRS, that keeps your lecture PDFs beside your cards. The Klaus Addon brings it to Anki.';
+		'KlausNote is a spaced-repetition app built on Anki’s own engine, with FSRS, that keeps your lecture PDFs beside your cards. KlausNote for Anki brings its lecture library into Anki.';
 
 	// Shown on the page and given to search engines as FAQPage data; one source.
 	const faq = [
 		{
-			q: 'Is Klaus Note an Anki alternative?',
-			a: 'Klaus Note runs Anki’s own engine, so it reads the same kind of Collection and schedules cards the same way. It is being built to sync through AnkiWeb, so you can keep using Anki, AnkiMobile and AnkiDroid alongside it.'
+			q: 'Is KlausNote an Anki alternative?',
+			a: 'KlausNote runs Anki’s own engine, so it reads the same kind of Collection and schedules cards the same way. It is being built to sync through AnkiWeb, so you can keep using Anki, AnkiMobile and AnkiDroid alongside it.'
 		},
 		{
-			q: 'Does Klaus Note support FSRS?',
-			a: 'Yes. Klaus Note uses Anki’s scheduler, FSRS included, and Anki’s own deck options page, where you can optimise FSRS parameters from your review history.'
+			q: 'Does KlausNote support FSRS?',
+			a: 'Yes. KlausNote uses Anki’s scheduler, FSRS included, and Anki’s own deck options page, where you can optimise FSRS parameters from your review history.'
 		},
 		{
-			q: 'What is the Klaus Addon?',
+			q: 'What is KlausNote for Anki?',
 			a: 'An add-on for Anki desktop. Add a lecture PDF and it searches your collection by meaning, tags the cards that lecture covers, and shows a retention score for each lecture so you know what to study first.'
 		},
 		{
 			q: 'Where do my PDFs and cards go?',
-			a: 'Your PDFs and notes stay as ordinary files in a folder you choose. The Klaus Addon matches cards on your own computer through Ollama, so your cards are not sent anywhere to be matched.'
+			a: 'Your PDFs and notes stay as ordinary files in a folder you choose. KlausNote for Anki matches cards on your own computer through Ollama, so your cards are not sent anywhere to be matched.'
 		},
 		{
 			q: 'How much does it cost?',
-			a: 'Klaus Note and the Klaus Addon are free and open source under AGPL-3.0. A paid Klaus account is planned for what klaus.so will host, such as syncing your PDFs and notes.'
+			a: 'Both KlausNote and KlausNote for Anki are free and open source under AGPL-3.0. A paid Klaus account is planned for what klaus.so will host, such as syncing your PDFs and notes.'
 		},
 		{
 			q: 'When can I use it?',
-			a: 'Neither is released yet. The Klaus Note app comes to macOS first, then Windows and Linux. Join the waitlist and we’ll email you when each is ready to install.'
+			a: 'Neither is released yet. The KlausNote app comes to macOS first, then Windows and Linux. Join the waitlist and we’ll email you when each is ready to install.'
 		}
 	];
 
@@ -61,7 +61,7 @@
 			},
 			{
 				'@type': 'SoftwareApplication',
-				name: 'Klaus Note',
+				name: 'KlausNote',
 				applicationCategory: 'EducationalApplication',
 				operatingSystem: 'macOS',
 				description:
@@ -73,7 +73,7 @@
 			},
 			{
 				'@type': 'SoftwareApplication',
-				name: 'Klaus Addon',
+				name: 'KlausNote for Anki',
 				applicationCategory: 'EducationalApplication',
 				operatingSystem: 'Windows, macOS, Linux (Anki desktop add-on)',
 				description:
@@ -97,7 +97,7 @@
 	// The app's milestone order (klaus-note/app docs). Order matters: each builds on the last.
 	const roadmap = [
 		{ name: 'Everything you use Anki for', detail: 'Review, add and edit, deck options with FSRS, browse, stats, AnkiWeb sync.', now: true },
-		{ name: 'Documents', detail: 'Read and annotate lecture PDFs inside Klaus Note.' },
+		{ name: 'Documents', detail: 'Read and annotate lecture PDFs inside KlausNote.' },
 		{ name: 'Linking', detail: 'Headings become sections; each section shows the cards that cover it.' },
 		{ name: 'Recordings', detail: 'Record a lecture while the slides are open; each slide keeps its own clip and transcript.' },
 		{ name: 'Pages', detail: 'Markdown notes with LaTeX that link to your PDFs, Wikipedia-style.' },
@@ -117,7 +117,7 @@
 	<meta property="og:image" content="{site.url}/og.png" />
 	<meta property="og:image:width" content="1200" />
 	<meta property="og:image:height" content="630" />
-	<meta property="og:image:alt" content="Klaus Note: study the card, keep the lecture it came from." />
+	<meta property="og:image:alt" content="KlausNote: study the card, keep the lecture it came from." />
 	<meta name="twitter:card" content="summary_large_image" />
 	{@html `<script type="application/ld+json">${jsonLd}</script>`}
 </svelte:head>
@@ -125,7 +125,7 @@
 <a class="skip" href="#main">Skip to content</a>
 
 <header class="site-header">
-	<a href="/" class="brand" aria-label="Klaus Note home"><Wordmark /></a>
+	<a href="/" class="brand" aria-label="KlausNote home"><Wordmark /></a>
 	<nav aria-label="Main">
 		<a href="#app">App</a>
 		<a href="#addon">Anki add-on</a>
@@ -143,14 +143,14 @@
 		<div class="pitch">
 			<h1>Every card knows its lecture.</h1>
 			<p class="lede">
-				Klaus Note is a study app built on Anki’s own engine, with your lecture PDFs linked to the
+				KlausNote is a study app built on Anki’s own engine, with your lecture PDFs linked to the
 				cards that cover them.
 			</p>
 			<div id="waitlist" class="hero-cta">
 				<WaitlistForm source="hero" />
 			</div>
 			<p class="availability">
-				Coming to macOS first. The Klaus Addon brings the lecture library into Anki.
+				Coming to macOS first. KlausNote for Anki brings the lecture library into Anki.
 				<a href={appRepo} onclick={out('app repo')}>View source</a>
 			</p>
 		</div>
@@ -160,7 +160,7 @@
 		</div>
 	</section>
 
-	<section class="pillars" aria-label="Why Klaus Note">
+	<section class="pillars" aria-label="Why KlausNote">
 		<dl>
 			<div>
 				<dt>Anki-native</dt>
@@ -212,7 +212,7 @@
 			</ul>
 			<div class="actions">
 				<Button href={appRepo} variant="outline" onclick={out('star app')}>
-					<Star aria-hidden="true" /> Star Klaus Note on GitHub
+					<Star aria-hidden="true" /> Star KlausNote on GitHub
 				</Button>
 			</div>
 			<p class="fine">In development, macOS first. No download yet. Free and open source under AGPL-3.0.</p>
@@ -223,7 +223,7 @@
 				<h3><Wordmark product="addon" size="lg" /></h3>
 			</div>
 			<p class="product-line">
-				<strong>The add-on.</strong> Klaus Note’s lecture library, inside the Anki you already use.
+				<strong>The add-on.</strong> KlausNote’s lecture library, inside the Anki you already use.
 			</p>
 			<h4>What it does</h4>
 			<ul>
@@ -247,7 +247,7 @@
 			</ul>
 			<div class="actions">
 				<Button href={addonRepo} variant="outline" onclick={out('star addon')}>
-					<Star aria-hidden="true" /> Star Klaus Addon on GitHub
+					<Star aria-hidden="true" /> Star KlausNote for Anki on GitHub
 				</Button>
 			</div>
 			<p class="fine">
@@ -282,15 +282,15 @@
 			{/each}
 		</ol>
 		<p class="fine">
-			Also planned: Klaus Note in the browser at <strong>note.klaus.so</strong>, and Windows, Linux,
+			Also planned: KlausNote in the browser at <strong>note.klaus.so</strong>, and Windows, Linux,
 			iOS and Android after macOS.
 		</p>
 	</section>
 
 	<section class="closing" aria-labelledby="closing-title">
-		<h2 id="closing-title">Get Klaus Note first.</h2>
+		<h2 id="closing-title">Get KlausNote first.</h2>
 		{#if site.supabaseUrl}
-			<p>One email when the Klaus Addon is ready. One when Klaus Note is.</p>
+			<p>One email when KlausNote for Anki is ready. One when the KlausNote app is.</p>
 		{/if}
 		<WaitlistForm source="closing" hideLabel />
 		{#if site.supabaseUrl}
@@ -304,7 +304,7 @@
 <footer class="site-footer">
 	<div class="brand"><Wordmark size="sm" /></div>
 	<p>
-		Klaus Note is built on Anki’s open-source engine. It is an independent project, not made by or
+		KlausNote is built on Anki’s open-source engine. It is an independent project, not made by or
 		affiliated with Ankitects.
 	</p>
 	<nav aria-label="Footer">

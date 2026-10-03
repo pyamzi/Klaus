@@ -45,11 +45,11 @@
 	</div>
 {:else if status === 'done'}
 	<p class="waitlist done" role="status">
-		You’re on the list. We’ll email <strong>{email}</strong> when Klaus Note is ready to install.
+		You’re on the list. We’ll email <strong>{email}</strong> when KlausNote is ready to install.
 	</p>
 {:else}
 	<form class="waitlist" {onsubmit}>
-		<label for={id} class:sr-only={hideLabel}>Get Klaus Note first</label>
+		<label for={id} class:sr-only={hideLabel}>Get KlausNote first</label>
 		<div class="row">
 			<input
 				{id}

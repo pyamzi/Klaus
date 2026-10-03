@@ -4,20 +4,20 @@
 </script>
 
 <svelte:head>
-	<title>Privacy · Klaus Note</title>
+	<title>Privacy · KlausNote</title>
 	<meta name="description" content="What klausnote.com collects, why, and how to have it removed." />
 	<link rel="canonical" href="{site.url}/privacy" />
 </svelte:head>
 
 <main class="privacy">
-	<a href="/" class="brand" aria-label="Back to Klaus Note"><Wordmark size="sm" /></a>
+	<a href="/" class="brand" aria-label="Back to KlausNote"><Wordmark size="sm" /></a>
 	<h1>Privacy</h1>
-	<p class="lede">This covers klausnote.com, the website. The Klaus Note app and the Klaus Addon have their own notes in their repositories.</p>
+	<p class="lede">This covers klausnote.com, the website. The KlausNote app and KlausNote for Anki have their own notes in their repositories.</p>
 
 	<h2>Waitlist</h2>
 	<p>
 		If you join the waitlist we keep your email address, which form you used and when, to tell you
-		when Klaus Note or the Klaus Addon is ready to install. It is stored in our database at Supabase (in the
+		when KlausNote or KlausNote for Anki is ready to install. It is stored in our database at Supabase (in the
 		United States). We don’t sell it or share it with anyone except the services that store it and
 		send the messages. Every email has an unsubscribe link, and you can ask us
 		to delete your address at any time.

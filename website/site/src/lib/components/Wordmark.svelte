@@ -2,7 +2,7 @@
 	import KlausMark from './KlausMark.svelte';
 
 	// The two products' lockups: the hand-drawn k (no tile) and the name in Excalifont.
-	// Klaus, the app, wears the k in Klaus blue; Klaus Addon, the Anki add-on, wears it in
+	// KlausNote, the app, wears the k in Klaus blue; KlausNote for Anki, the add-on, wears it in
 	// ink and is tagged "for Anki", so the two never read as the same thing.
 	let {
 		product = 'klaus',
@@ -12,7 +12,7 @@
 
 <span class="lockup {product} {size}">
 	<span class="mark" aria-hidden="true"><KlausMark class="k" /></span>
-	<span class="name">{product === 'klaus' ? 'Klaus Note' : 'Klaus Addon'}</span>
+	<span class="name">KlausNote</span>
 	{#if product === 'addon'}
 		<!-- Anki's logo (docs-site/media/favicon.svg), unmodified, under its license's alternative terms: it refers to
 		     Anki and links to apps.ankiweb.net (vendor/anki/LICENSE). -->
@@ -65,7 +65,7 @@
 	.addon .mark {
 		color: var(--foreground);
 	}
-	/* Klaus Addon's "for Anki": Anki's icon, the same height as the wordmark's "l" (like
+	/* The add-on's "for Anki": Anki's icon, the same height as the wordmark's "l" (like
 	   the k), with the words underneath, right-aligned to the icon. The words sit
 	   outside the flow so the icon lines up with the wordmark top and bottom. */
 	.for-anki {
