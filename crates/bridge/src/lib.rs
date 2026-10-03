@@ -14,7 +14,7 @@ use anki_proto::collection::{CloseCollectionRequest, OpenCollectionRequest};
 use anki_proto::generic;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -283,6 +283,8 @@ pub struct Bridge {
     pending_sign_in: Mutex<Option<(String, String, String)>>,
     /// When the page last did something (Unix ms); automatic sync waits for quiet.
     last_activity: std::sync::atomic::AtomicI64,
+    /// Set by sync_before_quit: no automatic sync may start after it.
+    quitting: std::sync::atomic::AtomicBool,
 }
 
 /// Secret storage (the sync key must never be written to a plain file).
@@ -312,6 +314,8 @@ impl Secrets for MemorySecrets {
 }
 
 const SYNC_KEY: &str = "klaus-account-sync-key";
+/// Profile settings only the bridge writes: the sync key is sent to `syncUrl`.
+const ACCOUNT_KEYS: &[&str] = &["syncUrl", "syncUser"];
 const DEFAULT_ACCOUNT_URL: &str = "https://klaus.ink";
 const DEFAULT_SYNC_URL: &str = "https://sync.klaus.ink/";
 /// Automatic sync starts only after this long without page activity: a sync holds
@@ -344,6 +348,7 @@ impl Bridge {
             origin: Mutex::new(None),
             pending_sign_in: Mutex::new(None),
             last_activity: std::sync::atomic::AtomicI64::new(0),
+            quitting: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -361,7 +366,8 @@ impl Bridge {
         self.run("openCollection", &req.encode_to_vec())?;
         let settings = std::fs::read(dir.join(SETTINGS_FILE))
             .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .filter(Value::is_object)
             .unwrap_or_else(|| serde_json::json!({}));
         *self.settings.lock().unwrap() = settings;
         *self.dir.lock().unwrap() = Some(dir.to_owned());
@@ -448,6 +454,10 @@ impl Bridge {
             }
             _ => {
                 let req = SetSettingJsonRequest::decode(input).map_err(bad)?;
+                // Where the sync key goes is the account's business, not the page's.
+                if section == "profile" && ACCOUNT_KEYS.contains(&req.key.as_str()) {
+                    return Err(CallError::NotAllowed);
+                }
                 let value: Value = serde_json::from_slice(&req.value_json)
                     .map_err(|e| CallError::Backend(e.to_string()))?;
                 self.set_setting(section, &req.key, value)?;
@@ -458,6 +468,9 @@ impl Bridge {
 
     fn set_setting(&self, section: &str, key: &str, value: Value) -> Result<(), CallError> {
         let mut settings = self.settings.lock().unwrap();
+        if !settings[section].is_object() {
+            settings[section] = Value::Object(Default::default());
+        }
         settings[section][key] = value;
         let dir = self.dir.lock().unwrap().clone().ok_or_else(|| CallError::Backend("no Collection open".into()))?;
         std::fs::write(dir.join(SETTINGS_FILE), serde_json::to_vec_pretty(&*settings).unwrap())
@@ -516,8 +529,12 @@ impl Bridge {
     /// klaus.ink's redirect back: checks the state (one-shot), exchanges the code
     /// for the account's sync key, and stores it.
     async fn finish_sign_in(&self, code: &str, state: &str) -> Result<String, String> {
-        let pending = self.pending_sign_in.lock().unwrap().take();
-        let Some((expected, verifier, redirect)) = pending.filter(|(expected, ..)| expected == state) else {
+        // Consumed only by its own state, so a stray callback can't cancel it.
+        let pending = {
+            let mut pending = self.pending_sign_in.lock().unwrap();
+            pending.take_if(|(expected, ..)| expected == state)
+        };
+        let Some((expected, verifier, redirect)) = pending else {
             return Err("This sign-in link has expired. Start again from KlausNote.".into());
         };
         let _ = expected;
@@ -629,9 +646,15 @@ impl Bridge {
     }
 
     /// Marks a sync as running (false if one already is), numbered for the page.
+    /// No sync but the quit sync starts once quitting (begin_quit) has begun.
     fn begin_sync(&self, background: bool) -> Option<u32> {
+        self.claim_sync(background, false)
+    }
+
+    fn claim_sync(&self, background: bool, for_quit: bool) -> Option<u32> {
         let mut outcome = self.sync_outcome.lock().unwrap();
-        if outcome.state() == klaus::sync_outcome::State::Running {
+        // Read under the lock begin_quit sets it under: no sync slips in after.
+        if outcome.state() == klaus::sync_outcome::State::Running || (self.is_quitting() && !for_quit) {
             return None;
         }
         let id = outcome.id + 1;
@@ -681,7 +704,7 @@ impl Bridge {
         let account = self.sync_account();
         let quiet = now_ms() - self.last_activity.load(std::sync::atomic::Ordering::Relaxed) >= QUIET_MS;
         let Some(auth) = self.sync_auth() else { return false };
-        if account.email.is_empty() || !account.auto_sync || !quiet {
+        if account.email.is_empty() || !account.auto_sync || !quiet || self.is_quitting() {
             return false;
         }
         let pending_full = {
@@ -704,7 +727,7 @@ impl Bridge {
     /// Syncs now on a background thread (on open, Anki's sync when the profile
     /// loads); the page sees it through klausSyncOutcome.
     pub fn sync_in_background(self: &Arc<Self>) {
-        if self.sync_account().email.is_empty() {
+        if self.sync_account().email.is_empty() || self.is_quitting() {
             return;
         }
         let Some(id) = self.begin_sync(true) else { return };
@@ -730,7 +753,11 @@ impl Bridge {
     pub fn sync_before_quit(self: &Arc<Self>, limit: std::time::Duration) {
         use std::sync::atomic::{AtomicBool, Ordering};
         let deadline = std::time::Instant::now() + limit;
+        let past_deadline = || std::time::Instant::now() >= deadline;
+        self.begin_quit();
         let done = Arc::new(AtomicBool::new(false));
+        // Past the deadline, keeps aborting until this returns: an abort before
+        // rslib registers a sync's abort handle does nothing.
         let watchdog = {
             let (bridge, done) = (Arc::clone(self), Arc::clone(&done));
             std::thread::spawn(move || {
@@ -738,20 +765,19 @@ impl Bridge {
                     if std::time::Instant::now() >= deadline {
                         let _ = bridge.call_trusted("abortSync", &[]);
                         let _ = bridge.call_trusted("abortMediaSync", &[]);
-                        return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             })
         };
-        // Claim the sync slot, waiting out a sync already running (the watchdog
-        // aborts it at the deadline).
+        // Claim the sync slot, waiting out a sync already running; never start one
+        // past the deadline.
         let id = loop {
-            if let Some(id) = self.begin_sync(true) {
-                break Some(id);
-            }
-            if std::time::Instant::now() >= deadline {
+            if past_deadline() {
                 break None;
+            }
+            if let Some(id) = self.claim_sync(true, true) {
+                break Some(id);
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
         };
@@ -759,11 +785,22 @@ impl Bridge {
             let result = self.sync();
             self.end_sync(id, true, result);
         }
-        while std::time::Instant::now() < deadline && self.media_sync_active() {
+        while !past_deadline() && self.media_sync_active() {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
         done.store(true, Ordering::SeqCst);
         let _ = watchdog.join();
+    }
+
+    /// From here on, only sync_before_quit may start a sync. The shell calls it
+    /// from the quit event itself, before anything else can claim the slot.
+    pub fn begin_quit(&self) {
+        let _slot = self.sync_outcome.lock().unwrap();
+        self.quitting.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn is_quitting(&self) -> bool {
+        self.quitting.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn media_sync_active(&self) -> bool {
@@ -1015,7 +1052,12 @@ pub async fn serve(
     let mut app = Router::new()
         // Axum's default 2 MiB cap would reject pasted photos (convertPastedImage,
         // addMediaFile carry the bytes); the caller is already cookie-authenticated.
-        .route("/_anki/{method}", post(anki_method).layer(DefaultBodyLimit::max(MAX_BODY)))
+        .route(
+            "/_anki/{method}",
+            post(anki_method)
+                .layer(DefaultBodyLimit::max(MAX_BODY))
+                .layer(middleware::from_fn_with_state(state.clone(), require_cookie)),
+        )
         // klaus.ink's sign-in redirect, from the system browser: no session cookie
         // there, the one-shot OAuth state is the check.
         .route("/auth/callback", get(auth_callback))
@@ -1036,6 +1078,7 @@ pub async fn serve(
     let app = app
         .fallback(move |state: State<AppState>, req: Request| root_or_media(state, req, klaus.clone(), klaus_dir.clone()))
         .layer(middleware::from_fn_with_state(state.clone(), grant_cookie))
+        .layer(middleware::from_fn_with_state(state.clone(), own_host_only))
         .with_state(state);
     Ok((addr, async move { axum::serve(listener, app).await }))
 }
@@ -1240,12 +1283,21 @@ async fn auth_callback(State(state): State<AppState>, Query(query): Query<Callba
     (status, Html(page)).into_response()
 }
 
-async fn anki_method(
-    State(state): State<AppState>,
-    UrlPath(method): UrlPath<String>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
+/// DNS rebinding: a web page whose name resolves to 127.0.0.1 reaches this port
+/// with its own name as Host. Only the bridge's own origin is served.
+async fn own_host_only(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok());
+    if host.is_some_and(|h| state.origin.strip_prefix("http://") == Some(h)) {
+        next.run(req).await
+    } else {
+        StatusCode::MISDIRECTED_REQUEST.into_response()
+    }
+}
+
+/// `/_anki` callers must hold the session cookie, checked before the (up to
+/// MAX_BODY) body is read.
+async fn require_cookie(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let headers = req.headers();
     let has_token = headers
         .get_all(header::COOKIE)
         .iter()
@@ -1257,6 +1309,10 @@ async fn anki_method(
     if !has_token || !binary {
         return StatusCode::FORBIDDEN.into_response();
     }
+    next.run(req).await
+}
+
+async fn anki_method(State(state): State<AppState>, UrlPath(method): UrlPath<String>, body: Bytes) -> Response {
     if HOOKS.contains(&method.as_str()) {
         let hook = state.hook.clone();
         return match tokio::task::spawn_blocking(move || hook(&method, &body)).await {
