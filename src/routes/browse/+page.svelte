@@ -29,6 +29,7 @@
   import type { RenderCardResponse } from "@generated/klaus_pb";
   import { onMount } from "svelte";
   import { cardBodyClass, cardFrameSrc, night, postToCard, renderCard } from "$lib/card";
+  import { keyIsTaken } from "$lib/keys";
   import Sidebar from "./Sidebar.svelte";
   import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
   import Columns3Icon from "@lucide/svelte/icons/columns-3";
@@ -239,6 +240,7 @@
   }
 
   function onTableKey(event: KeyboardEvent) {
+    if (keyIsTaken(event)) return;
     if (event.key === "ArrowDown") move(1);
     else if (event.key === "ArrowUp") move(-1);
     else return;
@@ -314,11 +316,12 @@
       }
     };
     const onKeydown = (event: KeyboardEvent) => {
+      if (keyIsTaken(event)) return;
       const mod = event.ctrlKey || event.metaKey;
       if (mod && event.shiftKey && event.key.toLowerCase() === "p") {
         event.preventDefault();
         openPreview();
-      } else if (event.key === "Escape" && !document.querySelector('[role="dialog"], [role="menu"]')) {
+      } else if (event.key === "Escape") {
         location.href = "/";
       }
     };
