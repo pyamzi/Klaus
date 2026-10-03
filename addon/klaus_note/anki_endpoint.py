@@ -321,7 +321,7 @@ def _a_klaus_current_page(col, p, ctx):
 
     current = viewer_context.current()
     if current is None or current.page_count <= 0 or current.page_index >= current.page_count:
-        return {"content": [{"type": "text", "text": "No active page. Open a PDF in Klaus."}]}
+        return {"content": [{"type": "text", "text": "No active page. Open a PDF in KlausNote."}]}
     return _page_content(replace(current), ctx, p.get("include_image", True))
 
 

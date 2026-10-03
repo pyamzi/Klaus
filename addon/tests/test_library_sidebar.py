@@ -314,7 +314,7 @@ try:
           _box is not None and _box.windowModality() == QtCore.Qt.WindowModality.WindowModal and _removed == [])
     check("...in these words",
           _box is not None and _box.text() == "“04-L-Intro to CBC” is no longer in your Library folder. "
-          "Remove it from Klaus too?\n\nThis also removes its marks and its card tag.", _box and _box.text())
+          "Remove it from KlausNote too?\n\nThis also removes its marks and its card tag.", _box and _box.text())
     check("...with No the default", _box is not None and _box.defaultButton() is _box.button(_No))
     check("No leaves everything alone",
           _answer(_box, _No) and _removed == [] and _ph5.load_missing(_uf5) == {"Intro_to_CBC"}

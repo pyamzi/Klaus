@@ -61,8 +61,8 @@ def test_connection(interpreter, script, discovery):
         if not all(isinstance(name, str) for name in names) or "current_page" not in names:
             raise ValueError()
     except (KeyError, TypeError, ValueError):
-        return failed("The bridge returned an unexpected response. Update Klaus, restart Anki and copy the configuration again.")
-    return {"ok": True, "tool_count": len(names), "message": f"Connected to Klaus. {len(names)} tools available."}
+        return failed("The bridge returned an unexpected response. Update KlausNote, restart Anki and copy the configuration again.")
+    return {"ok": True, "tool_count": len(names), "message": f"Connected to KlausNote. {len(names)} tools available."}
 
 
 def external_python():

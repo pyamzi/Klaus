@@ -222,14 +222,14 @@ removed. Use the external MCP client setup below.
   lifts further in dark mode, matching how the built-in presets
   behave). An invalid value falls back to the default rather than
   blanking the accent.
-- **klausbook_design**: the master switch for the KlausBook design
+- **klausbook_design**: the master switch for the KlausNote design
   layer — the restyled toolbar and bottom bars, chrome-matched top
   bar, custom backgrounds, frosted panels, the studied-line weld,
   dashboard widget editing, and the harmonized Add Cards, Browse,
   Stats and reviewer-bar chrome (Browse keeps Anki's layout and
   density; the reviewer's scheduling colours and the cards themselves
   are never touched). **Default `false`: Klaus ships as tools
-  inside a STOCK Anki**, and the KlausBook look is the opt-in — an
+  inside a STOCK Anki**, and the KlausNote look is the opt-in — an
   existing profile that had the design reverts to Anki's native look
   after updating until this is switched on (nothing is lost: every
   background/accent setting stays stored and comes back with the
@@ -246,7 +246,7 @@ removed. Use the external MCP client setup below.
   ground, with the Klaus panels on it whenever the design is on),
   `"color"` (gradient spheres — there is no flat-colour mode), or
   `"image"`. The Preferences rows below it only appear for the mode
-  that is actually selected (and only while the KlausBook design is
+  that is actually selected (and only while the KlausNote design is
   on); a chosen image can be removed again from its caption's
   **Remove** link. Sets the background of Anki's deck and
   overview screens; the panel family itself follows `klausbook_design`

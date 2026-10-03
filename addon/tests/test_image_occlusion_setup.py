@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.join(ROOT, ".claude/skills/klaus-test/scripts"))
 from anki_stubs import _Dummy, _permissive_module, check, install, report, section  # noqa: E402
 
 FIX = os.path.join(ROOT, "tests", "fixtures", "io")
-CONFLICT_TIP = ("Image Occlusion is now built into Klaus. Disable the separate Image "
+CONFLICT_TIP = ("Image Occlusion is now built into KlausNote. Disable the separate Image "
                 "Occlusion Enhanced add-on and restart Anki.")
 
 install()

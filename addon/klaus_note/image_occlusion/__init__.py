@@ -11,7 +11,7 @@ from aqt.utils import tooltip
 
 CONFLICT_ADDON = "1374772155"
 CONFLICT_TOOLTIP = (
-    "Image Occlusion is now built into Klaus. Disable the separate Image "
+    "Image Occlusion is now built into KlausNote. Disable the separate Image "
     "Occlusion Enhanced add-on and restart Anki."
 )
 

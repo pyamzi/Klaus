@@ -71,7 +71,7 @@ def first_run_check() -> None:
     ]
     body_lines.append(LOCAL_MODELS_COPY)
 
-    msg = _themed_message_box(mw, "Welcome to Klaus", QMessageBox.Icon.Information)
+    msg = _themed_message_box(mw, "Welcome to KlausNote", QMessageBox.Icon.Information)
     msg.setText("\n".join(body_lines))
     manage_btn = msg.addButton(
         "KlausNote Preferences", QMessageBox.ButtonRole.ActionRole

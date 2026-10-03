@@ -46,7 +46,7 @@ check("never", E(1000, None, 0, False, False) == ("never", "Not synced with Anki
 check("never (0)", E(1000, 0, 0, False, False)[0] == "never")
 check("2 failures stay quiet", E(1240, 1000, 2, False, False)[0] == "synced")
 check("3 failures: failed", E(1240, 1000, 3, False, False) ==
-      ("failed", "Couldn't sync with AnkiWeb. Klaus keeps retrying; click to try now."))
+      ("failed", "Couldn't sync with AnkiWeb. KlausNote keeps retrying; click to try now."))
 check("full pending beats failures", E(1240, 1000, 5, True, False) ==
       ("full", "AnkiWeb needs a full sync. Click to choose whether to upload or download."))
 check("running beats everything", E(1240, 1000, 5, True, True) == ("syncing", "Syncing with AnkiWeb…"))
@@ -285,7 +285,7 @@ for i in range(3):
         check("2 failures: still quiet", not A.entry_state()["red"])
 check("3 failures: red retry",
       A.entry_state() == {"visible": True, "state": "failed",
-                          "tip": "Couldn't sync with AnkiWeb. Klaus keeps retrying; click to try now.", "red": True},
+                          "tip": "Couldn't sync with AnkiWeb. KlausNote keeps retrying; click to try now.", "red": True},
       repr(A.entry_state()))
 check("still no dialog", shown == [])
 
