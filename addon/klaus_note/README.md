@@ -40,8 +40,8 @@ and [endpoint](anki_endpoint.py).
 
 ## Local model setup
 
-Open **Tools → KlausNote Preferences… → Local models** (the toolbar star
-also opens Preferences). The initial endpoint is `http://127.0.0.1:11434`
+Open **Tools → KlausNote Preferences… → Local models** (the hand-drawn k at
+the left of the toolbar also opens Preferences). The initial endpoint is `http://127.0.0.1:11434`
 and embedding model is `nomic-embed-text`.
 
 1. Use **Install/Start** to authorize installation or start a local Ollama
