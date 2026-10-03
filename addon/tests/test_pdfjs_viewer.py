@@ -3189,4 +3189,13 @@ check("a card is exactly its box: border-box inline, since #root * (content-box)
 check("__ADDON__ still appears exactly five times",
       _H7.count("__ADDON__") == 5)
 
+section("pdf.js never compiles font glyphs with eval")
+# pdf.js 3.11.174 (vendored) builds glyph path functions with new Function()
+# unless isEvalSupported is false; a crafted Type1 font turns that into
+# script execution in a page that can post bridge messages (CVE-2024-4367,
+# fixed upstream in 4.2.67). Anki serves this page with no script-src CSP.
+_GD = _H7.split("pdfjsLib.getDocument({", 1)[-1].split("});", 1)[0]
+check("every getDocument call passes isEvalSupported: false",
+      _H7.count("pdfjsLib.getDocument(") == 1 and "isEvalSupported: false," in _GD)
+
 raise SystemExit(report())

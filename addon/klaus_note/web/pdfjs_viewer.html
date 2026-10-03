@@ -644,6 +644,9 @@ async function openDocument(gen, length, first) {
     disableAutoFetch: true,
     disableStream: true,
     rangeChunkSize: 262144,
+    // No new Function() for font glyphs: with eval on, a crafted PDF font
+    // runs script in this page (CVE-2024-4367, pdf.js < 4.2.67).
+    isEvalSupported: false,
   });
   state.transport = transport;
   state.task = task;
