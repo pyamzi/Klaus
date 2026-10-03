@@ -2,7 +2,7 @@
 
 > Domain superseded by ADR-0008: klaus.ink is now klaus.so (app.klaus.so for the Klaus account, note.klaus.so for the web app).
 
-What the Klaus desktop app expects from klaus.ink (ADR-0007). The app's side is `crates/bridge/src/account.rs` (sign-in) and `crates/bridge/src/sync.rs` (sync, `auto_sync_tick`, the one `should_auto_sync` rule for open, tick and quit) and is tested against a fake of this contract in `crates/bridge/tests/bridge.rs`.
+What the Klaus desktop app expects from klaus.ink (ADR-0007). The app's side is in `crates/bridge` (`account_*`, `sync`, `auto_sync_tick`) and is tested against a fake of this contract in `crates/bridge/tests/bridge.rs`.
 
 ## Sign-in: OAuth 2.0 authorization code with PKCE (RFC 6749, RFC 7636, RFC 8252)
 

@@ -38,7 +38,7 @@ fn main() {
             let sync = app.state::<Arc<Bridge>>().inner().clone();
             sync.sync_in_background();
             sync.start_auto_sync();
-            println!("Klaus bridge listening on {addr}");
+            println!("KlausNote bridge listening on {addr}");
 
             let base: Url = format!("http://{addr}/").parse()?;
             app.manage(base.clone());
@@ -52,15 +52,15 @@ fn main() {
             url.set_query(Some(&format!("{query}t={token}")));
             // Lets a dev browser drive the same pages; never in release builds.
             #[cfg(debug_assertions)]
-            println!("Klaus dev URL: {url}");
+            println!("KlausNote dev URL: {url}");
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-                .title("Klaus")
+                .title("KlausNote")
                 .inner_size(1100.0, 750.0)
                 .build()?;
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Klaus");
+        .expect("error while building KlausNote");
 
     let synced_on_close = Arc::new(AtomicBool::new(false));
     app.run(move |app, event| match event {
@@ -69,12 +69,13 @@ fn main() {
         // the next sync rather than asked for while quitting.
         RunEvent::ExitRequested { api, .. } => {
             let bridge = app.state::<Arc<Bridge>>().inner().clone();
-            if !bridge.should_auto_sync() || synced_on_close.swap(true, Ordering::SeqCst) {
+            let account = bridge.sync_account();
+            if account.email.is_empty() || !account.auto_sync || synced_on_close.swap(true, Ordering::SeqCst) {
                 return;
             }
             api.prevent_exit();
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_title("Klaus — Syncing…");
+                let _ = window.set_title("KlausNote — Syncing…");
             }
             let app = app.clone();
             std::thread::spawn(move || {

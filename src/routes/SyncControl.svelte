@@ -9,10 +9,10 @@
   import { Empty, String as PbString } from "@generated/anki/generic_pb";
   import { FullSyncRequest, SyncAccount, SyncOutcome, SyncOutcome_State as State } from "@generated/klaus_pb";
   import { postProto } from "@generated/post";
-  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-  import CloudAlertIcon from "@lucide/svelte/icons/cloud-alert";
-  import CloudCheckIcon from "@lucide/svelte/icons/cloud-check";
-  import UserIcon from "@lucide/svelte/icons/circle-user";
+  import { IconRefresh as RefreshCwIcon } from "@tabler/icons-svelte";
+  import { IconCloudExclamation as CloudAlertIcon } from "@tabler/icons-svelte";
+  import { IconCloudCheck as CloudCheckIcon } from "@tabler/icons-svelte";
+  import { IconUserCircle as UserIcon } from "@tabler/icons-svelte";
   import { onMount } from "svelte";
   import { toast } from "svelte-sonner";
   import { Button } from "$lib/components/ui/button";
@@ -61,7 +61,7 @@
     if (result.error) {
       if (result.errorKind === BackendError_Kind.SYNC_AUTH_ERROR) {
         loadAccount();
-        toast.error("Your Klaus Account sign-in has expired. Sign in again to keep syncing.");
+        toast.error("Your Klaus account sign-in has expired. Sign in again to keep syncing.");
       } else if (manual) {
         toast.error(result.error);
       }
@@ -129,10 +129,10 @@
   }
   const fullText = $derived(
     full?.required === Required.FULL_DOWNLOAD
-      ? "This device's collection has no cards. Download your collection from your Klaus Account?"
+      ? "This device's collection has no cards. Download your collection from your Klaus account?"
       : full?.required === Required.FULL_UPLOAD
-        ? "Your Klaus Account's collection has no cards. Replace it with this device's collection?"
-        : "There is a conflict between decks on this device and your Klaus Account. You must choose which version to keep:",
+        ? "Your Klaus account's collection has no cards. Replace it with this device's collection?"
+        : "There is a conflict between decks on this device and your Klaus account. You must choose which version to keep:",
   );
 
   // Browser sign-in: klaus.ink signs the user in, then sends them back to Klaus.
@@ -213,7 +213,7 @@
     <DropdownMenu.Root>
       <DropdownMenu.Trigger>
         {#snippet child({ props })}
-          <Button {...props} variant="ghost" size="icon" aria-label="Klaus Account"><UserIcon /></Button>
+          <Button {...props} variant="ghost" size="icon" aria-label="Klaus account"><UserIcon /></Button>
         {/snippet}
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="end" class="w-64">
@@ -245,7 +245,7 @@
     <Dialog.Header>
       <Dialog.Title>Finish signing in in your browser</Dialog.Title>
       <Dialog.Description>
-        Sign in to your Klaus Account on klaus.ink. Klaus will pick it up as soon as you're done.
+        Sign in to your Klaus account on klaus.ink. KlausNote will pick it up as soon as you're done.
       </Dialog.Description>
     </Dialog.Header>
     <p class="text-sm text-muted-foreground">
@@ -270,15 +270,15 @@
       {/if}
     </Dialog.Header>
     {#if fullRunning}
-      <p class="text-sm text-muted-foreground">Klaus can't be used until this finishes.</p>
+      <p class="text-sm text-muted-foreground">KlausNote can't be used until this finishes.</p>
     {:else if full?.required === Required.FULL_SYNC}
       <ul class="flex list-disc flex-col gap-2 pl-5 text-sm">
         <li>
-          Select <strong>Download</strong> to replace decks here with your Klaus Account's version. You will lose any changes
+          Select <strong>Download</strong> to replace decks here with your Klaus account's version. You will lose any changes
           you made on this device since your last sync.
         </li>
         <li>
-          Select <strong>Upload</strong> to overwrite your Klaus Account's version with decks from this device, and delete
+          Select <strong>Upload</strong> to overwrite your Klaus account's version with decks from this device, and delete
           any changes made on your other devices.
         </li>
       </ul>
