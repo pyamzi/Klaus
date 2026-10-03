@@ -28,6 +28,7 @@
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Field from "$lib/components/ui/field";
   import { Input } from "$lib/components/ui/input";
+  import { nightHash } from "$lib/theme";
   import * as Select from "$lib/components/ui/select";
   import * as Table from "$lib/components/ui/table";
   import DeckRows, { type DeckAction } from "./DeckRows.svelte";
@@ -47,8 +48,7 @@
 
   // Anki's own editor; it adds the note itself through the bridge.
   function addNote() {
-    const night = matchMedia("(prefers-color-scheme: dark)").matches ? "#night" : "";
-    location.href = `/editor/?mode=add${night}`;
+    location.href = `/editor/?mode=add${nightHash()}`;
   }
 
   // Klaus's shell shows a file picker, then opens Anki's import page.

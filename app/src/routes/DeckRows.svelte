@@ -10,12 +10,12 @@
   import { Button } from "$lib/components/ui/button";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Table from "$lib/components/ui/table";
+  import { nightHash } from "$lib/theme";
   import DeckRows from "./DeckRows.svelte";
 
   let { decks, onaction }: { decks: DeckTreeNode[]; onaction: (action: DeckAction, deck: DeckTreeNode) => void } =
     $props();
-  // Anki pages learn dark mode from the URL, as Anki tells them.
-  const night = matchMedia("(prefers-color-scheme: dark)").matches ? "#night" : "";
+  const night = nightHash();
 </script>
 
 {#each decks as deck (deck.deckId)}
