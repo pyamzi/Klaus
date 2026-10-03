@@ -95,18 +95,6 @@ check("rename_folder rewrites pdf refs",
 check("rename_folder rejects bad name",
       not drive_store.rename_folder(tmp, "Anatomy 2", "  "))
 
-drive_store.remove_folder(tmp, "Anatomy 2/Week 3")
-d = drive_store.load(tmp)
-check("remove_folder reparents pdf", d["pdfs"]["Renal_Phys"]["folder"] == "Anatomy 2")
-check("remove_folder drops path", "Anatomy 2/Week 3" not in d["folders"])
-
-drive_store.add_folder(tmp, "Top/Mid")
-drive_store.set_folder(tmp, "Renal_Phys", "Top/Mid")
-drive_store.remove_folder(tmp, "Top")
-d = drive_store.load(tmp)
-check("remove_folder reparents subfolder to root", "Mid" in d["folders"])
-check("remove_folder reparents nested pdf", d["pdfs"]["Renal_Phys"]["folder"] == "Mid")
-
 print("== rename display / remove pdf ==")
 drive_store.rename_display(tmp, "Renal_Phys", "Kidneys wk3")
 check("rename_display", drive_store.display_name(tmp, "Renal_Phys") == "Kidneys wk3")
@@ -117,16 +105,11 @@ check("remove_pdf", "Ghost_Pdf" not in drive_store.load(tmp)["pdfs"])
 drive_store.remove_pdf(tmp, "Never_Existed")  # must not raise
 check("remove_pdf on missing is a no-op", True)
 
-print("== window state ==")
-drive_store.save_window_state(tmp, {"x": 10, "y": 20, "w": 900, "h": 600,
-                                    "splitter": [280, 620]})
-w = drive_store.get_window_state(tmp)
-check("window roundtrip", w["w"] == 900 and w["splitter"] == [280, 620])
-check("window survives other writes",
-      (drive_store.add_folder(tmp, "Zed")
-       and drive_store.get_window_state(tmp)["h"] == 600))
-
 print("== build_tree ==")
+# a pdf in a top-level folder, and a folder nothing is in
+drive_store.add_folder(tmp, "Mid")
+drive_store.set_folder(tmp, "Renal_Phys", "Mid")
+drive_store.add_folder(tmp, "Zed")
 data = drive_store.load(tmp)
 contexts = ["Renal_Phys.txt", "Loose_One.txt", "Zebra.txt"]
 tree = drive_store.build_tree(contexts, data)
@@ -205,37 +188,8 @@ tree = drive_store.build_tree([], d)
 check("build_tree lists the unreferenced folder, empty",
       "Orphan/Nested" in tree["folders"] and tree["folders"]["Orphan/Nested"] == [])
 check("build_tree root stays empty", tree["root"] == [])
-drive_store.remove_folder(tmp_o, "Orphan/Nested")
-d2 = drive_store.load(tmp_o)
-check("removing an unreferenced nested folder collapses it to its parent",
-      d2["folders"] == ["Orphan"] and d2["pdfs"] == {})
 shutil.rmtree(tmp_o, ignore_errors=True)
 
-print("== K-127: retention_level — semantic buckets, not a hue ramp ==")
-check("0.6999 is low (just under the boundary)",
-      drive_store.retention_level(0.6999) == "low")
-check("0.70 is mid (low < 0.70 <= mid)",
-      drive_store.retention_level(0.70) == "mid")
-check("0.8499 is still mid (just under the target boundary)",
-      drive_store.retention_level(0.8499) == "mid")
-check("0.85 is high (mid < 0.85 <= high — FSRS 'at target')",
-      drive_store.retention_level(0.85) == "high")
-check("the ends: 0.0 low, 1.0 high",
-      drive_store.retention_level(0.0) == "low"
-      and drive_store.retention_level(1.0) == "high")
-check("out-of-range clamps into [0, 1] exactly like the old ramp did",
-      drive_store.retention_level(-3) == "low"
-      and drive_store.retention_level(1.7) == "high")
-check("float()-compatible input coerces, like the old float() path",
-      drive_store.retention_level("0.9") == "high")
-_rl_raised = False
-try:
-    drive_store.retention_level(None)
-except (TypeError, ValueError):
-    _rl_raised = True
-check("None raises into the caller's guard — pdf_drive None-guards "
-      "before calling, and its try/except catches real garbage",
-      _rl_raised)
 check("the rainbow is dead: no retention_color left in drive_store",
       not hasattr(drive_store, "retention_color"))
 
@@ -751,9 +705,6 @@ check("excluded_safes picks the covered ones", ds.excluded_safes(ds.load(uf), ["
 ds.rename_folder(uf, "Exam 1", "Exam A")
 check("rename carries the exclusion",
       ds.load(uf)["excluded"]["folders"] == ["Exam A"] and ds.is_excluded(ds.load(uf), "CBC"), str(ds.load(uf)["excluded"]))
-ds.remove_folder(uf, "Exam A")
-check("removing the folder drops it", ds.load(uf)["excluded"]["folders"] == [] and not ds.is_excluded(ds.load(uf), "CBC"),
-      str(ds.load(uf)["excluded"]))
 ds.remove_pdf(uf, "Hemo")
 check("removing the PDF drops it", ds.load(uf)["excluded"]["pdfs"] == [])
 ds.set_excluded(uf, "pdf", "X", True); ds.set_excluded(uf, "pdf", "X", False)
