@@ -95,8 +95,13 @@
     if (running) return;
     if (!account.email) return signIn();
     if (needsChoice) return askFullSync(outcome);
-    await call("klausSync", new Empty(), Empty);
-    await poll();
+    try {
+      await call("klausSync", new Empty(), Empty, quiet);
+    } catch (err) {
+      toast.error("Couldn't start syncing", { description: (err as Error).message });
+      return;
+    }
+    await poll().catch(() => {});
   }
 
   async function watchMedia() {
@@ -170,14 +175,21 @@
   async function toggle(key: "autoSync" | "syncMedia", value: boolean) {
     try {
       await setProfileConfigJson({ key, valueJson: new TextEncoder().encode(JSON.stringify(value)) }, quiet);
-      await loadAccount();
     } catch (err) {
       toast.error("Couldn't change the sync setting", { description: (err as Error).message });
+      return;
     }
+    // Saved; a failed reload only leaves the menu showing the old value.
+    await loadAccount().catch(() => {});
   }
   async function signOut() {
-    await call("klausSyncSignOut", new Empty(), Empty);
-    await loadAccount();
+    try {
+      await call("klausSyncSignOut", new Empty(), Empty, quiet);
+    } catch (err) {
+      toast.error("Couldn't sign out", { description: (err as Error).message });
+      return;
+    }
+    await loadAccount().catch(() => {});
   }
 
   const statusText = $derived.by(() => {
