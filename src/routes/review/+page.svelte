@@ -6,9 +6,10 @@
   import { CardAnswer_Rating, type QueuedCards_QueuedCard } from "@generated/anki/scheduler_pb";
   import type { RenderCardResponse } from "@generated/klaus_pb";
   import { onMount } from "svelte";
-  import { cardBodyClass, cardFrameSrc, night, postToCard, renderCard as render } from "$lib/card";
+  import { toast } from "svelte-sonner";
+  import { cardBodyClass, cardFrameSrc, night, openCardLink, postToCard, renderCard as render } from "$lib/card";
+  import { IconArrowLeft as ArrowLeftIcon } from "@tabler/icons-svelte";
   import { keyIsTaken } from "$lib/keys";
-  import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
   import { Button } from "$lib/components/ui/button";
 
   const ratings = [CardAnswer_Rating.AGAIN, CardAnswer_Rating.HARD, CardAnswer_Rating.GOOD, CardAnswer_Rating.EASY];
@@ -23,10 +24,12 @@
   let shownAt = 0;
   // Card transitions run one at a time: reveal/grade are dropped while one is in
   // flight or queued (no double grades from key repeat), undo waits its turn.
+  // A failed transition shows a toast, and later ones still run.
   let last: Promise<void> = Promise.resolve();
   let pending = 0;
   let frameReady: Promise<void>;
   let pendingTyped: ((typed: string | null) => void) | undefined;
+  let destroyed = false;
 
   function bodyClass(card: QueuedCards_QueuedCard): string {
     return cardBodyClass(card.card?.templateIdx ?? 0);
@@ -34,8 +37,13 @@
 
   function exclusive(fn: () => Promise<void>): Promise<void> {
     pending++;
-    const run = last.then(fn).finally(() => pending--);
-    last = run.catch(() => {});
+    const run = last
+      .then(fn)
+      .catch((err: unknown) => {
+        toast.error("Review failed", { description: String(err) });
+      })
+      .finally(() => pending--);
+    last = run;
     return run;
   }
 
@@ -45,14 +53,16 @@
 
   // Call only inside exclusive().
   async function next() {
-    const queued = await getQueuedCards({ fetchLimit: 1, intradayLearningOnly: false });
+    const queued = await getQueuedCards({ fetchLimit: 1, intradayLearningOnly: false }, { alertOnError: false });
+    // Left via client-side navigation (Decks) while this was in flight.
+    if (destroyed) return;
     const card = queued.cards[0];
     if (!card) {
       current = undefined;
       location.href = `/congrats${night ? "#night" : ""}`;
       return;
     }
-    const nextLabels = (await describeNextStates(card.states!)).vals;
+    const nextLabels = (await describeNextStates(card.states!, { alertOnError: false })).vals;
     const nextRendered = await render(card.card!.id);
     await frameReady;
     [current, rendered, labels, side] = [card, nextRendered, nextLabels, "question"];
@@ -67,7 +77,11 @@
     exclusive(async () => {
       const card = current!;
       post({ ask: "typedAnswer" });
-      const typed = await new Promise<string | null>((resolve) => (pendingTyped = resolve));
+      // Card JS that throws or overrides getTypedAnswer never replies: carry on without.
+      const typed = await new Promise<string | null>((resolve) => {
+        pendingTyped = resolve;
+        setTimeout(() => resolve(null), 1000);
+      });
       pendingTyped = undefined;
       const answer = typed === null ? rendered!.answer : (await render(card.card!.id, typed)).answer;
       side = "answer";
@@ -80,14 +94,17 @@
     const card = current;
     const states = card.states!;
     exclusive(async () => {
-      await answerCard({
-        cardId: card.card!.id,
-        currentState: states.current,
-        newState: [states.again, states.hard, states.good, states.easy][ease - 1],
-        rating: ratings[ease - 1],
-        answeredAtMillis: BigInt(Date.now()),
-        millisecondsTaken: Date.now() - shownAt,
-      });
+      await answerCard(
+        {
+          cardId: card.card!.id,
+          currentState: states.current,
+          newState: [states.again, states.hard, states.good, states.easy][ease - 1],
+          rating: ratings[ease - 1],
+          answeredAtMillis: BigInt(Date.now()),
+          millisecondsTaken: Date.now() - shownAt,
+        },
+        { alertOnError: false },
+      );
       await next();
     });
   }
@@ -125,8 +142,9 @@
     frameReady = new Promise((resolve) => frame.addEventListener("load", () => resolve(), { once: true }));
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frame.contentWindow || !event.data?.klaus) return;
-      const { cmd, key, typedAnswer } = event.data;
+      const { cmd, key, typedAnswer, openLink } = event.data;
       if (typeof cmd === "string") onCommand(cmd);
+      if (openLink !== undefined) openCardLink(openLink);
       // Card JS can post these too, so only reveal/grade keys count from the frame.
       if (typeof key === "string" && [" ", "Enter", "1", "2", "3", "4"].includes(key)) onKey(key, false);
       if ("typedAnswer" in event.data) pendingTyped?.(typeof typedAnswer === "string" ? typedAnswer : null);
@@ -138,10 +156,11 @@
     addEventListener("keydown", onKeydown);
     const deck = BigInt(new URLSearchParams(location.search).get("deck") ?? "1");
     exclusive(async () => {
-      await setCurrentDeck({ did: deck });
+      await setCurrentDeck({ did: deck }, { alertOnError: false });
       await next();
     });
     return () => {
+      destroyed = true;
       removeEventListener("message", onMessage);
       removeEventListener("keydown", onKeydown);
     };

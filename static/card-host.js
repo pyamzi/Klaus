@@ -24,6 +24,19 @@
         if (ask === "typedAnswer") toParent({ typedAnswer: globalThis.getTypedAnswer() });
     });
 
+    // A link would navigate this frame away from the reviewer (and later cards
+    // would be posted to that page); Anki opens them in the system browser.
+    addEventListener(
+        "click",
+        (e) => {
+            const link = e.target instanceof Element ? e.target.closest("a[href]") : null;
+            if (!link || link.getAttribute("href").startsWith("#")) return;
+            e.preventDefault();
+            toParent({ openLink: link.href });
+        },
+        true,
+    );
+
     // Anki handles reviewer keys in Qt, globally; with focus inside this frame the
     // review screen wouldn't see them, so forward the reveal/grade keys (the same
     // power card JS has via pycmd("ans"/"easeN")). Undo and leaving are not

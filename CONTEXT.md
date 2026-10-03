@@ -1,6 +1,6 @@
-# Klaus
+# KlausNote
 
-Klaus is a study app: spaced-repetition Cards on an Anki Collection, plus Documents, Pages and Recordings that link to each other and to Cards.
+KlausNote is a study app: spaced-repetition Cards on an Anki Collection, plus Documents, Pages and Recordings that link to each other and to Cards.
 
 ## Language
 
@@ -21,15 +21,15 @@ _Avoid_: Flashcard (in code and docs), item
 ### Materials
 
 **Material**:
-Anything the user studies from in Klaus: a Page or a Document. Lives as a plain file in the user's library folder.
+Anything the user studies from in KlausNote: a Page or a Document. Lives as a plain file in the user's library folder.
 _Avoid_: Note, file, resource, item
 
 **Page**:
-A Markdown file with LaTeX math; the Wikipedia-style article of Klaus.
+A Markdown file with LaTeX math; the Wikipedia-style article of KlausNote.
 _Avoid_: Note, text note, article, markdown file
 
 **Document**:
-A PDF file, imported or created blank in Klaus. Its annotations and Transcripts live inside the PDF.
+A PDF file, imported or created blank in KlausNote. Its annotations and Transcripts live inside the PDF.
 _Avoid_: PDF (as a domain term), file, slides
 
 **PDF page**:
@@ -43,7 +43,7 @@ The span of a Material under one level-1 or level-2 heading; the unit that is li
 _Avoid_: Chunk, block, passage
 
 **Link**:
-A definite, user-accepted connection from a Material to a Section or Material, as in Wikipedia: a `[[…]]` in a Page, or a hidden link stored inside a Document. Matching headings only suggest Links; Klaus never inserts one on its own. Renaming a heading updates every Link to it.
+A definite, user-accepted connection from a Material to a Section or Material, as in Wikipedia: a `[[…]]` in a Page, or a hidden link stored inside a Document. Matching headings only suggest Links; KlausNote never inserts one on its own. Renaming a heading updates every Link to it.
 _Avoid_: Backlink, reference, relation
 
 **Unresolved Link**:
@@ -76,16 +76,42 @@ _Avoid_: Segment, snippet
 The text of a Clip, stored on its PDF page like speaker notes; or of a whole Recording made with no Material open, which becomes a Page.
 _Avoid_: Captions, notes
 
+### Screens
+
+**Home**:
+The first screen: the decks with their due counts, and the way into everything else.
+_Avoid_: Deck list, deck browser, main page, dashboard
+
+**Study**:
+The screen that shows one Card at a time from one deck and takes the answer; a Study Session is one sitting on it. "Review" is what Anki calls a Card's scheduling event, never this screen.
+_Avoid_: Review (as a screen), reviewer, study mode
+
+**Browser**:
+The table of Cards or Notes with search, columns and bulk actions, Anki's browser rebuilt in KlausNote.
+_Avoid_: Browse (as a noun), card list, search page
+
+**Sidebar**:
+The column of decks, Materials and tags on the left of the Browser (and the Library, when it exists) on desktop and web. Home has none: its navigation is the top bar's chips, as in the add-on.
+_Avoid_: Nav, drawer, side panel
+
+**Dashboard**:
+Home's main pane: the grid of widgets (Decks, Review Heatmap, later stats) a person arranges in Edit Widgets, the same screen as the add-on's deck screen.
+_Avoid_: Deck browser, widget area, home page
+
+**Command Palette**:
+The searchable list of every action, opened with ⌘K, each with its shortcut.
+_Avoid_: Quick actions, launcher, omnibar
+
 ### Products
 
-**Klaus**:
+**KlausNote**:
 This app. A standalone desktop product built on Anki's own engine.
-_Avoid_: KlausBook, Klaus App
+_Avoid_: Klaus Note, Klaus, KlausBook, Klaus App
 
-**Klaus Addon**:
-The sibling Anki add-on (`klausmate`) that runs inside Anki desktop and shares formats with Klaus.
-_Avoid_: KlausMate, the plugin
+**KlausNote for Anki**:
+The sibling Anki add-on (`klaus_note`) that runs inside Anki desktop and shares formats with KlausNote.
+_Avoid_: Klaus Addon, KlausMate, the plugin
 
-**Klaus Account**:
-The user's identity on klaus.ink, signed into from Klaus. Now the Klaus account at app.klaus.so, a shared OIDC provider (ADR-0008).
+**Klaus account**:
+The user's identity, signed into at app.klaus.so (ADR-0008) from KlausNote. The page app.klaus.so shows after sign-in is the account dashboard, not this app's Dashboard.
 _Avoid_: Klaus Plus, profile, login

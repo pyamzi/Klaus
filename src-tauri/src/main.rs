@@ -1,15 +1,15 @@
 // Prevents an extra console window on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 use anki_proto::generic;
 use klaus_bridge::frontend::{AskUserRequest, OpenFilePickerRequest, ShowMessageBoxRequest};
 use klaus_bridge::{new_token, serve, Bridge, Hook, Secrets, WebDirs};
 use prost::Message;
-use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind};
 
 fn main() {
     let app = tauri::Builder::default()
@@ -38,7 +38,7 @@ fn main() {
             let sync = app.state::<Arc<Bridge>>().inner().clone();
             sync.sync_in_background();
             sync.start_auto_sync();
-            println!("Klaus bridge listening on {addr}");
+            println!("KlausNote bridge listening on {addr}");
 
             let base: Url = format!("http://{addr}/").parse()?;
             app.manage(base.clone());
@@ -52,38 +52,38 @@ fn main() {
             url.set_query(Some(&format!("{query}t={token}")));
             // Lets a dev browser drive the same pages; never in release builds.
             #[cfg(debug_assertions)]
-            println!("Klaus dev URL: {url}");
+            println!("KlausNote dev URL: {url}");
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-                .title("Klaus")
+                .title("KlausNote")
                 .inner_size(1100.0, 750.0)
                 .build()?;
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Klaus");
+        .expect("error while building KlausNote");
 
-    let synced_on_close = Arc::new(AtomicBool::new(false));
+    // Anki syncs on close (autoSync); Klaus holds the window and the exit until the
+    // sync and its media sync are done. A full sync needs a choice, so it's left
+    // for the next sync rather than asked for while quitting.
+    let quit = Arc::new(AtomicU8::new(QUIT_IDLE));
     app.run(move |app, event| match event {
-        // Anki syncs on close (autoSync); Klaus holds the exit until the sync and
-        // its media sync are done. A full sync needs a choice, so it's left for
-        // the next sync rather than asked for while quitting.
-        RunEvent::ExitRequested { api, .. } => {
-            let bridge = app.state::<Arc<Bridge>>().inner().clone();
-            let account = bridge.sync_account();
-            if account.email.is_empty() || !account.auto_sync || synced_on_close.swap(true, Ordering::SeqCst) {
-                return;
+        // Closing the window quits; keep it up (titled "Syncing…") while syncing,
+        // or the app would sync invisibly and hold the Collection from a relaunch.
+        RunEvent::WindowEvent { event: WindowEvent::CloseRequested { api, .. }, .. } => {
+            if quit.load(Ordering::SeqCst) != QUIT_DONE && start_quit(app, &quit) {
+                api.prevent_close();
             }
-            api.prevent_exit();
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_title("Klaus — Syncing…");
-            }
-            let app = app.clone();
-            std::thread::spawn(move || {
-                // ponytail: 2 minutes for the whole quit; a huge first media upload resumes next time.
-                bridge.sync_before_quit(std::time::Duration::from_secs(120));
-                app.exit(0);
-            });
         }
+        RunEvent::ExitRequested { api, .. } => match quit.load(Ordering::SeqCst) {
+            QUIT_DONE => {}
+            // A second Cmd+Q waits for the sync already under way.
+            QUIT_SYNCING => api.prevent_exit(),
+            _ => {
+                if start_quit(app, &quit) {
+                    api.prevent_exit();
+                }
+            }
+        },
         RunEvent::Exit => {
             let _ = app.state::<Arc<Bridge>>().close_collection();
         }
@@ -91,8 +91,37 @@ fn main() {
     });
 }
 
+const QUIT_IDLE: u8 = 0;
+const QUIT_SYNCING: u8 = 1;
+const QUIT_DONE: u8 = 2;
+
+/// Starts the sync on quit, if one is due; false means quit now.
+fn start_quit(app: &AppHandle, quit: &Arc<AtomicU8>) -> bool {
+    let bridge = app.state::<Arc<Bridge>>().inner().clone();
+    if !bridge.should_auto_sync() {
+        quit.store(QUIT_DONE, Ordering::SeqCst);
+        return false;
+    }
+    if quit.compare_exchange(QUIT_IDLE, QUIT_SYNCING, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return true;
+    }
+    bridge.begin_quit();
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_title("KlausNote — Syncing…");
+    }
+    let (app, quit) = (app.clone(), Arc::clone(quit));
+    std::thread::spawn(move || {
+        // ponytail: 2 minutes for the whole quit; a huge first media upload resumes next time.
+        bridge.sync_before_quit(std::time::Duration::from_secs(120));
+        quit.store(QUIT_DONE, Ordering::SeqCst);
+        app.exit(0);
+    });
+    true
+}
+
 /// The Klaus Account sync key, in the macOS Keychain (Windows Credential Manager,
-/// Linux keyutils) rather than a file.
+/// Linux Secret Service, cached in keyutils) rather than a file. keyutils alone
+/// would lose it on reboot.
 struct Keychain;
 
 const KEYCHAIN_SERVICE: &str = "ink.klaus.desktop";
@@ -119,7 +148,7 @@ impl Secrets for Keychain {
 fn on_hook(app: &AppHandle, method: &str, input: &[u8]) -> Option<Vec<u8>> {
     match method {
         "klausImportPackage" => {
-            let picked = app.dialog().file().add_filter("Anki deck package", &["apkg"]).blocking_pick_file();
+            let picked = file_dialog(app).add_filter("Anki deck package", &["apkg"]).blocking_pick_file();
             if let Some(path) = picked.and_then(|p| p.into_path().ok()) {
                 // Same URL shape as Anki's import dialog: <page>/<quoted path>.
                 navigate(app, &format!("import-anki-package/{}", quote(&path.to_string_lossy())));
@@ -152,7 +181,7 @@ fn on_hook(app: &AppHandle, method: &str, input: &[u8]) -> Option<Vec<u8>> {
                 2 => MessageDialogKind::Error,
                 _ => MessageDialogKind::Info,
             };
-            let mut dialog = app.dialog().message(req.text).kind(kind);
+            let mut dialog = message_dialog(app, req.text).kind(kind);
             if let Some(title) = req.title {
                 dialog = dialog.title(title);
             }
@@ -162,13 +191,12 @@ fn on_hook(app: &AppHandle, method: &str, input: &[u8]) -> Option<Vec<u8>> {
         "openFilePicker" => {
             let req = OpenFilePickerRequest::decode(input).ok()?;
             let extensions: Vec<&str> = req.extensions.iter().map(String::as_str).collect();
-            let picked = app
-                .dialog()
-                .file()
-                .set_title(req.title)
-                .add_filter(req.filter_description, &extensions)
-                .blocking_pick_file()
-                .and_then(|p| p.into_path().ok());
+            let mut picker = file_dialog(app).set_title(req.title);
+            // An empty filter matches nothing on GTK/macOS.
+            if !extensions.is_empty() {
+                picker = picker.add_filter(req.filter_description, &extensions);
+            }
+            let picked = picker.blocking_pick_file().and_then(|p| p.into_path().ok());
             let val = picked.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
             Some(generic::String { val }.encode_to_vec())
         }
@@ -211,8 +239,26 @@ fn paste(app: &AppHandle) {
 #[cfg(not(target_os = "macos"))]
 fn paste(_app: &AppHandle) {}
 
+// Native dialogs are parented to the main window so they stay in front of it
+// while the page waits on its synchronous XHR (static/native-dialogs.js).
+fn file_dialog(app: &AppHandle) -> FileDialogBuilder<tauri::Wry> {
+    let dialog = app.dialog().file();
+    match app.get_webview_window("main") {
+        Some(window) => dialog.set_parent(&window),
+        None => dialog,
+    }
+}
+
+fn message_dialog(app: &AppHandle, text: impl Into<String>) -> MessageDialogBuilder<tauri::Wry> {
+    let dialog = app.dialog().message(text);
+    match app.get_webview_window("main") {
+        Some(window) => dialog.parent(&window),
+        None => dialog,
+    }
+}
+
 fn confirm(app: &AppHandle, text: &str, title: Option<&str>, kind: MessageDialogKind) -> bool {
-    let mut dialog = app.dialog().message(text).kind(kind).buttons(MessageDialogButtons::OkCancel);
+    let mut dialog = message_dialog(app, text).kind(kind).buttons(MessageDialogButtons::OkCancel);
     if let Some(title) = title {
         dialog = dialog.title(title);
     }
