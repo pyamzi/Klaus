@@ -1,0 +1,16 @@
+# Klaus lives on klaus.so, and signs in through a shared OIDC provider
+
+klaus.ink is retired. klaus.so is the marketing site; klausnote.com and klaus.ink redirect to it. The Klaus account lives at app.klaus.so, which after sign-in shows a basic dashboard linking to every Klaus app. The products live on their own subdomains: KlausNote's web app at note.klaus.so and Klaus Agenda at agenda.klaus.so. There is no `auth.` subdomain. Wherever ADR-0003, ADR-0005, ADR-0006, ADR-0007, `docs/klaus-ink-sync.md` and the Klaus Account entry in `CONTEXT.md` say klaus.ink, read the klaus.so host above. Those decisions otherwise stand. Names: the app is KlausNote, the add-on KlausNote for Anki, and the shared sign-in the Klaus account.
+
+The Klaus account is a single OpenID Connect provider at app.klaus.so, built on Better Auth and open source (AGPL) in the `klaus-auth` repository. It is shared by every Klaus product: each product (KlausNote desktop, KlausNote web, Klaus Agenda, later ones) is one OIDC client, and a user is identified everywhere by the same `sub`. Klaus finds the authorize and token endpoints through the provider's `/.well-known/openid-configuration` instead of hard-coding `/oauth/authorize` and `/oauth/token`.
+
+Sign-in and sync credentials are separate steps. The OIDC provider only proves who the user is; it does not issue the sync key. The KlausNote server (the sync service at note.klaus.so, or a self-hosted one) validates the provider's ID token and issues the long-lived sync key, the user's email and the `sync_url` that `docs/klaus-ink-sync.md` expects today. That exchange is KlausNote's own endpoint, so a self-hosted KlausNote works with any standard OIDC provider (or none, in single-user mode): the provider never has to return Klaus-specific fields or long-lived tokens. The sync key's lifetime is KlausNote's policy, independent of the provider's token expiry: it lasts until revoked, and signing out or revoking it makes the sync server answer `403` as now.
+
+Klaus stays AGPL with no proprietary code linked into it, because it embeds Anki's AGPL rslib. What only the hosted service has (billing, operations) runs as separate services that talk to Klaus over HTTP. The self-hosted build is the same image, run from one Docker Compose file: the server bridge with the web UI, rslib's sync server with the sync-key exchange, SQLite or Postgres, and an optional OIDC provider.
+
+## Consequences
+
+- To change in the bridge: `DEFAULT_ACCOUNT_URL` and `DEFAULT_SYNC_URL` (`crates/bridge/src/lib.rs`), endpoint discovery in place of the fixed `/oauth/*` paths, an OIDC token exchange followed by the sync-key exchange in place of reading `email`/`sync_url` from the token response (`finish_sign_in`), the "Open klaus.ink" wording in `src/routes/SyncControl.svelte`, and the fake server in `crates/bridge/tests/bridge.rs`. A server-URL setting lets a self-hosted user point Klaus at their own server.
+- To add on the server: the sync-key exchange endpoint (validated ID token in; sync key, email and `sync_url` out) and revocation.
+- `docs/klaus-ink-sync.md` keeps its name until that change lands, then becomes the klaus.so sync contract.
+- Billing is undecided; the account is identity only for now.
