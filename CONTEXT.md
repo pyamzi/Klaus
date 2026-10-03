@@ -25,11 +25,11 @@ Anything the user studies from in KlausNote: a Page or a Document. Lives as a pl
 _Avoid_: Note, file, resource, item
 
 **Page**:
-A Markdown file with LaTeX math; the Wikipedia-style article of Klaus.
+A Markdown file with LaTeX math; the Wikipedia-style article of KlausNote.
 _Avoid_: Note, text note, article, markdown file
 
 **Document**:
-A PDF file, imported or created blank in Klaus. Its annotations and Transcripts live inside the PDF.
+A PDF file, imported or created blank in KlausNote. Its annotations and Transcripts live inside the PDF.
 _Avoid_: PDF (as a domain term), file, slides
 
 **PDF page**:
@@ -87,7 +87,7 @@ The screen that shows one Card at a time from one deck and takes the answer; a S
 _Avoid_: Review (as a screen), reviewer, study mode
 
 **Browser**:
-The table of Cards or Notes with search, columns and bulk actions, Anki's browser rebuilt in Klaus.
+The table of Cards or Notes with search, columns and bulk actions, Anki's browser rebuilt in KlausNote.
 _Avoid_: Browse (as a noun), card list, search page
 
 **Sidebar**:
@@ -113,5 +113,5 @@ The sibling Anki add-on (`klaus_note`) that runs inside Anki desktop and shares 
 _Avoid_: Klaus Addon, KlausMate, the plugin
 
 **Klaus account**:
-The user's identity on klaus.ink, signed into from KlausNote.
+The user's identity, signed into at app.klaus.so (ADR-0008) from KlausNote. The page app.klaus.so shows after sign-in is the account dashboard, not this app's Dashboard.
 _Avoid_: Klaus Plus, profile, login
