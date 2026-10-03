@@ -121,7 +121,8 @@ fn start_quit(app: &AppHandle, quit: &Arc<AtomicU8>) -> bool {
 }
 
 /// The Klaus Account sync key, in the macOS Keychain (Windows Credential Manager,
-/// Linux keyutils) rather than a file.
+/// Linux Secret Service, cached in keyutils) rather than a file. keyutils alone
+/// would lose it on reboot.
 struct Keychain;
 
 const KEYCHAIN_SERVICE: &str = "ink.klaus.desktop";
