@@ -1,5 +1,5 @@
 """Toggling one side pane leaves the opposite one at its width
-(klausmate/pane_keep.py), on real Qt widgets shaped like the Add tab
+(klaus_note/pane_keep.py), on real Qt widgets shaped like the Add tab
 (tree | reader | editor in one splitter) and Browse (a sidebar dock
 beside a table | editor splitter).
 
@@ -32,7 +32,7 @@ shim.__getattr__ = _ga
 sys.modules["aqt.qt"] = shim
 
 sys.path.insert(0, ".")
-from klausmate import pane_keep  # noqa: E402
+from klaus_note import pane_keep  # noqa: E402
 
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 Qt = QtCore.Qt

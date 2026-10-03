@@ -9,7 +9,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section
 
 install()
-bg = importlib.import_module("klausmate.background")
+bg = importlib.import_module("klaus_note.background")
 
 section("resolve: defaults and validation")
 d = bg.resolve({})
@@ -34,9 +34,9 @@ check("non-image extensions refused",
       bg.safe_image_name("evil.py") == "" and bg.safe_image_name("x.exe") == "")
 check("dotfiles refused", bg.safe_image_name(".hidden.png") == "")
 check("url built under the addon's web export",
-      bg.image_url("klausmate", "wall.jpg")
-      == "/_addons/klausmate/user_files/backgrounds/wall.jpg")
-check("no url without a valid image", bg.image_url("klausmate", "x.py") == "")
+      bg.image_url("klaus_note", "wall.jpg")
+      == "/_addons/klaus_note/user_files/backgrounds/wall.jpg")
+check("no url without a valid image", bg.image_url("klaus_note", "x.py") == "")
 
 section("main_css: Anki's own screens")
 check("theme mode paints no WALLPAPER — but the panel family still "
@@ -48,7 +48,7 @@ check("theme mode paints no WALLPAPER — but the panel family still "
 colour = bg.resolve({"background_mode": "color", "background_color": "#123456"})
 check("colour mode fills html/body", "#123456" in bg.main_css(colour))
 img = bg.resolve({"background_mode": "image", "background_image": "w.jpg"})
-url = bg.image_url("klausmate", "w.jpg")
+url = bg.image_url("klaus_note", "w.jpg")
 css = bg.main_css(img, url)
 check("image mode references the export url", url in css)
 check("image mode is fixed + covering",
@@ -178,7 +178,7 @@ check("theme mode still emits NOTHING, so a default profile's cards "
       "are untouched — the reset ships only with a real wallpaper",
       bg.reviewer_css(bg.resolve({}, prefix="reviewer_background")) == "")
 
-_theme_mod = importlib.import_module("klausmate.theme")
+_theme_mod = importlib.import_module("klaus_note.theme")
 check("both grounds ARE the bars' chrome tokens, by reference — the "
       "window reads as one surface with its top and bottom bars "
       "(Pouya: night's #1E2225 drew a visible edge at both bar "
@@ -299,7 +299,7 @@ check("self-guarding, clamped drag math, drag-end bridge message "
       "drag to the upper-left sent target/x/y/size 'main'/25/25/100 "
       "and repainted the page's gradient inline)",
       "if(document.getElementById('klaus-grad-edit')){return;}" in _ed
-      and "klausmate:bggrad:" in _ed
+      and "klaus_note:bggrad:" in _ed
       and "clamp(" in _ed
       and "setPointerCapture" in _ed)
 check("each sphere's size grip is CLAMPED into the viewport along "
@@ -398,7 +398,7 @@ _study_image = bg.resolve(
      "reviewer_background_image": "study.jpg"},
     prefix="reviewer_background",
 )
-_study_url = bg.image_url("klausmate", "study.jpg")
+_study_url = bg.image_url("klaus_note", "study.jpg")
 _image_css = bg.reviewer_css(_study_image, _study_url)
 check("image mode references the export url, fixed + covering",
       _study_url in _image_css

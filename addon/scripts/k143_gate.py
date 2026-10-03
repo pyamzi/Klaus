@@ -22,27 +22,27 @@ import tempfile
 # Exact idents, from AUDIT.md's "Findings worth a card".
 CLOSING = [
     # 2. the gradient editor shipping armed on every deck screen
-    "klausmate/background.py::const::_GRAD_EDIT@261",
-    "klausmate/background.py::boolflip::bool@261:13@261",
+    "klaus_note/background.py::const::_GRAD_EDIT@261",
+    "klaus_note/background.py::boolflip::bool@261:13@261",
     # 3. the deck browser booting into jiggle/edit mode
-    "klausmate/dashboard.py::boolflip::bool@346:14@346",
+    "klaus_note/dashboard.py::boolflip::bool@346:14@346",
     # 4. a corrupt config silently HIDING a widget (documented rule)
-    "klausmate/dashboard.py::boolflip::bool@96:19@96",
+    "klaus_note/dashboard.py::boolflip::bool@96:19@96",
     # 5. setup idempotency: panel never registers, or re-registers
-    "klausmate/lecture_view.py::const::_setup_done@273",
-    "klausmate/lecture_view.py::boolflip::bool@273:14@273",
-    "klausmate/lecture_view.py::boolflip::bool@724:18@724",
+    "klaus_note/lecture_view.py::const::_setup_done@273",
+    "klaus_note/lecture_view.py::boolflip::bool@273:14@273",
+    "klaus_note/lecture_view.py::boolflip::bool@724:18@724",
     # 6. the open/width persistence layer, entirely unwatched
-    "klausmate/lecture_view.py::gut::_saved_state@348",
-    "klausmate/lecture_view.py::gut::_save_state@356",
+    "klaus_note/lecture_view.py::gut::_saved_state@348",
+    "klaus_note/lecture_view.py::gut::_save_state@356",
     # 7. the card-index path, whose pin is built FROM the constant
-    "klausmate/lecture_view.py::const::CARD_INDEX_SUBDIR@34",
-    "klausmate/lecture_view.py::const-loud::CARD_INDEX_SUBDIR@34",
+    "klaus_note/lecture_view.py::const::CARD_INDEX_SUBDIR@34",
+    "klaus_note/lecture_view.py::const-loud::CARD_INDEX_SUBDIR@34",
     # 8. the resolver's cache invalidation
-    "klausmate/lecture_view.py::gut::LectureResolver.invalidate@130",
+    "klaus_note/lecture_view.py::gut::LectureResolver.invalidate@130",
     # 9. save_notes reporting success on failure
-    "klausmate/pdf_notes.py::boolflip::bool@146:19@146",
-    "klausmate/pdf_notes.py::boolflip::bool@160:15@160",
+    "klaus_note/pdf_notes.py::boolflip::bool@146:19@146",
+    "klaus_note/pdf_notes.py::boolflip::bool@160:15@160",
 ]
 MODULES = "background,dashboard,lecture_view,pdf_notes"
 

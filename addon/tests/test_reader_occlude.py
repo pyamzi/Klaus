@@ -57,14 +57,14 @@ app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["klaus-test"]
 TMP = tempfile.mkdtemp(prefix="klaus_reader_occlude_")
 UF = os.path.join(TMP, "user_files")
 os.makedirs(UF)
-sys.modules["klausmate"].USER_FILES = UF
-importlib.import_module("klausmate.settings").user_files_dir = UF
+sys.modules["klaus_note"].USER_FILES = UF
+importlib.import_module("klaus_note.settings").user_files_dir = UF
 
-pj = importlib.import_module("klausmate.pdfjs_viewer")
-rp = importlib.import_module("klausmate.reader_panel")
-io = importlib.import_module("klausmate.image_occlusion")
+pj = importlib.import_module("klaus_note.pdfjs_viewer")
+rp = importlib.import_module("klaus_note.reader_panel")
+io = importlib.import_module("klaus_note.image_occlusion")
 REAL_VIEWER = pj.PdfJsViewer  # later sections swap in a stand-in
-HTML_PATH = os.path.join(ROOT, "klausmate", "web", "pdfjs_viewer.html")
+HTML_PATH = os.path.join(ROOT, "klaus_note", "web", "pdfjs_viewer.html")
 html = open(HTML_PATH, encoding="utf-8").read()
 
 NO_EDITOR_TIP = "Open Add or Edit to make an occlusion note"
@@ -226,7 +226,7 @@ if handler is not None:
           ok and s.calls == [(PNG, 4, True)] and TIPS == [], f"{s.calls} {TIPS}")
     ok, _ = occ(s, b64json({"png": base64.b64encode(PNG).decode(), "page": 0, "region": False}))
     check("page 0, region False passes through", s.calls == [(PNG, 0, False)], str(s.calls))
-    parse = pj.parse_bridge("klausmate_pdfjs:occlude-image:" + good)
+    parse = pj.parse_bridge("klaus_note_pdfjs:occlude-image:" + good)
     check("parse_bridge routes occlude-image", parse == ("occlude-image", good))
     png_b64 = base64.b64encode(PNG).decode()
     bad = {
@@ -278,7 +278,7 @@ if handler is not None:
     s4.on_occlude = boom
     s4._on_bridge = pj.PdfJsViewer._on_bridge.__get__(s4)
     s4._bridge_occlude_image = pj.PdfJsViewer._bridge_occlude_image.__get__(s4)
-    ok, _ = attempt(s4._on_bridge, "klausmate_pdfjs:occlude-image:" + good)
+    ok, _ = attempt(s4._on_bridge, "klaus_note_pdfjs:occlude-image:" + good)
     check("a hook that raises is caught by _on_bridge", ok)
 
 
@@ -368,7 +368,7 @@ check("a sidebar built WITH an editor tells its viewer True",
 sb2.cleanup()
 check("the viewer's on_occlude is the sidebar's handler",
       getattr(sb._viewer, "on_occlude", None) == getattr(sb, "_on_occlude", "missing"))
-rh_src = open(os.path.join(ROOT, "klausmate", "reader_host.py"), encoding="utf-8").read()
+rh_src = open(os.path.join(ROOT, "klaus_note", "reader_host.py"), encoding="utf-8").read()
 check("reader_host still assigns r._editor directly (the setter is the seam)",
       "r._editor = " in rh_src)
 
@@ -490,8 +490,8 @@ io._active = True
 
 
 section("Review Focus 2: the same page occluded twice")
-cfg = importlib.import_module("klausmate.image_occlusion.config")
-ngen = importlib.import_module("klausmate.image_occlusion.ngen")
+cfg = importlib.import_module("klaus_note.image_occlusion.config")
+ngen = importlib.import_module("klaus_note.image_occlusion.ngen")
 FIX = os.path.join(ROOT, "tests", "fixtures", "io")
 O_SVG = open(os.path.join(FIX, "abc-ao-O.svg"), encoding="utf-8").read()
 
@@ -577,7 +577,7 @@ section("Draw a diagram\u2026: the bridge action and the sidebar handler")
 dh = getattr(REAL_VIEWER, "_bridge_draw_diagram", None)
 check("PdfJsViewer has _bridge_draw_diagram", dh is not None)
 check("parse_bridge routes draw-diagram",
-      pj.parse_bridge("klausmate_pdfjs:draw-diagram") == ("draw-diagram", ""))
+      pj.parse_bridge("klaus_note_pdfjs:draw-diagram") == ("draw-diagram", ""))
 if dh is not None:
     st = types.SimpleNamespace(on_draw_diagram=None)
     TIPS.clear()

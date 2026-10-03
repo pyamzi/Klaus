@@ -19,8 +19,8 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-settings = importlib.import_module("klausmate.settings")
-curation = importlib.import_module("klausmate.curation")
+settings = importlib.import_module("klaus_note.settings")
+curation = importlib.import_module("klaus_note.curation")
 
 cfg = {"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"}
 settings.store = settings.DictStore(dict(cfg))

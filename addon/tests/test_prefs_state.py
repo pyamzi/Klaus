@@ -1,4 +1,4 @@
-"""The Preferences state machine (klausmate/prefs_state.py), spec
+"""The Preferences state machine (klaus_note/prefs_state.py), spec
 docs/superpowers/specs/2026-09-30-prefs-state-design.md.
 
 Run: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_prefs_state.py
@@ -24,8 +24,8 @@ def raises(exc, fn):
     return False
 
 
-ps = importlib.import_module("klausmate.prefs_state")
-embeddings = importlib.import_module("klausmate.embeddings")
+ps = importlib.import_module("klaus_note.prefs_state")
+embeddings = importlib.import_module("klaus_note.embeddings")
 
 section("seeding and normalisation")
 st = ps.PrefsState.from_config({"endpoint": " http://x:1 ", "embedding_model": "m",
@@ -33,7 +33,7 @@ st = ps.PrefsState.from_config({"endpoint": " http://x:1 ", "embedding_model": "
 check("seed normalises endpoint", st.get("endpoint") == "http://x:1")
 check("seed rounds the threshold", st.get("pdf_match_threshold") == 0.46)
 check("missing keys take defaults", st.get("image_crop_enabled") is True and st.get("runtime_auto_setup") is True)
-check("the threshold default is retention's", ps.DEFAULT_THRESHOLD == importlib.import_module("klausmate.retention").DEFAULT_THRESHOLD == 0.45
+check("the threshold default is retention's", ps.DEFAULT_THRESHOLD == importlib.import_module("klaus_note.retention").DEFAULT_THRESHOLD == 0.45
       and ps.PrefsState.from_config({}).get("pdf_match_threshold") == 0.45)
 check("a fresh state is clean", st.dirty is False and st.pending() == {} and st.commit() == ps.Commit({}, []))
 
@@ -74,7 +74,7 @@ c = st.commit()
 check("an endpoint change alone moves no signature, so no sweep", c.patch == {"endpoint": "http://q:9"} and c.effects == [])
 
 section("appearance keys: specs as values, accent pair, the anki_theme pseudo-key")
-theme = importlib.import_module("klausmate.theme")
+theme = importlib.import_module("klaus_note.theme")
 st = ps.PrefsState.from_config({"color_theme": "not-a-theme", "color_theme_custom": "zzz",
                                 "background_mode": "color", "reviewer_background_grad_x": 7})  # resolve rejects a string here
 check("unknown accent seeds as ocean, a bad custom colour as the default swatch, and neither is dirty",

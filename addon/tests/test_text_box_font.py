@@ -14,8 +14,8 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HTML = open(os.path.join(ROOT, "klausmate", "web", "pdfjs_viewer.html"), encoding="utf-8").read()
-HANDLER = open(os.path.join(ROOT, "klausmate", "pdf_handler.py"), encoding="utf-8").read()
+HTML = open(os.path.join(ROOT, "klaus_note", "web", "pdfjs_viewer.html"), encoding="utf-8").read()
+HANDLER = open(os.path.join(ROOT, "klaus_note", "pdf_handler.py"), encoding="utf-8").read()
 
 passed = failed = 0
 

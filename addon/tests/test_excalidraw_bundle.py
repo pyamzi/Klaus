@@ -13,8 +13,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, ".claude/skills/klaus-test/scripts"))
 from anki_stubs import check, section, report  # noqa: E402
 
-D = os.path.join(ROOT, "klausmate", "image_occlusion", "excalidraw")
-ASSET_PATH = "/_addons/klausmate/image_occlusion/excalidraw/"
+D = os.path.join(ROOT, "klaus_note", "image_occlusion", "excalidraw")
+ASSET_PATH = "/_addons/klaus_note/image_occlusion/excalidraw/"
 MAX_BYTES = 8 * 1024 * 1024
 LOCAL = {"127.0.0.1", "localhost"}
 # Hosts 0.18.1's own code names. None is fetched unless the user acts (a help
@@ -60,7 +60,7 @@ if not os.path.isfile(os.path.join(D, "excalidraw.js")):
 html, js, css = read("index.html"), read("excalidraw.js"), read("excalidraw.css")
 
 section("asset path: the page's own folder, whatever the add-on folder is called")
-check("index.html names no add-on folder (no /_addons/klausmate)", "/_addons/" not in html)
+check("index.html names no add-on folder (no /_addons/klaus_note)", "/_addons/" not in html)
 m = re.search(r"<script>(window\.EXCALIDRAW_ASSET_PATH\s*=[^<]*)</script>", html)
 check("EXCALIDRAW_ASSET_PATH is set in an inline script before the bundle",
       m is not None and html.find(m.group(0)) < html.find('src="excalidraw.js"'))
@@ -114,12 +114,12 @@ check("fonts/LICENSES.txt names all 9 families, one folder each",
       str([f for f in FAMILIES if f not in lic_text]))
 
 section("served by Anki")
-init = open(os.path.join(ROOT, "klausmate", "__init__.py"), encoding="utf-8").read()
+init = open(os.path.join(ROOT, "klaus_note", "__init__.py"), encoding="utf-8").read()
 pattern = re.search(r'setWebExports\(.*?r"([^"]+)"', init, re.S).group(1)
 unserved = []
 for dirpath, _, files in os.walk(D):
     for n in files:
-        rel = os.path.relpath(os.path.join(dirpath, n), os.path.join(ROOT, "klausmate"))
+        rel = os.path.relpath(os.path.join(dirpath, n), os.path.join(ROOT, "klaus_note"))
         if not n.endswith((".txt", ".jsx")) and not re.fullmatch(pattern, rel.replace(os.sep, "/")):
             unserved.append(rel)
 check("the web-exports regex serves every page file", not unserved, str(unserved[:3]))

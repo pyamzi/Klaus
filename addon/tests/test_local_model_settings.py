@@ -14,14 +14,14 @@ import types
 from enum import IntEnum
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.claude/skills/klaus-test/scripts'))
-from anki_stubs import install, exec_klausmate_under_qt, check, report, LiveStore
+from anki_stubs import install, exec_klaus_note_under_qt, check, report, LiveStore
 install()
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 from PyQt6 import QtCore, QtWidgets
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 scratch = tempfile.TemporaryDirectory()
-K = exec_klausmate_under_qt(scratch.name)
-store = json.loads(Path('klausmate/config.json').read_text())
+K = exec_klaus_note_under_qt(scratch.name)
+store = json.loads(Path('klaus_note/config.json').read_text())
 store.update(embedding_model='saved-model')
 # A profile whose one-time threshold migration (retention, K-302) already
 # ran: these tests pin what SETTINGS write, not that migration's write.
@@ -50,9 +50,9 @@ theme.theme_manager = types.SimpleNamespace(night_mode=False)
 sys.modules['aqt.theme'] = theme
 mw.pm = types.SimpleNamespace(theme=lambda: Theme.SYSTEM)
 K.mw = sys.modules['aqt'].mw = mw
-mm = importlib.import_module('klausmate.manage_models')
+mm = importlib.import_module('klaus_note.manage_models')
 mm.mw = mw
-importlib.import_module('klausmate.curation').index_stats = lambda: {'exists': False}
+importlib.import_module('klaus_note.curation').index_stats = lambda: {'exists': False}
 sweeps = []
 mm.tooltip = lambda text='', **_k: sweeps.append(text)  # a model change tooltips where to re-index
 class Op:
@@ -72,7 +72,7 @@ class Op:
             return
         operations.append(self)
 mm.QueryOp = Op
-rt = importlib.import_module('klausmate.ollama_runtime')
+rt = importlib.import_module('klaus_note.ollama_runtime')
 real_setup, real_update, real_ensure = rt.full_setup, rt.update_runtime, rt.ensure_server
 state = {'owned': False, 'version': 'old', 'error': False}
 rt.runtime_download_size_hint = lambda: '~123 MB'
@@ -122,7 +122,7 @@ class Client:
         if state.get('delete_error'):
             raise RuntimeError('Delete failed. Retry Delete.')
         models.remove(name)
-importlib.import_module('klausmate.ollama_client').OllamaClient = Client
+importlib.import_module('klaus_note.ollama_client').OllamaClient = Client
 
 def drain():
     while pending:
@@ -208,7 +208,7 @@ auto.setChecked(False)
 save_preferences()
 check('Save persists selection and automatic management', store['embedding_model'] == 'new-model' and not store['runtime_auto_setup'] and bool(sweeps) and sweeps[-1].endswith('Press ⟳ in the Library to re-index for the new model.') and 'preferences saved' in sweeps[-1], str(sweeps))  # one tooltip: Anki's closes the previous one
 _hd_calls = []
-_pv_mod = importlib.import_module('klausmate.pdfjs_viewer')
+_pv_mod = importlib.import_module('klaus_note.pdfjs_viewer')
 _pv_mod.set_hand_drawn_all = lambda flag: _hd_calls.append(flag)
 _hd_sw = dlg.findChild(QtWidgets.QAbstractButton, 'hand_drawn')
 check('Appearance has a "Hand-drawn style" switch, on by default',
@@ -235,7 +235,7 @@ button('Update Runtime').click()
 work(); drain()
 check('update uses runtime helper and disables current version update', 'update' in calls and not button('Update Runtime').isEnabled())
 field('pull_model').setText('downloaded-model')
-_tasks = importlib.import_module('klausmate.tasks')
+_tasks = importlib.import_module('klaus_note.tasks')
 _tasks.run_on_main = lambda fn: fn()
 _tasks.clear()
 button('Download').click()
@@ -297,7 +297,7 @@ check('...and is written, with its user-set mark',
 dlg.accept(); drain()
 # Appearance in the state too: a previewed edit reverts on discard and writes nothing.
 mm.manage_models_dialog(); dlg = mm._OPEN_DLG
-_bgmod = importlib.import_module('klausmate.background')
+_bgmod = importlib.import_module('klaus_note.background')
 _st = dlg.prefs_state
 _mode = dlg.findChild(QtWidgets.QComboBox, 'background_mode')
 _mode.setCurrentIndex(_mode.findData('image' if _st.get('background')['mode'] == 'color' else 'color'))
@@ -381,7 +381,7 @@ check('closed dialog ignores queued progress and failure', mm._OPEN_DLG is None 
 # Runtime lifetime is profile scoped, including operations launched from
 # dialogs that have already closed. Exercise the real profile stop hook and
 # readiness coordinator with blocked fake runtime workers.
-sf = importlib.import_module('klausmate.setup_flow')
+sf = importlib.import_module('klaus_note.setup_flow')
 sf.mw = mw
 sf.QueryOp = Op
 sf._first_run_dialog_shown_this_session = True
@@ -486,7 +486,7 @@ rt.server_manager = types.SimpleNamespace(
     stop=lambda: (state.update(owned=False), running.update(endpoint=None)))
 embed_calls = []
 Client.embed = lambda self, model, texts: (embed_calls.append((self.endpoint, model)) or [[3, 4]])
-provider = importlib.import_module('klausmate.embeddings').provider_from_config(_settings.read)
+provider = importlib.import_module('klaus_note.embeddings').provider_from_config(_settings.read)
 main_ident = threading.get_ident()
 write_threads = []
 def traced_write(cfg):
@@ -545,8 +545,8 @@ sf._themed_message_box = capture_box
 sf.first_run_check()
 welcome = welcome_boxes[-1]
 check('welcome shows local model guidance and Preferences plus Later',
-      sf.LOCAL_MODELS_COPY in welcome.text() and sorted(b.text() for b in welcome.buttons()) == ['KlausMate Preferences', 'Later']
-      and welcome.defaultButton().text() == 'KlausMate Preferences')
+      sf.LOCAL_MODELS_COPY in welcome.text() and sorted(b.text() for b in welcome.buttons()) == ['Klaus Note Preferences', 'Later']
+      and welcome.defaultButton().text() == 'Klaus Note Preferences')
 welcome.accept()
 mw.close()
 # Review fix 3: a relocation that lands while the field holds an edit still moves the BASELINE.
@@ -565,7 +565,7 @@ dlg.accept(); drain()
 
 # Sync automatically (docs/superpowers/specs/2026-10-02-auto-sync-design.md)
 _as_calls = []
-_auto = importlib.import_module('klausmate.auto_sync')
+_auto = importlib.import_module('klaus_note.auto_sync')
 _auto.set_enabled = lambda on: _as_calls.append(on)
 mm.manage_models_dialog(); dlg = mm._OPEN_DLG
 _as_sw = dlg.findChild(QtWidgets.QAbstractButton, 'auto_sync')

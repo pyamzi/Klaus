@@ -18,7 +18,7 @@ install()
 
 import importlib  # noqa: E402
 
-manage_models = importlib.import_module("klausmate.manage_models")
+manage_models = importlib.import_module("klaus_note.manage_models")
 
 _MM_PATH = os.path.join(ADDON, "manage_models.py")
 _SRC = open(_MM_PATH).read()  # RAW source — absence pins must read this, not code_only
@@ -130,7 +130,7 @@ if _HAVE_QT:
     sys.modules["aqt.qt"] = _qt_shim
     _app = _QtW.QApplication.instance() or _QtW.QApplication(["klaus-test"])
 
-    _theme = importlib.import_module("klausmate.theme")
+    _theme = importlib.import_module("klaus_note.theme")
     _ink = _QtG.QColor(_theme.palette(_theme.night_mode())["text"])
 
     # devicePixelRatio FOLLOWS THE WIDGET: the sidebar label is the one

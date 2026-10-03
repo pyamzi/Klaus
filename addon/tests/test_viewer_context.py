@@ -3,7 +3,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section
 install()
 import importlib
-vc = importlib.import_module("klausmate.viewer_context")
+vc = importlib.import_module("klaus_note.viewer_context")
 
 section("registry")
 vc.reset()

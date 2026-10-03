@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Diffs docs/reference/design-tokens.json against its copy in the other
-# Klaus repo (Klaus Addon <-> Klaus App/KlausBook-Context). The two must
+# Klaus repo (klaus-note/addon <-> klaus-note/app). The two must
 # stay byte-identical — see that file's
 # own "source_of_truth" field. Run this after editing tokens in either
 # repo, from either repo (paths are relative to this script, not $PWD).
@@ -15,13 +15,13 @@ OURS="$HERE/$TOKENS_REL"
 
 # This script is checked into both repos at the same relative path, so its
 # own location tells us which one we're running from and where the other
-# one lives in the Klaus workspace: <root>/Klaus Addon and
-# <root>/Klaus App/KlausBook-Context.
+# one lives in the Klaus workspace: <root>/klaus-note/addon and
+# <root>/klaus-note/app.
 case "$HERE" in
-  */"Klaus App"/KlausBook-Context) SIBLING="$(dirname "$(dirname "$HERE")")/Klaus Addon" ;;
-  */"Klaus Addon") SIBLING="$(dirname "$HERE")/Klaus App/KlausBook-Context" ;;
+  */klaus-note/app) SIBLING="$(dirname "$HERE")/addon" ;;
+  */klaus-note/addon) SIBLING="$(dirname "$HERE")/app" ;;
   *)
-    echo "check-token-sync: unexpected repo path $HERE (expected .../Klaus App/KlausBook-Context or .../Klaus Addon)" >&2
+    echo "check-token-sync: unexpected repo path $HERE (expected .../klaus-note/app or .../klaus-note/addon)" >&2
     exit 1
     ;;
 esac

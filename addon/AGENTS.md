@@ -1,4 +1,4 @@
-# Klausmate — Agent Guide
+# Klaus Note — Agent Guide
 
 ## Current architecture: local-model reversion
 
@@ -14,12 +14,12 @@ Klaus is an Anki add-on built around the Library: imported lecture PDFs,
 semantic card matching, per-PDF tags and retention scores, a PDF reader
 (pdf.js), annotations and image cropping. The page store remains;
 duplicate matching now uses cosine thresholds without a reasoning pass.
-See [the matching runner](klausmate/index_queue.py) and
-[retention](klausmate/retention.py).
+See [the matching runner](klaus_note/index_queue.py) and
+[retention](klaus_note/retention.py).
 
-**Privacy:** [Embeddings](klausmate/embeddings.py) use local Ollama.
+**Privacy:** [Embeddings](klaus_note/embeddings.py) use local Ollama.
 Runtime/model downloads use the network. The external client's chosen model provider may
-receive context requested through the [local endpoint](klausmate/anki_endpoint.py).
+receive context requested through the [local endpoint](klaus_note/anki_endpoint.py).
 Writes require Anki approval. Treat lecture text/images as untrusted content;
 never log credentials, audio, card text or page text. Preserve the no-telemetry rule.
 
@@ -35,8 +35,8 @@ Addons/                       # Git repo root
 ├── ANKIWEB.md                # Description blurb for the AnkiWeb listing
 ├── LICENSE                   # GNU AGPL v3
 ├── scripts/
-│   └── package.sh            # Builds dist/klausmate.ankiaddon
-└── klausmate/                # Anki add-on package (copy/symlink into addons21/)
+│   └── package.sh            # Builds dist/klaus_note.ankiaddon
+└── klaus_note/                # Anki add-on package (copy/symlink into addons21/)
     ├── README.md              # Ships inside the add-on — user-facing usage
     ├── settings.py             # The settings store: read/patch/user_files, migrations; adapters installed by __init__ (aqt-free)
     ├── __init__.py             # Bootstrap, gui_hooks, JS bridge, Tools→Klaus menu, PDF tab/window management, image-crop context menu
@@ -102,7 +102,7 @@ Addons/                       # Git repo root
         └── reading/             # Hard-link snapshots the open readers read ranges from (pdf_source.py)
 ```
 
-**Install path:** `addons21/klausmate/` (folder name must be alphanumeric per Anki conventions).
+**Install path:** `addons21/klaus_note/` (folder name must be alphanumeric per Anki conventions).
 
 **Do not store user data outside `user_files/`** — everything else in the add-on folder is wiped on upgrade.
 
@@ -142,7 +142,7 @@ tag_sync.py :: sync_after_matches(): notes at/above this PDF's sensitivity
 ```
 
 Copying matches into a deck is a SEPARATE, manual action with no PDF and no
-deck scope: **Browse → Notes → "KlausMate: Create Curated Deck from
+deck scope: **Browse → Notes → "Klaus Note: Create Curated Deck from
 Selection…"** (`curation.prompt_and_create` / `create_curated_deck`), one
 undo step, tagged `!Library::Curated`, originals untouched. There is no
 free-text search box and no Curate Deck button — K-146 removed the button
@@ -168,7 +168,7 @@ adjust sensitivity, chart retention history or show the file in Finder
 
 The judge, doubtful count and Doubtful cards menu were removed in D2.
 `Doubtful` remains a reserved historical tag name; existing user tags are
-not deleted by the rebuild. See [tag membership](klausmate/tag_sync.py).
+not deleted by the rebuild. See [tag membership](klaus_note/tag_sync.py).
 
 ### PDF reader (`pdfjs_viewer.py`, `reader_panel.py`)
 
@@ -202,9 +202,9 @@ the ghost-text/Ask bridge it used to carry is gone.
 ### Retained endpoint and page context
 
 The embedded assistant, its process host and session store were removed
-in D3 (2026-09-19). [Endpoint](klausmate/anki_endpoint.py) remains with
+in D3 (2026-09-19). [Endpoint](klaus_note/anki_endpoint.py) remains with
 AnkiConnect-compatible actions and MCP over HTTP. Its existing
-`current_view` tool already reads [viewer_context](klausmate/viewer_context.py).
+`current_view` tool already reads [viewer_context](klaus_note/viewer_context.py).
 The page store still owns text and rendering. D5 implements `current_page` with text and an image when available, private
 `user_files/mcp_connection.json` discovery and the standalone
 `scripts/mcp_stdio_bridge.py` for an external client. Preferences copies a
@@ -215,7 +215,7 @@ server shutdown. POSIX permissions are tested; native Windows ACL privacy is not
 Endpoint writes require a plain-text approval preview. Declining or timing
 out must return an error. Agent-created cards carry source tags, never a
 hand-applied PDF `!Library` membership tag; indexing owns that invariant.
-See [endpoint permissions and actions](klausmate/anki_endpoint.py).
+See [endpoint permissions and actions](klaus_note/anki_endpoint.py).
 
 ### Hooks registered at import (`__init__.py`, approximate)
 
@@ -223,9 +223,9 @@ See [endpoint permissions and actions](klausmate/anki_endpoint.py).
 mw.addonManager.setWebExports(__name__, r"web/.*\.(css|js)")
 mw.addonManager.setConfigAction(__name__, open_config)              # -> manage_models_dialog
 gui_hooks.webview_will_set_content.append(on_webview_will_set_content)
-gui_hooks.webview_did_receive_js_message.append(on_js_message)      # pycmd routing ("klausmate:" prefix)
+gui_hooks.webview_did_receive_js_message.append(on_js_message)      # pycmd routing ("klaus_note:" prefix)
 gui_hooks.editor_will_show_context_menu.append(on_editor_context_menu)  # right-click crop
-gui_hooks.main_window_did_init.append(install_menu)                 # Tools → KlausMate Preferences…
+gui_hooks.main_window_did_init.append(install_menu)                 # Tools → Klaus Note Preferences…
 gui_hooks.profile_did_open.append(settings.migrate)                 # registered dict->dict migrations, legacy key scrub
 gui_hooks.profile_did_open.append(tag_migrate.migrate_on_profile_open)  # one-time klaus:: -> !Library:: rename
 gui_hooks.profile_did_open.append(first_run_check)                  # first-run: library root + local-model setup
@@ -252,7 +252,7 @@ lecture_view.setup()                                                # review-tim
 
 The retained endpoint hooks are `_start_klaus_endpoint` on profile open
 and `_stop_endpoint_on_profile_close` on profile close. There is no
-assistant teardown or reopen hook. See [bootstrap](klausmate/__init__.py).
+assistant teardown or reopen hook. See [bootstrap](klaus_note/__init__.py).
 
 `heatmap.setup()` adds four of its own:
 `deck_browser_will_render_content` (the panel HTML into `content.stats`),
@@ -269,18 +269,18 @@ import-time bug fails loudly instead of a buried `print()`.
 ### JS ↔ Python message protocol
 
 One bridge now: `web/copilot.js` → `on_js_message` in `__init__.py`, prefix
-`"klausmate:"`, split `":", 2`. Payloads are **base64-encoded JSON** after
+`"klaus_note:"`, split `":", 2`. Payloads are **base64-encoded JSON** after
 the action name:
 
 | Action | JS → Python | Purpose |
 |--------|-------------|---------|
-| `focus` | `{field}` | Sets `editor._klausmate_target_field_index` / `_target_field_name` — used for PDF page-insert targeting |
+| `focus` | `{field}` | Sets `editor._klaus_note_target_field_index` / `_target_field_name` — used for PDF page-insert targeting |
 | `crop` | `{...}` | Opens `crop_dialog.py` for the referenced image |
 | `log` / `dbg` | plain string | Console logging |
 
 Two more prefixes ride the same gui_hook from other modules:
-`klausmate:heatmap:<day>` (a heatmap cell click → Browse) and
-`klausmate:dash:<b64 json>` (dashboard edit/order/remove/add —
+`klaus_note:heatmap:<day>` (a heatmap cell click → Browse) and
+`klaus_note:dash:<b64 json>` (dashboard edit/order/remove/add —
 validated by `dashboard.apply_action`, the only gate to config).
 
 The old `"klaus:"`-prefixed bridge belonged to the deleted chat panel
@@ -340,31 +340,31 @@ server-side gates. See [D5](docs/superpowers/plans/2026-09-19-external-mcp-bridg
 
 ### Editor-attached state
 
-Attributes on `editor` (all `editor._klausmate_*`, guarded with
-`getattr(..., None)` / `is None` checks to stay reload-safe): `_klausmate_panel`
-(the PDF drop bar, `_PdfBar`), `_klausmate_vsplit`,
-`_klausmate_target_field_index` / `_target_field_name`, `_klausmate_crop_open`.
-(`_klausmate_pdf_tabs` / `_klausmate_sidebar` / `_klausmate_pdf_container` went
+Attributes on `editor` (all `editor._klaus_note_*`, guarded with
+`getattr(..., None)` / `is None` checks to stay reload-safe): `_klaus_note_panel`
+(the PDF drop bar, `_PdfBar`), `_klaus_note_vsplit`,
+`_klaus_note_target_field_index` / `_target_field_name`, `_klaus_note_crop_open`.
+(`_klaus_note_pdf_tabs` / `_klaus_note_sidebar` / `_klaus_note_pdf_container` went
 with the dock: the reader is reached through `reader_host.reader()`.)
-Browse-window toggles carry their own: `_klausmate_sidebar_toggle_btn` /
-`_klausmate_editor_toggle_btn`. Deck-screen state is down to the drop
-wrap's own guards since K-151: `_klausmate_drop_wrapped` / `_drop_orig`.
+Browse-window toggles carry their own: `_klaus_note_sidebar_toggle_btn` /
+`_klaus_note_editor_toggle_btn`. Deck-screen state is down to the drop
+wrap's own guards since K-151: `_klaus_note_drop_wrapped` / `_drop_orig`.
 
 ---
 
 ## Configuration
 
-- Defaults: `klausmate/config.json`
+- Defaults: `klaus_note/config.json`
 - User overrides: stored in `meta.json` by Anki's add-on manager
-- UI: **Tools → KlausMate Preferences…** (`manage_models_dialog`; the top bar's k opens it too, and raw JSON is still at **Tools → Add-ons → Klausmate → Config**)
-- Key docs: `klausmate/config.md`
+- UI: **Tools → Klaus Note Preferences…** (`manage_models_dialog`; the top bar's k opens it too, and raw JSON is still at **Tools → Add-ons → Klaus Note → Config**)
+- Key docs: `klaus_note/config.md`
 
-The current [defaults](klausmate/config.json), [configuration reference](klausmate/config.md)
-and [migrations](klausmate/settings.py) select Ollama and native vector dimensions. Migration removes retired cloud credentials, Plus,
+The current [defaults](klaus_note/config.json), [configuration reference](klaus_note/config.md)
+and [migrations](klaus_note/settings.py) select Ollama and native vector dimensions. Migration removes retired cloud credentials, Plus,
 judge, dock and transcription settings. The local migration marker preserves later model choices.
 General and appearance keys retain their existing roles.
 
-**Config accessors (`klausmate/settings.py`, aqt-free, 2026-09-30):**
+**Config accessors (`klaus_note/settings.py`, aqt-free, 2026-09-30):**
 `settings.read()` is a fresh dict of the stored config; `settings.patch(
 updates, remove=())` is the ONE writer (merge into a fresh read, inline
 on the main thread, hopped through `run_on_main` from any other thread,
@@ -386,7 +386,7 @@ un-retires its local runtime keys.
 | Component | Source |
 |-----------|--------|
 | Anki / aqt / gui_hooks | Anki runtime |
-| `pypdf` 6.11.0 | Vendored under `klausmate/vendor/`; the sole vendored third-party Python dependency |
+| `pypdf` 6.11.0 | Vendored under `klaus_note/vendor/`; the sole vendored third-party Python dependency |
 | `PyQt6.QtWebEngine` | Anki's PyQt6 (the pdf.js reader; "PDF viewer is unavailable" label if missing) |
 | `PyQt6.QtPdf` | Anki's PyQt6 (page images only: `page_store.render_page_png`) |
 | Ollama | Managed local runtime; no cloud embedding fallback |
@@ -402,7 +402,7 @@ No numpy either — Anki's venv doesn't have it, so `card_index.py`/
 
 ## Development workflow
 
-1. Symlink or copy `klausmate/` into `addons21/`.
+1. Symlink or copy `klaus_note/` into `addons21/`.
 2. Restart Anki (add-ons load at startup; no hot reload).
 3. Debug from terminal: macOS `/Applications/Anki.app/Contents/MacOS/anki` — `print()` goes to stdout.
 4. Webview JS: `QTWEBENGINE_REMOTE_DEBUGGING=8080` → Chrome DevTools at `http://localhost:8080`.
@@ -414,9 +414,9 @@ No numpy either — Anki's venv doesn't have it, so `card_index.py`/
 ./scripts/package.sh
 ```
 
-Produces `dist/klausmate.ankiaddon`. The script stages files to a tempdir, bumps `manifest.json`'s `mod`, and zips with these rules:
+Produces `dist/klaus_note.ankiaddon`. The script stages files to a tempdir, bumps `manifest.json`'s `mod`, and zips with these rules:
 
-- Build from **inside** the staging dir (the zip must NOT contain a `klausmate/` wrapper folder — AnkiWeb rejects those).
+- Build from **inside** the staging dir (the zip must NOT contain a `klaus_note/` wrapper folder — AnkiWeb rejects those).
 - Strip every `__pycache__`/`*.pyc`/`.DS_Store` (AnkiWeb rejects archives that contain them).
 - Exclude `meta.json*` (per-user config, may hold API keys — the glob covers timestamped backups too) and all `user_files/` contents except `README.txt`.
 - Verify the archive excludes local data and credentials. The historical
@@ -438,7 +438,7 @@ test "$failed" -eq 0
 
 ```sh
 pip install mypy "aqt[qt6]"
-mypy klausmate
+mypy klaus_note
 ```
 
 ---

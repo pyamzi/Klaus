@@ -11,7 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, ".claude/skills/klaus-test/scripts"))
 from anki_stubs import check, section, report  # noqa: E402
 
-PKG = os.path.join(ROOT, "klausmate", "image_occlusion")
+PKG = os.path.join(ROOT, "klaus_note", "image_occlusion")
 SRC = os.path.expanduser("~/Library/Application Support/Anki2/addons21/1374772155")
 PY = ["add", "config", "consts", "dialogs", "editor", "lang", "main", "nconvert",
       "ngen", "options", "qt", "template", "utils", "web", "_version"]
@@ -108,8 +108,8 @@ else:
     check("data files identical to upstream", not bad, str(bad[:5]))
 
 section("wired once (Task 3)")
-init = read(os.path.join(ROOT, "klausmate", "__init__.py")).decode()
-check("klausmate/__init__.py calls image_occlusion's setup() exactly once",
+init = read(os.path.join(ROOT, "klaus_note", "__init__.py")).decode()
+check("klaus_note/__init__.py calls image_occlusion's setup() exactly once",
       init.count("_image_occlusion.setup()") == 1)
 
 raise SystemExit(report())

@@ -22,7 +22,7 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 from PyQt6 import QtCore, QtGui, QtWidgets  # noqa: E402
 
 shim = types.ModuleType("aqt.qt")
@@ -40,17 +40,17 @@ sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
 
 UF = tempfile.mkdtemp(prefix="klaus-k307-")  # never the real user_files
-curation = importlib.import_module("klausmate.curation")
-retention = importlib.import_module("klausmate.retention")
+curation = importlib.import_module("klaus_note.curation")
+retention = importlib.import_module("klaus_note.retention")
 _settings.user_files_dir = UF
-ls = importlib.import_module("klausmate.library_sidebar")
+ls = importlib.import_module("klaus_note.library_sidebar")
 
 drive = {"folders": ["2-BiB/Exam 1/Week 1"],
          "pdfs": {"Intro_to_CBC": {"folder": "2-BiB/Exam 1/Week 1", "display": "04-L-Intro to CBC.pdf"}}}
 prefs = {"Intro_to_CBC": {"tag": "!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC"}}
 os.makedirs(os.path.dirname(retention._prefs_path()), exist_ok=True)
 json.dump(prefs, open(retention._prefs_path(), "w"))
-drive_store = importlib.import_module("klausmate.drive_store")
+drive_store = importlib.import_module("klaus_note.drive_store")
 json.dump(dict(drive, version=drive_store.DRIVE_VERSION), open(drive_store._drive_path(UF), "w"))
 
 section("labels")
@@ -136,7 +136,7 @@ check("row text", ls.percent_text(means, "Heme::Anemia") == "53%"
       and ls.percent_text(means, "Onc") == "0%" and ls.percent_text(means, "Nope") == "\u2014"
       and ls.percent_text(None, "Onc") is None)
 
-retention = importlib.import_module("klausmate.retention")
+retention = importlib.import_module("klaus_note.retention")
 
 
 class DB:
@@ -219,7 +219,7 @@ check("an ordinary tag row does not", opt.icon.isNull())
 ls._state["status"] = {}
 
 section("right-click menus")
-act = importlib.import_module("klausmate.library_actions")
+act = importlib.import_module("klaus_note.library_actions")
 act.pdfs_under = lambda folder: ["Intro_to_CBC"] if folder == "2-BiB/Exam 1/Week 1" else []
 
 
@@ -244,15 +244,15 @@ check("an empty folder can be renamed and removed here (Anki's own items skip em
 check("any other tag gets nothing extra", menu_for("Hematology::Anemia") == ["Anki's own item"])
 
 section("a PDF missing from the Library folder")
-_ph5 = importlib.import_module("klausmate.pdf_handler")
-_uf5 = importlib.import_module("klausmate.pdf_source").user_files_dir()  # what the sidebar reads, HEAD or seam
+_ph5 = importlib.import_module("klaus_note.pdf_handler")
+_uf5 = importlib.import_module("klaus_note.pdf_source").user_files_dir()  # what the sidebar reads, HEAD or seam
 _cbc = "!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC"
 st = ls.pdf_status(["a", "d"], {"d"}, {"a": (False, False), "d": (True, False)}.get, missing={"a", "d"})
 check("missing wins over every other reason", st == {"a": ls.MISSING, "d": ls.MISSING}, str(st))
 check("...and its words", ls.MISSING == "Missing from your Library folder")
 _ph5.set_missing(_uf5, {"Intro_to_CBC"})
 _real_status = (ls._sidebars, retention.index_status)
-_idx_q = importlib.import_module("klausmate.index_queue")
+_idx_q = importlib.import_module("klaus_note.index_queue")
 _real_pending = _idx_q.pending_names
 _idx_q.pending_names = lambda: set()
 retention.index_status = lambda safe, sig: (True, False)
@@ -266,7 +266,7 @@ delegate.initStyleOption(opt, model.index(0, 0))
 check("its row carries the warning icon", not opt.icon.isNull())
 ls._sidebars, retention.index_status = _real_status
 _idx_q.pending_names = _real_pending
-_pd5 = importlib.import_module("klausmate.pdf_drive")
+_pd5 = importlib.import_module("klaus_note.pdf_drive")
 _removed = []
 _real_delete = _pd5.delete_pdf
 _pd5.delete_pdf = lambda safe: (_removed.append(safe), True)[1]
@@ -304,7 +304,7 @@ def _answer(box, button):
 
 
 _slot_errors, _real_hook = [], sys.excepthook
-_ts5 = importlib.import_module("klausmate.tag_sync")
+_ts5 = importlib.import_module("klaus_note.tag_sync")
 _ts5_mw = _ts5.mw
 sys.excepthook = lambda *exc: _slot_errors.append(exc[1])
 try:
@@ -340,7 +340,7 @@ _pd5.delete_pdf = _real_delete
 ls._state["status"] = {}
 
 section("a single click only shows the cards; a double-click opens the viewer")
-viewer = importlib.import_module("klausmate.library_viewer")
+viewer = importlib.import_module("klaus_note.library_viewer")
 calls = []
 viewer.on_sidebar_click = lambda b: calls.append(("click", b))
 viewer.enter = lambda b, safe: calls.append(("enter", safe))
@@ -350,7 +350,7 @@ ls._on_double_clicked("B", model.index(1, 0))
 check("click: viewer mode steps aside (the search itself is Anki's)", calls[0] == ("click", "B"))
 check("double-click on a PDF enters the viewer with that PDF", calls[1] == ("enter", "Intro_to_CBC"))
 check("double-click on any other tag does nothing", len(calls) == 2, str(calls))
-import klausmate.pdf_handler as _ph  # noqa: E402
+import klaus_note.pdf_handler as _ph  # noqa: E402
 _ph.touch_last_used = lambda uf, safe: None
 
 section("drop PDFs on the sidebar")
@@ -388,7 +388,7 @@ open(os.path.join(src, "Lecture.pdf"), "wb").write(b"%PDF")
 open(os.path.join(root, "Lecture.pdf"), "wb").write(b"%PDF old")
 _ph._live_library_root = lambda: root
 scans = []
-pdf_drive = importlib.import_module("klausmate.pdf_drive")
+pdf_drive = importlib.import_module("klaus_note.pdf_drive")
 pdf_drive.start_library_rescan = lambda *a, **k: scans.append(1)
 n = act.import_files([os.path.join(src, "Lecture.pdf"), os.path.join(src, "missing.pdf")], "Heme")
 check("the PDF is copied into its folder", n == 1 and os.path.isfile(os.path.join(root, "Heme", "Lecture.pdf")))
@@ -401,8 +401,8 @@ check("each import starts the background scan", scans == [1, 1])
 section("header: ⟳ and +PDF beside the filter, no footer")
 ls.refresh_status = lambda: None
 check("the footer is gone", not hasattr(ls, "Footer") and not hasattr(ls, "_install_footer"))
-_iq = importlib.import_module("klausmate.index_queue")
-_act = importlib.import_module("klausmate.library_actions")
+_iq = importlib.import_module("klaus_note.index_queue")
+_act = importlib.import_module("klaus_note.library_actions")
 _hits = []
 _iq_refresh, _pick = _iq.refresh, _act.pick_and_import
 _iq.refresh = lambda parent=None: _hits.append(("refresh", parent)) or 0
@@ -411,7 +411,7 @@ _owner = QtWidgets.QWidget()
 _refresh_act, _add_act = ls.header_actions(_owner)
 check("two actions: ⟳ then +PDF, named and iconed",
       (_refresh_act.toolTip(), _add_act.toolTip()) == ("Index New and Changed PDFs", "Import PDFs…")
-      and _refresh_act.objectName() == "klausmate_library_refresh" and _add_act.objectName() == "klausmate_library_add_pdf"
+      and _refresh_act.objectName() == "klaus_note_library_refresh" and _add_act.objectName() == "klaus_note_library_add_pdf"
       and not _refresh_act.icon().isNull() and not _add_act.icon().isNull())
 _refresh_act.trigger(); _add_act.trigger()
 check("⟳ runs index_queue.refresh, +PDF opens the picker, both on the owner",
@@ -430,9 +430,9 @@ ls._install_header(browser)
 ls._install_header(browser)
 _names = [a.objectName() for a in _toolbar.actions()]
 check("Browse's sidebar toolbar gets the two actions once, after a separator",
-      _names.count("klausmate_library_refresh") == 1 and _names.count("klausmate_library_add_pdf") == 1
+      _names.count("klaus_note_library_refresh") == 1 and _names.count("klaus_note_library_add_pdf") == 1
       and _toolbar.actions()[2].isSeparator() and grid.rowCount() == 2, str(_names))
-check("Finder drops still land on the sidebar", isinstance(getattr(side, "_klausmate_drops", None), ls.PdfDropFilter))
+check("Finder drops still land on the sidebar", isinstance(getattr(side, "_klaus_note_drops", None), ls.PdfDropFilter))
 _iq.refresh, _act.pick_and_import = _iq_refresh, _pick
 
 section("the Library is its own section, with its own icons")
@@ -497,33 +497,33 @@ check("one Tags section, and the Library is its own section above it",
       [c.full_name for c in built_root.children] == ["!Library", ""]
       and sum(ls._kind(c) == "TAG_ROOT" for c in built_root.children) == 1)
 noted = []
-_ts = importlib.import_module("klausmate.tag_sync")
+_ts = importlib.import_module("klaus_note.tag_sync")
 _ts.note_user_deleted = lambda tags: noted.append(list(tags))
 fs.remove_tags(None)
 check("a sidebar delete is noted for tag_sync, then Anki deletes as usual",
       noted == [["!Library::Onc::Leuk"]] and tag_lists == ["anki removed"])
-check("wrapped once", fs._klausmate_wrapped is True)
+check("wrapped once", fs._klaus_note_wrapped is True)
 
 section("the disclosure arrows are drawn")
-theme = importlib.import_module("klausmate.theme")
+theme = importlib.import_module("klaus_note.theme")
 for _night in (False, True):
     _qss = theme.sidebar_tree_qss(_night)
     check(f"night={_night}: closed and open folders get arrow images",
           "::branch:has-children:closed" in _qss and "::branch:has-children:open" in _qss
           and ("branch-closed-night.svg" if _night else "branch-closed-day.svg") in _qss
           and ("branch-open-night.svg" if _night else "branch-open-day.svg") in _qss)
-check("the arrow images ship", all(os.path.isfile(os.path.join("klausmate", "web", f)) for f in
+check("the arrow images ship", all(os.path.isfile(os.path.join("klaus_note", "web", f)) for f in
       ("branch-closed-day.svg", "branch-closed-night.svg", "branch-open-day.svg", "branch-open-night.svg")))
 
 section("wired")
-_init = open("klausmate/__init__.py", encoding="utf-8").read()
+_init = open("klaus_note/__init__.py", encoding="utf-8").read()
 check("__init__ sets it up", "library_sidebar" in _init and ".setup()" in _init.split("library_sidebar", 1)[1][:200])
-_ls_src = open("klausmate/library_sidebar.py", encoding="utf-8").read()
+_ls_src = open("klaus_note/library_sidebar.py", encoding="utf-8").read()
 check("Klaus no longer builds the Tags section itself (AnkiHub does, and two appeared)",
       "browser_will_build_tree" not in _ls_src and "_tag_tree(" not in _ls_src)
 
 section("the retention refresh shows in the status bar (status bar 5/6)")
-tasks = importlib.import_module("klausmate.tasks")
+tasks = importlib.import_module("klaus_note.tasks")
 tasks.run_on_main = lambda fn: fn()
 tasks.clear()
 held = []
@@ -558,8 +558,8 @@ check("...and a failure stays in the bar with its reason",
 tasks.clear()
 
 section("manual indexing: exclude and include")
-pdf_index = importlib.import_module("klausmate.pdf_index")
-iq = importlib.import_module("klausmate.index_queue")
+pdf_index = importlib.import_module("klaus_note.pdf_index")
+iq = importlib.import_module("klaus_note.index_queue")
 PDF_TAG = "!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC"
 WEEK_TAG = "!Library::2-BiB::Exam_1::Week_1"
 EXAM_TAG = "!Library::2-BiB::Exam_1"
@@ -660,7 +660,7 @@ drive_store.set_excluded = _failed_write
 ls.refresh_status, ls.refresh_trees = _rs, _rt
 
 section("manual indexing: a PDF whose text changed shows as stale")
-embeddings = importlib.import_module("klausmate.embeddings")
+embeddings = importlib.import_module("klaus_note.embeddings")
 _sig = embeddings.index_signature({})
 os.makedirs(os.path.join(UF, "contexts"), exist_ok=True)
 open(os.path.join(UF, "contexts", "Changed.txt"), "w").write("page text")
@@ -681,7 +681,7 @@ _manifest((1, 2))
 check("an index built from other text is stale", retention.index_status("Changed", _sig) == (True, True))
 
 section("manual indexing: an excluded row looks dimmed under Browse's own stylesheet")
-theme = importlib.import_module("klausmate.theme")
+theme = importlib.import_module("klaus_note.theme")
 _real_x, _real_label = ls.is_excluded_tag, ls.label_for
 ls.is_excluded_tag = lambda tag: tag == "EXCL"
 ls.label_for = lambda tag: "Hemolysis lecture" if tag in ("EXCL", "PLAIN") else None

@@ -1,6 +1,6 @@
 // Behavioural test for the pdf.js page's range feed (PDF reader 2/5):
 // the page's OWN feed code (b64Bytes, askRange, KlausRange — cut out of
-// klausmate/web/pdfjs_viewer.html, not copied) driven against the
+// klaus_note/web/pdfjs_viewer.html, not copied) driven against the
 // vendored pdf.js, with `pycmd` faked the way Python answers
 // (pdf_source.range_reply, MAX_RANGE clamp).
 //

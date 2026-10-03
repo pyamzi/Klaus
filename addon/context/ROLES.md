@@ -78,7 +78,7 @@ own card to Done — a generator that grades its own output grades leniently.
   pass. Overlapping Ready cards are not a bug in the board, they are a
   scheduling mistake.
 - **File-disjointness protects writes, not verify gates.** Every card's gate
-  runs the test suite, and the suite imports `klausmate/__init__.py`. So a
+  runs the test suite, and the suite imports `klaus_note/__init__.py`. So a
   worker editing that file leaves *every* concurrently-running card's gate
   failing on a `NameError` that has nothing to do with its own work. K-033
   hit exactly this against K-027 and polled until the tree recovered rather

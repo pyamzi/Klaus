@@ -34,11 +34,11 @@ sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
 sys.modules["aqt"].mw = types.SimpleNamespace(onPrefs=lambda: None)
 
-settings = importlib.import_module("klausmate.settings")
-dashboard = importlib.import_module("klausmate.dashboard")
-theme = importlib.import_module("klausmate.theme")
-ps = importlib.import_module("klausmate.prefs_state")
-sb = importlib.import_module("klausmate.status_bar")
+settings = importlib.import_module("klaus_note.settings")
+dashboard = importlib.import_module("klaus_note.dashboard")
+theme = importlib.import_module("klaus_note.theme")
+ps = importlib.import_module("klaus_note.prefs_state")
+sb = importlib.import_module("klaus_note.status_bar")
 
 section("the value: 85 by default, 70-150 in 5s, anything else is the default")
 check("the default is 85", dashboard.BAR_SCALE_DEFAULT == 85 and dashboard.bar_scale_from_cfg({}) == 85)
@@ -47,16 +47,16 @@ for good in (70, 100, 120, 150):
 for bad in (65, 155, 87, "90", 90.0, True, None, [90]):
     check(f"{bad!r} reads as the default", dashboard.bar_scale_from_cfg({"bar_scale": bad}) == 85)
 check("a non-dict config reads as the default", dashboard.bar_scale_from_cfg(None) == 85)
-cfg_file = json.load(open("klausmate/config.json"))
+cfg_file = json.load(open("klaus_note/config.json"))
 check("config.json ships 85", cfg_file.get("bar_scale") == 85)
-check("config.md documents it", "**bar_scale**" in open("klausmate/config.md").read())
+check("config.md documents it", "**bar_scale**" in open("klaus_note/config.md").read())
 
 section("webviews: one CSS zoom on body, composed with Anki's own")
 check("85% is body zoom 0.85", theme.bar_zoom_css(85) == "body { zoom: 0.85; }", theme.bar_zoom_css(85))
 check("150% is 1.5", "zoom: 1.5;" in theme.bar_zoom_css(150))
 check("Anki's Linux webview zoom is multiplied, not replaced", "zoom: 1.7;" in theme.bar_zoom_css(85, 2.0))
 
-tb = importlib.import_module("klausmate.top_bar")
+tb = importlib.import_module("klaus_note.top_bar")
 toolbar_mod = types.ModuleType("aqt.toolbar")
 
 
@@ -96,7 +96,7 @@ check("with the design ON the zoom still comes once",
       injected(TopToolbar(), {"klausbook_design": True, "bar_scale": 110}).count("zoom: 1.1;") == 1)
 settings.store = settings.DictStore({})
 
-br_src = open("klausmate/bottom_row.py").read()
+br_src = open("klaus_note/bottom_row.py").read()
 check("the row's readout width is divided by the body zoom (getBoundingClientRect is zoomed)",
       "getComputedStyle(document.body).zoom" in br_src)
 
@@ -143,7 +143,7 @@ check("the preview config carries the pending size", ps.flatten_appearance(st.vi
 c = st.commit()
 check("Save writes bar_scale and repaints appearance",
       c.patch.get("bar_scale") == 110 and ("appearance",) in c.effects, str(c))
-mm = open("klausmate/manage_models.py").read()
+mm = open("klaus_note/manage_models.py").read()
 row = mm.split("bar_scale_slider = QSlider")[1].split('_row(appearance_layout, "Bar size"')[0]
 check("a Bar size slider on the Appearance page, 70-150 in 5s, with a % readout",
       '_row(appearance_layout, "Bar size", bar_scale_desc, bar_scale_ctl)' in mm

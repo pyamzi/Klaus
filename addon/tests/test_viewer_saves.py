@@ -43,40 +43,40 @@ sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["klaus-test"])
 
 TMP = tempfile.mkdtemp(prefix="klaus_viewer_saves_")
-sys.modules["klausmate"].USER_FILES = TMP  # pre-settings layout
+sys.modules["klaus_note"].USER_FILES = TMP  # pre-settings layout
 try:  # the settings seam, where it exists
-    importlib.import_module("klausmate.settings").user_files_dir = TMP
+    importlib.import_module("klaus_note.settings").user_files_dir = TMP
 except Exception:
     pass
 
-ph = importlib.import_module("klausmate.pdf_handler")
-asv = importlib.import_module("klausmate.annotation_save")
-src = importlib.import_module("klausmate.pdf_source")
-rp = importlib.import_module("klausmate.reader_panel")
-pj = importlib.import_module("klausmate.pdfjs_viewer")
+ph = importlib.import_module("klaus_note.pdf_handler")
+asv = importlib.import_module("klaus_note.annotation_save")
+src = importlib.import_module("klaus_note.pdf_source")
+rp = importlib.import_module("klaus_note.reader_panel")
+pj = importlib.import_module("klaus_note.pdfjs_viewer")
 COPY = "Marks couldn't be saved into the file yet; they're kept and will retry."
 
 section("user_files_dir(): settings seam when present, USER_FILES otherwise")
-pkg = sys.modules["klausmate"]
+pkg = sys.modules["klaus_note"]
 _MISSING = object()
-saved_mod = sys.modules.get("klausmate.settings", _MISSING)
+saved_mod = sys.modules.get("klaus_note.settings", _MISSING)
 saved_attr = getattr(pkg, "settings", _MISSING)
-fake_settings = types.ModuleType("klausmate.settings")
+fake_settings = types.ModuleType("klaus_note.settings")
 fake_settings.user_files = lambda: os.path.join(TMP, "from-settings")
 try:
-    sys.modules["klausmate.settings"] = fake_settings
+    sys.modules["klaus_note.settings"] = fake_settings
     pkg.settings = fake_settings
     check("with a settings module: settings.user_files()",
           src.user_files_dir() == os.path.join(TMP, "from-settings"))
-    sys.modules["klausmate.settings"] = None  # import raises ImportError
+    sys.modules["klaus_note.settings"] = None  # import raises ImportError
     if hasattr(pkg, "settings"):
         del pkg.settings
     check("without one: the package's USER_FILES", src.user_files_dir() == TMP)
 finally:
     if saved_mod is _MISSING:
-        sys.modules.pop("klausmate.settings", None)
+        sys.modules.pop("klaus_note.settings", None)
     else:
-        sys.modules["klausmate.settings"] = saved_mod
+        sys.modules["klaus_note.settings"] = saved_mod
     if saved_attr is not _MISSING:
         pkg.settings = saved_attr
     elif hasattr(pkg, "settings"):
@@ -185,7 +185,7 @@ with open(init_path, encoding="utf-8") as fh:
     init_text = fh.read()
 fn = next(n for n in ast.parse(init_text).body
           if isinstance(n, ast.FunctionDef) and n.name == "_flush_annotation_saves")
-ns = {"__package__": "klausmate", "__name__": "klausmate._flush_test"}
+ns = {"__package__": "klaus_note", "__name__": "klaus_note._flush_test"}
 exec(compile(ast.Module(body=[fn], type_ignores=[]), init_path, "exec"), ns)
 flushed = []
 asv.flush_all = lambda: flushed.append(True)
@@ -202,7 +202,7 @@ logs = []
 ns["print"] = lambda *a, **k: logs.append(" ".join(map(str, a)))
 ns["_flush_annotation_saves"]()
 check("a failing flush is logged, not raised",
-      len(logs) == 1 and logs[0].startswith("[klausmate]"))
+      len(logs) == 1 and logs[0].startswith("[klaus_note]"))
 reg = init_text.find("profile_will_close.append(_flush_annotation_saves)")
 sweep = init_text.find("profile_will_close.append(\n        _reader_panel_cleanup.cleanup_all_sidebars")
 check("registered before the sidebar sweep", 0 <= reg < sweep)

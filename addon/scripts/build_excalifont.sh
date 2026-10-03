@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rebuild klausmate/web/fonts/Excalifont-Regular.ttf, the Preferences
+# Rebuild klaus_note/web/fonts/Excalifont-Regular.ttf, the Preferences
 # wordmark font. Source: the Latin subset of Excalifont shipped (as woff2)
 # in @excalidraw/excalidraw (MIT). Qt cannot load woff2, so it is
 # converted to TTF with fontTools. Needs node/npm and python3; network only
@@ -7,7 +7,7 @@
 set -eu
 VERSION=0.18.1
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-OUT="$REPO/klausmate/web/fonts"
+OUT="$REPO/klaus_note/web/fonts"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 cd "$TMP"
@@ -23,7 +23,7 @@ out, files = sys.argv[1], sys.argv[2:]
 for f in files:
     font = TTFont(f)
     cmap = font.getBestCmap()
-    # The Latin subset: the one covering "KlausMate" and basic ASCII letters.
+    # The Latin subset: the one covering "Klaus Note" and basic ASCII letters.
     if all(ord(c) in cmap for c in "ABCXYZabcxyz0123456789"):
         font.flavor = None
         font.save(out)

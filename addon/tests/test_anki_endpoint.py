@@ -8,10 +8,10 @@ from anki_stubs import check, code_only, install, report, section
 
 install()
 import importlib
-ep = importlib.import_module("klausmate.anki_endpoint")
+ep = importlib.import_module("klaus_note.anki_endpoint")
 # Committed separately (Task 5/K-196) but landed by the time this fix round
 # runs; real module, no stub needed — pure dict state, no aqt.
-viewer_context = importlib.import_module("klausmate.viewer_context")
+viewer_context = importlib.import_module("klaus_note.viewer_context")
 # K-207: the semantic note search builds a real card_index fixture on disk
 # and stubs the embedding call (same pattern test_anki_tools.py already
 # uses for _semantic_pdf_search) — no network, no API key, no paid call.
@@ -21,9 +21,9 @@ viewer_context = importlib.import_module("klausmate.viewer_context")
 # to whatever is already in sys.modules — so the real module object,
 # never an `ep.embeddings` attribute (there isn't one), is what has to be
 # patched for the handler to see the fakes.
-card_index = importlib.import_module("klausmate.card_index")
-embeddings = importlib.import_module("klausmate.embeddings")
-# install() gives klausmate a synthetic __init__ (real klausmate/__init__.py
+card_index = importlib.import_module("klaus_note.card_index")
+embeddings = importlib.import_module("klaus_note.embeddings")
+# install() gives klaus_note a synthetic __init__ (real klaus_note/__init__.py
 # is never executed, since importing submodules never needs it) — it has no
 # anki_tools._semantic_pdf_search does.
 
@@ -620,7 +620,7 @@ class _FakeSemProvider:
 class _FailingSemProvider:
     def embed(self, texts, kind="query"):
         raise embeddings.EmbeddingError(
-            "OpenAI API key is not set — add it in KlausMate Preferences "
+            "OpenAI API key is not set — add it in Klaus Note Preferences "
             "→ API keys & models.", provider="OpenAI", status=401)
 
 
@@ -671,7 +671,7 @@ try:
     r_err = ac("klausSearchNotesSemantic", query="tell me about the kidneys")
     check("an embedding failure (no key) answers the provider's own clean message, no 'EmbeddingError:' prefix",
           r_err["result"] is None
-          and r_err["error"] == "OpenAI API key is not set — add it in KlausMate Preferences → API keys & models."
+          and r_err["error"] == "OpenAI API key is not set — add it in Klaus Note Preferences → API keys & models."
           and "EmbeddingError" not in r_err["error"])
 
     # A blank query is rejected before any embedding call is made.
@@ -838,7 +838,7 @@ section("what only a running Anki can prove")
 # strips string literals along with comments, so a check against the
 # stripped text would pass even if the message text were deleted entirely
 # (see klaus-test-code-only-trap memory).
-_SRC = open("klausmate/anki_endpoint.py").read()
+_SRC = open("klaus_note/anki_endpoint.py").read()
 _CODE = code_only(_SRC)
 check("no app-modal exec() anywhere in the module (K-114) — the approval "
       "dialog is window-modal open(), never exec()",
@@ -846,18 +846,18 @@ check("no app-modal exec() anywhere in the module (K-114) — the approval "
       and "QMessageBox.question" not in _CODE and "askUser(" not in _CODE
       and "dlg.open()" in _CODE)
 check("the approver thread logs rather than swallowing an exception",
-      "[klausmate] endpoint approver" in _SRC)
+      "[klaus_note] endpoint approver" in _SRC)
 check("the dialog thread logs rather than swallowing an exception",
-      "[klausmate] endpoint dialog" in _SRC)
+      "[klaus_note] endpoint dialog" in _SRC)
 check("stop() logs rather than swallowing an exception",
-      "[klausmate] endpoint stop" in _SRC)
+      "[klaus_note] endpoint stop" in _SRC)
 check("do_POST's own safety net logs rather than dropping the connection silently",
-      "[klausmate] endpoint:" in _SRC)
+      "[klaus_note] endpoint:" in _SRC)
 # Parked T3 finding, fix now: handle()'s generic except returned the
 # error over HTTP to the child and left NO trace on Anki's side, so a
 # failing tool call was invisible to the user and to a later debug pass.
 check("handle()'s generic except LOGS the failure, not only returns it",
-      '[klausmate] endpoint {action}: {type(exc).__name__}: {exc}' in _SRC)
+      '[klaus_note] endpoint {action}: {type(exc).__name__}: {exc}' in _SRC)
 
 # --- I6: DENY is the default button. QDialogButtonBox makes Ok the
 # default, and this dialog is window-modal on mw, so it takes keyboard

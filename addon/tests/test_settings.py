@@ -15,7 +15,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-st = importlib.import_module("klausmate.settings")
+st = importlib.import_module("klaus_note.settings")
 
 section("DictStore")
 d = st.DictStore({"a": 1, "nested": {"x": [1]}})
@@ -101,7 +101,7 @@ check("…and never re-applies the default over a later choice", again["embeddin
 check("the scrub is registered by default", st._scrub_legacy in st.DEFAULT_MIGRATIONS)
 
 section("the package root no longer owns config or the user-files path")
-_init = open("klausmate/__init__.py").read()
+_init = open("klaus_note/__init__.py").read()
 check("no accessor, no USER_FILES constant, no legacy list, no _migrate_config on the package root",
       not any(t in _init for t in ("def get_config", "def write_config", "def patch_config",
                                     "\nUSER_FILES =", "_LEGACY_KEYS_DROPPED", "def _migrate_config")))
@@ -114,7 +114,7 @@ import glob  # noqa: E402
 import re  # noqa: E402
 
 offenders = {}
-for path in sorted(glob.glob("klausmate/*.py")):
+for path in sorted(glob.glob("klaus_note/*.py")):
     name = os.path.basename(path)
     if name in ("settings.py", "__init__.py"):
         continue
@@ -131,12 +131,12 @@ for path in sorted(glob.glob("klausmate/*.py")):
         offenders[name] = hits
 check("every module reads and writes through settings", not offenders, str(offenders))
 check("the config-only reach-back helpers are gone",
-      all("def _pkg" not in open(f"klausmate/{m}.py").read() for m in ("setup_flow", "tag_migrate", "tag_sync")))
+      all("def _pkg" not in open(f"klaus_note/{m}.py").read() for m in ("setup_flow", "tag_migrate", "tag_sync")))
 
 section("retention's threshold migrations are pure and registered")
 import types  # noqa: E402
 
-rt = importlib.import_module("klausmate.retention")
+rt = importlib.import_module("klaus_note.retention")
 check("both are registered with settings", rt._migrate_threshold_scale in st._migrations and rt._migrate_default_threshold in st._migrations)
 cleared: list = []
 rt.clear_threshold_overrides = lambda: cleared.append(1) or 0
@@ -159,19 +159,19 @@ import subprocess  # noqa: E402
 
 # A fresh process, because this file has already imported retention itself:
 # the question is what __init__ ALONE registers before profile_did_open
-# runs settings.migrate, and whether exec_klausmate_under_qt leaves a
+# runs settings.migrate, and whether exec_klaus_note_under_qt leaves a
 # settings.patch that can land (the stub mw's col is a new _Dummy per
 # access, so a live current_profile() fence would drop every write).
 _PROBE = """
 import json, sys, tempfile
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
-from anki_stubs import install, exec_klausmate_under_qt
+from anki_stubs import install, exec_klaus_note_under_qt
 install()
 from PyQt6 import QtWidgets
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-K = exec_klausmate_under_qt(tempfile.mkdtemp(prefix="klaus-boot-probe-"))
-import klausmate.settings as st
-loaded = "klausmate.retention" in sys.modules
+K = exec_klaus_note_under_qt(tempfile.mkdtemp(prefix="klaus-boot-probe-"))
+import klaus_note.settings as st
+loaded = "klaus_note.retention" in sys.modules
 st.store = st.DictStore({})
 st.patch({"probe": 1})
 print(json.dumps({"retention_loaded": loaded, "migrations": [f.__name__ for f in st._migrations],
@@ -184,13 +184,13 @@ check("__init__ imports retention at module level, so its two threshold migratio
       _probe.get("retention_loaded") is True
       and {"_migrate_threshold_scale", "_migrate_default_threshold"} <= set(_probe.get("migrations", [])),
       repr(_probe) + _out.stderr[-400:])
-check("after exec_klausmate_under_qt a main-thread settings.patch lands (no stub-mw profile fence, no swallowed hop)",
+check("after exec_klaus_note_under_qt a main-thread settings.patch lands (no stub-mw profile fence, no swallowed hop)",
       _probe.get("patched") is True, repr(_probe))
 
 section("pdf_path_for falls back to the configured library root through settings")
 import tempfile  # noqa: E402
 
-ph = importlib.import_module("klausmate.pdf_handler")
+ph = importlib.import_module("klaus_note.pdf_handler")
 tmp = tempfile.mkdtemp()
 uf = os.path.join(tmp, "uf")
 os.makedirs(os.path.join(uf, "pdfs"))
@@ -207,8 +207,8 @@ st.store = st.DictStore({})
 check("…and returns None with no root configured and no file", ph.pdf_path_for(uf, "lecture") is None)
 
 section("dashboard.write_cfg writes through settings and keeps its preview rule")
-dash = importlib.import_module("klausmate.dashboard")
-bg = importlib.import_module("klausmate.background")
+dash = importlib.import_module("klaus_note.dashboard")
+bg = importlib.import_module("klaus_note.background")
 st.store = st.DictStore({"heatmap_enabled": True})
 armed: list = []
 bg.preview_active = lambda: True

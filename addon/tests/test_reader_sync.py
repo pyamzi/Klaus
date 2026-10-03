@@ -55,23 +55,23 @@ UF = os.path.join(TMP, "user_files")
 ROOT = os.path.join(TMP, "Library")
 os.makedirs(UF)
 os.makedirs(ROOT)
-sys.modules["klausmate"].USER_FILES = UF  # pre-settings layout
+sys.modules["klaus_note"].USER_FILES = UF  # pre-settings layout
 try:  # the settings seam, where it exists
-    importlib.import_module("klausmate.settings").user_files_dir = UF
+    importlib.import_module("klaus_note.settings").user_files_dir = UF
 except Exception:
     pass
 
-ph = importlib.import_module("klausmate.pdf_handler")
+ph = importlib.import_module("klaus_note.pdf_handler")
 ph._live_library_root = lambda: ROOT
-src = importlib.import_module("klausmate.pdf_source")
+src = importlib.import_module("klaus_note.pdf_source")
 src.user_files_dir = lambda: UF
-store = importlib.import_module("klausmate.drive_store")
-ds = importlib.import_module("klausmate.doc_sync")
+store = importlib.import_module("klaus_note.drive_store")
+ds = importlib.import_module("klaus_note.doc_sync")
 ds._sync = lambda: None  # no real watcher: events are driven by hand
-asv = importlib.import_module("klausmate.annotation_save")
-pj = importlib.import_module("klausmate.pdfjs_viewer")
-rp = importlib.import_module("klausmate.reader_panel")
-pdrive = importlib.import_module("klausmate.pdf_drive")
+asv = importlib.import_module("klaus_note.annotation_save")
+pj = importlib.import_module("klaus_note.pdfjs_viewer")
+rp = importlib.import_module("klaus_note.reader_panel")
+pdrive = importlib.import_module("klaus_note.pdf_drive")
 
 LOG: list = []
 
@@ -754,7 +754,7 @@ check("the closed one does not", e1_followed == [], str(e1_followed))
 e2.cleanup()
 
 section("the old pollers are gone")
-# The deleted names are pinned by the task's grep over klausmate and tests,
+# The deleted names are pinned by the task's grep over klaus_note and tests,
 # which must come back empty, so they are not spelled out here.
 check("the Library watcher tick no longer polls open readers",
       "reader_panel" not in inspect.getsource(pdrive._on_fs_tick))

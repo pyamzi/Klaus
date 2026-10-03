@@ -24,10 +24,10 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install_package_stub, report, section  # noqa: E402
 
 install_package_stub()
-card_index = importlib.import_module("klausmate.card_index")
-duplicates = importlib.import_module("klausmate.duplicates")
+card_index = importlib.import_module("klaus_note.card_index")
+duplicates = importlib.import_module("klaus_note.duplicates")
 
-SRC = open(os.path.join("klausmate", "duplicates.py"), encoding="utf-8").read()
+SRC = open(os.path.join("klaus_note", "duplicates.py"), encoding="utf-8").read()
 
 
 # --------------------------------------------------------------- fixtures
@@ -355,8 +355,8 @@ with contextlib.redirect_stdout(buf):
     duplicates.scan_index(openai_ix, threshold=0.0, hamming_cut=openai_ix.dims)
 out = buf.getvalue()
 check("the mismatch is logged once per distinct index signature, house "
-      "style (print('[klausmate] ...')), not once per call",
-      out.count("[klausmate]") == 1)
+      "style (print('[klaus_note] ...')), not once per call",
+      out.count("[klaus_note]") == 1)
 check("...and it names both the calibrated model and the actual one",
       "nomic-embed-text" in out and "text-embedding-3-large" in out)
 
@@ -364,7 +364,7 @@ buf2 = io.StringIO()
 with contextlib.redirect_stdout(buf2):
     duplicates.duplicates_of(calibrated_ix, calibrated_ix.nids[0], threshold=0.0)
 check("a calibrated index never logs a mismatch it doesn't have",
-      "[klausmate]" not in buf2.getvalue())
+      "[klaus_note]" not in buf2.getvalue())
 
 
 # ------------------------------------------------------------ house rules
@@ -384,7 +384,7 @@ check("None is never current", not duplicates.index_is_current(None, sig3))
 # The signature comparison has ONE sanctioned spelling. Widening
 # index_signature to three elements broke eight hand-spelled call sites
 # at once, silently — a 2-tuple compared to a 3-tuple is simply never
-# equal, so every cache read as stale. test_klausmate.py pins the same
+# equal, so every cache read as stale. test_klaus_note.py pins the same
 # regex over six other modules; this is duplicates.py's copy of it.
 _SIG_SPELLINGS = re.compile(
     r"\(\w+\.provider,\s*\w+\.model\)\s*[!=]=\s*(?:cfg_)?sig(?:nature)?\b|"

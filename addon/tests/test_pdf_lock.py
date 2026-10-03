@@ -20,7 +20,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-ph = importlib.import_module("klausmate.pdf_handler")
+ph = importlib.import_module("klaus_note.pdf_handler")
 
 
 def make_world(tmp: str, outside: bool = False):
@@ -254,8 +254,8 @@ with tempfile.TemporaryDirectory() as tmp:
     ph.save_annotations(uf, "Lecture", json.loads(marks)["highlights"])
 
     section("...and the save lands when the file comes back (\"back\" retries it)")
-    asv = importlib.import_module("klausmate.annotation_save")
-    ds = importlib.import_module("klausmate.doc_sync")
+    asv = importlib.import_module("klaus_note.annotation_save")
+    ds = importlib.import_module("klaus_note.doc_sync")
     ds._sync = lambda: None
     timers, events = [], []
     pipe = asv.SavePipeline(uf, lambda cb: cb(), lambda n, ms, cb: timers.append(cb),
@@ -286,8 +286,8 @@ with tempfile.TemporaryDirectory() as tmp:
     uf, root, old = make_world(tmp)
     new = os.path.join(root, "Renamed.pdf")
     os.rename(old, new)  # renamed in Finder; the rescan has not run yet
-    asv = importlib.import_module("klausmate.annotation_save")
-    ds = importlib.import_module("klausmate.doc_sync")
+    asv = importlib.import_module("klaus_note.annotation_save")
+    ds = importlib.import_module("klaus_note.doc_sync")
     ds._sync = lambda: None
     events = []
     pipe = asv.SavePipeline(uf, lambda cb: cb(), lambda n, ms, cb: None, lambda n, st: None)

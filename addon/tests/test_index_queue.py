@@ -14,7 +14,7 @@ is replaced with a queue the test drains, which is what makes "one job
 at a time" observable at all: real Qt would start the next job whenever
 it felt like it.
 
-PDFs are real files in a temp tree (never `klausmate/user_files/`), so
+PDFs are real files in a temp tree (never `klaus_note/user_files/`), so
 the deleted-before-its-turn path runs the real `pdf_index.source_signature`
 rather than a mock of it.
 """
@@ -38,8 +38,8 @@ from anki_stubs import ADDON, check, code_only, install, report, section  # noqa
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
-iq = importlib.import_module("klausmate.index_queue")
+import klaus_note.settings as _settings  # noqa: E402
+iq = importlib.import_module("klaus_note.index_queue")
 
 
 # --------------------------------------------------------------- pure gates
@@ -92,11 +92,11 @@ check(
 )
 check(
     "the add tooltip distinguishes running from queued",
-    iq.queued_message("A", 0).startswith("KlausMate: indexing")
+    iq.queued_message("A", 0).startswith("Klaus Note: indexing")
     and "3 ahead of it" in iq.queued_message("A", 3),
 )
 section("the status bar's index task (status bar 4/6)")
-_tasks = importlib.import_module("klausmate.tasks")
+_tasks = importlib.import_module("klaus_note.tasks")
 _tasks.run_on_main = lambda fn: fn()
 _tasks.clear()
 iq._report_task(iq.RunnerState(active=True, name="Anemia", label="Embedding PDF…", done=3, total=10))
@@ -288,14 +288,14 @@ def new_world(cfg=None, names=("a", "b", "c")):
     for n in names:
         with open(os.path.join(tmp, "contexts", n + ".txt"), "w") as f:
             f.write("page text " + n)
-    pkg = sys.modules["klausmate"]
+    pkg = sys.modules["klaus_note"]
     _settings.user_files_dir = tmp
 
     pipe = Pipeline()
     for dotted, obj in (
-        ("klausmate.curation", pipe),
-        ("klausmate.retention", pipe),
-        ("klausmate.tag_sync", pipe),
+        ("klaus_note.curation", pipe),
+        ("klaus_note.retention", pipe),
+        ("klaus_note.tag_sync", pipe),
     ):
         sys.modules[dotted] = obj
         setattr(pkg, dotted.split(".")[1], obj)
@@ -588,8 +588,8 @@ check("waiting is bounded — it never spins forever", FakeTimer.pending == [])
 check("...and the work is kept, not thrown away", iq._queue.pending() == 1)
 
 
-pdf_index = importlib.import_module("klausmate.pdf_index")
-embeddings = importlib.import_module("klausmate.embeddings")
+pdf_index = importlib.import_module("klaus_note.pdf_index")
+embeddings = importlib.import_module("klaus_note.embeddings")
 
 
 class _FakeSignal:
@@ -858,7 +858,7 @@ class _Proxy:
 
 
 def _swap(dotted, obj):
-    pkg = sys.modules["klausmate"]
+    pkg = sys.modules["klaus_note"]
     short = dotted.split(".")[1]
     prev = sys.modules.get(dotted), getattr(pkg, short, None)
     sys.modules[dotted] = obj
@@ -868,14 +868,14 @@ def _swap(dotted, obj):
 
 def _unswap(saved):
     dotted, short, (mod, attr) = saved
-    pkg = sys.modules["klausmate"]
+    pkg = sys.modules["klaus_note"]
     if mod is not None:
         sys.modules[dotted] = mod
     setattr(pkg, short, attr)
 
 
 tmp, pipe = new_world()
-_saved = _swap("klausmate.curation", _Proxy(pipe, "_busy", RuntimeError("token unreadable")))
+_saved = _swap("klaus_note.curation", _Proxy(pipe, "_busy", RuntimeError("token unreadable")))
 iq.request_pdf("a", announce=False)
 FakeTimer.drain(limit=1)
 _unswap(_saved)
@@ -890,8 +890,8 @@ check(
 
 # --- :513 — `_pdf_present`'s except arm returns True ------------------------
 tmp, pipe = new_world()
-pdf_index_mod = importlib.import_module("klausmate.pdf_index")
-_saved = _swap("klausmate.pdf_index",
+pdf_index_mod = importlib.import_module("klaus_note.pdf_index")
+_saved = _swap("klaus_note.pdf_index",
                _Proxy(pdf_index_mod, "source_signature", OSError("disk hiccup")))
 iq.request_pdf("a", announce=False)
 FakeTimer.drain(limit=1)
@@ -1097,8 +1097,8 @@ check("matching completion writes the lecture tag",
 # ------------------------------------------------------------ manual indexing
 
 section("manual indexing: what needs indexing, and the refresh button")
-pdf_index = importlib.import_module("klausmate.pdf_index")
-drive_store = importlib.import_module("klausmate.drive_store")
+pdf_index = importlib.import_module("klaus_note.pdf_index")
+drive_store = importlib.import_module("klaus_note.drive_store")
 _sig = ("ollama", "nomic-embed-text", 0)
 _fresh = {"exists": True, "complete": True, "version": pdf_index.INDEX_VERSION, "provider": "ollama",
           "model": "nomic-embed-text", "dims": 768, "source_sig": (5, 10)}
@@ -1203,16 +1203,16 @@ section("indexing is manual only")
 for _gone in ("on_pdf_imported", "resume_unindexed", "auto_index_enabled", "offer_model_sweep",
               "sweep_message", "sweep_jobs", "CONFIG_KEY"):
     check(f"index_queue.{_gone} is gone", not hasattr(iq, _gone))
-_sf = open("klausmate/setup_flow.py", encoding="utf-8").read()
+_sf = open("klaus_note/setup_flow.py", encoding="utf-8").read()
 check("profile open runs no sweep",
       not any(n in _sf for n in ("_offer_v2_index_sweep", "_rematch_stale_matches", "_resume_unindexed")))
-check("imports do not index", "on_pdf_imported" not in open("klausmate/__init__.py", encoding="utf-8").read())
+check("imports do not index", "on_pdf_imported" not in open("klaus_note/__init__.py", encoding="utf-8").read())
 check("the rescan queues nothing",
-      "index_queue" not in open("klausmate/pdf_drive.py", encoding="utf-8").read().split("def _tell_readers")[1].split("\ndef ")[0])
+      "index_queue" not in open("klaus_note/pdf_drive.py", encoding="utf-8").read().split("def _tell_readers")[1].split("\ndef ")[0])
 check("config has no auto_index_on_add",
-      "auto_index_on_add" not in open("klausmate/config.json", encoding="utf-8").read()
-      and "auto_index_on_add" not in open("klausmate/config.md", encoding="utf-8").read())
-_mm = open("klausmate/manage_models.py", encoding="utf-8").read()
+      "auto_index_on_add" not in open("klaus_note/config.json", encoding="utf-8").read()
+      and "auto_index_on_add" not in open("klaus_note/config.md", encoding="utf-8").read())
+_mm = open("klaus_note/manage_models.py", encoding="utf-8").read()
 check("a model change tooltips instead of prompting",
       "offer_model_sweep" not in _mm and "Press ⟳ in the Library to re-index for the new model." in _mm)
 

@@ -6,7 +6,7 @@ Pins the acceptance criteria from board/board.py show K-112:
   1. every QDialog these modules build applies theme.dialog_qss(...)
   2. secondary/cancel buttons carry the SecondaryButton objectName
   3. no literal hardcoded hex colour outside comments
-  4. window titles use "KlausMate" casing where the addon name appears in
+  4. window titles use "Klaus Note" casing where the addon name appears in
      a title, while short "Klaus" prose (e.g. "Welcome to Klaus") is left
      alone
 """
@@ -19,15 +19,15 @@ from anki_stubs import check, install, report, section
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 
 # Importing under the headless stubs also proves neither module raises at
 # import time (syntax errors, bad relative imports, etc.) after the edit.
-setup_flow = importlib.import_module("klausmate.setup_flow")
-crop_dialog = importlib.import_module("klausmate.crop_dialog")
+setup_flow = importlib.import_module("klaus_note.setup_flow")
+crop_dialog = importlib.import_module("klaus_note.crop_dialog")
 
-_SETUP_SRC = open("klausmate/setup_flow.py").read()
-_CROP_SRC = open("klausmate/crop_dialog.py").read()
+_SETUP_SRC = open("klaus_note/setup_flow.py").read()
+_CROP_SRC = open("klaus_note/crop_dialog.py").read()
 
 _HEX_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 
@@ -78,9 +78,9 @@ check("a file it cannot tokenise reports a finding, never a pass",
 section("setup_flow.py: dialogs are themed")
 check("references theme.dialog_qss", "dialog_qss" in _SETUP_SRC)
 check("references theme.night_mode", "night_mode" in _SETUP_SRC)
-check("guarded with try/except + print('[klausmate] ...') fallback pattern",
+check("guarded with try/except + print('[klaus_note] ...') fallback pattern",
       "except Exception as exc:" in _SETUP_SRC
-      and 'print(f"[klausmate] setup dialog theme failed' in _SETUP_SRC)
+      and 'print(f"[klaus_note] setup dialog theme failed' in _SETUP_SRC)
 check("a shared themed-message-box helper backs every QMessageBox",
       "_themed_message_box" in _SETUP_SRC)
 check("no bare, unstyled QMessageBox(mw) construction left behind",
@@ -112,8 +112,8 @@ check("zero literal hex colours in code (comments are exempt)",
 section("setup_flow.py: window title casing")
 check('"Welcome to Klaus" prose title is left untouched (explicitly exempt)',
       '"Welcome to Klaus"' in _SETUP_SRC)
-check("addon-name window titles use KlausMate casing",
-      "KlausMate: local models" in _SETUP_SRC)
+check("addon-name window titles use Klaus Note casing",
+      "Klaus Note: local models" in _SETUP_SRC)
 check("bare 'Klaus:' titles were not left behind",
       "Klaus: Ollama isn't running" not in _SETUP_SRC
       and "Klaus: local embedding model isn't set up yet" not in _SETUP_SRC
@@ -125,9 +125,9 @@ section("crop_dialog.py: dialog is themed")
 check("references theme.dialog_qss", "dialog_qss" in _CROP_SRC)
 check("references theme.muted_label_qss for the hint label",
       "muted_label_qss" in _CROP_SRC)
-check("guarded with try/except + print('[klausmate] ...') fallback pattern",
+check("guarded with try/except + print('[klaus_note] ...') fallback pattern",
       "except Exception as exc:" in _CROP_SRC
-      and 'print(f"[klausmate] crop dialog theme failed' in _CROP_SRC)
+      and 'print(f"[klaus_note] crop dialog theme failed' in _CROP_SRC)
 
 section("crop_dialog.py: button roles")
 check("Cancel button carries SecondaryButton",
@@ -171,7 +171,7 @@ def _paint_event_guarded(src: str) -> tuple:
                     return (
                         True,
                         "painter.end()" in fin,
-                        "[klausmate]" in exc,
+                        "[klaus_note]" in exc,
                     )
     return (False, False, False)
 
@@ -188,7 +188,7 @@ check("rubber-band selection state machine intact",
       and 'self._mode = "resize"' in _CROP_SRC)
 check("save-as-new-file encode path intact",
       "def encode_cropped" in _CROP_SRC and "_KEEP_FORMATS" in _CROP_SRC)
-check("crop dialog title still names the file, not renamed to KlausMate",
+check("crop dialog title still names the file, not renamed to Klaus Note",
       'f"Crop Image: {fname}"' in _CROP_SRC)
 
 class _FakeBtn:

@@ -8,8 +8,8 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, code_only, install, report, section
 
 install()
-top_bar = importlib.import_module("klausmate.top_bar")
-theme = importlib.import_module("klausmate.theme")
+top_bar = importlib.import_module("klaus_note.top_bar")
+theme = importlib.import_module("klaus_note.theme")
 
 section("logo")
 html = top_bar.logo_html()
@@ -35,7 +35,7 @@ check("colour comes from the CSS var with a currentColor fallback — "
       "var(--klaus-text, currentColor)" in html
       and "#" not in html.split("href=#")[1])
 check("clicking the k opens Klaus's own settings",
-      "pycmd('klausmate:settings')" in html)
+      "pycmd('klaus_note:settings')" in html)
 check("addressable for styling", 'id="klaus-logo"' in html)
 # The <a> is the accessible element: it carries the name a screen
 # reader announces and the click target. klaus-logo.svg ships its own
@@ -122,7 +122,7 @@ check("rule bodies reference the klaus vars", "var(--klaus-" in rules)
 check("the logo fills a var, so it recolours too",
       "var(--klaus-text," in top_bar.logo_html())
 check("top_bar injects without a snapshot",
-      "toolbar_css()" in open("klausmate/top_bar.py").read())
+      "toolbar_css()" in open("klaus_note/top_bar.py").read())
 
 section("seamless with the OS title bar")
 check("no hairline under the bar (would break the seam)",
@@ -147,13 +147,13 @@ check("a hostile value stays inside ONE escaped JS string literal",
 check("...and the colour is the only interpolated part",
       _js_h.replace(json.dumps(_hostile), "") .count('"') == 0)
 check("theme changes repaint the bar (Anki won't re-inject)",
-      "theme_did_change" in open("klausmate/top_bar.py").read())
+      "theme_did_change" in open("klaus_note/top_bar.py").read())
 # The old first-paint override set --klaus-chrome on BOTH the light and
 # dark selectors at once, pinning both themes to one draw-time snapshot
 # — that is why the bar came up light in dark mode. It is gone; the
 # background CSS is what the injector adds now, and the live window
 # colour is only ever pushed imperatively (theme_did_change).
-_src = open("klausmate/top_bar.py").read()
+_src = open("klaus_note/top_bar.py").read()
 _inject = _src.split("def _on_webview_will_set_content")[1].split("def setup")[0]
 check("first paint no longer pins both themes to one snapshot",
       ":root.night-mode" not in _inject)
@@ -167,12 +167,12 @@ check("_background_css takes no bar/bottom distinction any more — its "
       "only remaining caller wants the deck/overview background",
       "def _background_css() -> str:" in _src)
 check("the logo's settings command is intercepted",
-      "klausmate:settings" in _src and "webview_did_receive_js_message" in _src)
+      "klaus_note:settings" in _src and "webview_did_receive_js_message" in _src)
 
 section("a SEPARATE background for the study screen")
 # Pouya: "this needs to be separate from the background I set for the
 # regular main section." One dispatch function, two independent paths.
-_main_src = open("klausmate/top_bar.py").read()
+_main_src = open("klaus_note/top_bar.py").read()
 _dispatch = _main_src.split("def _on_main_webview_content")[1].split(
     "def _on_js_message")[0]
 check("the reviewer's own webview is handled — context=self in "
@@ -279,7 +279,7 @@ check("logo lands FIRST, other addons' items untouched after it",
 # so the first sheet bakes the DEFAULT accent; without this profile-open
 # redraw the k launched blue on every restart whatever theme was
 # saved (live repro, 2026-08-30). code_only so prose can't fake the pin.
-_wiring_code = code_only(open("klausmate/top_bar.py").read())
+_wiring_code = code_only(open("klaus_note/top_bar.py").read())
 check("setup registers a profile-open toolbar redraw (saved accent "
       "reaches the bar only through it)",
       "gui_hooks.profile_did_open.append(_on_profile_open_redraw)"
@@ -315,9 +315,9 @@ check("only the <button>-specific native strip is extra on the bottom",
       "-webkit-appearance: none !important;" in bcss
       and "#header button" in bcss)
 check("hook injects it for deck-browser and overview bottom bars only",
-      '"DeckBrowserBottomBar"' in open("klausmate/top_bar.py").read()
-      and '"OverviewBottomBar"' in open("klausmate/top_bar.py").read()
-      and "ReviewerBottomBar" not in open("klausmate/top_bar.py").read())
+      '"DeckBrowserBottomBar"' in open("klaus_note/top_bar.py").read()
+      and '"OverviewBottomBar"' in open("klaus_note/top_bar.py").read()
+      and "ReviewerBottomBar" not in open("klaus_note/top_bar.py").read())
 
 section("logo geometry: code == brand file, Qt == web")
 # The code and the brand file cannot drift: docs/reference/brand/
@@ -398,7 +398,7 @@ check("the will_set_content injection and the push share one tag id, "
       in inspect.getsource(top_bar.reviewer_style_push_js))
 
 section("gradient editor wiring (drag on the actual screen)")
-_tb_raw = open("klausmate/top_bar.py").read()
+_tb_raw = open("klaus_note/top_bar.py").read()
 _tb_code = code_only(_tb_raw)
 check("both screens plant the editor at page build while armed — two "
       "gradient_edit_js call sites, each inside its branch's `if css` "
@@ -415,7 +415,7 @@ check("refresh()'s review path cleans THEN re-plants (a planted "
 # Behavioural: a real drag-end message through the real handler.
 import base64 as _b64
 
-_bg_mod = importlib.import_module("klausmate.background")
+_bg_mod = importlib.import_module("klaus_note.background")
 _seen: list = []
 _bg_mod.set_grad_edit(True, lambda t, op, d: _seen.append((t, op, d)))
 _payload = _b64.b64encode(
@@ -423,7 +423,7 @@ _payload = _b64.b64encode(
                 "x": 30, "y": 40, "size": 120}).encode()
 ).decode()
 _res = top_bar._on_js_message(
-    (False, None), "klausmate:bggrad:" + _payload, None
+    (False, None), "klaus_note:bggrad:" + _payload, None
 )
 _bg_mod.set_grad_edit(False, None)
 check("an editor pycmd decodes, clamps, reaches the sink with its op "
@@ -433,7 +433,7 @@ check("an editor pycmd decodes, clamps, reaches the sink with its op "
                      {"i": 1, "x": 30, "y": 40, "size": 120})])
 check("a garbage payload is swallowed, never raises out of the hook",
       top_bar._on_js_message(
-          (False, None), "klausmate:bggrad:@@not-b64@@", None
+          (False, None), "klaus_note:bggrad:@@not-b64@@", None
       ) == (True, None))
 
 raise SystemExit(report())

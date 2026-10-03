@@ -5,14 +5,14 @@ from pathlib import Path
 from enum import IntEnum
 from unittest.mock import patch
 sys.path.insert(0, '.claude/skills/klaus-test/scripts')
-from anki_stubs import install, exec_klausmate_under_qt, check, report, LiveStore
+from anki_stubs import install, exec_klaus_note_under_qt, check, report, LiveStore
 install()
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 from PyQt6 import QtWidgets
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 with tempfile.TemporaryDirectory(prefix='external clients ') as root:
-    K = exec_klausmate_under_qt(root)
-    cfg = json.loads(Path('klausmate/config.json').read_text())
+    K = exec_klaus_note_under_qt(root)
+    cfg = json.loads(Path('klaus_note/config.json').read_text())
     writes = []
     _settings.store = LiveStore(cfg, writes)
     mw = QtWidgets.QMainWindow()
@@ -27,7 +27,7 @@ with tempfile.TemporaryDirectory(prefix='external clients ') as root:
     sys.modules['aqt.theme'] = theme
     mw.pm = types.SimpleNamespace(theme=lambda: Theme.SYSTEM)
     K.mw = sys.modules['aqt'].mw = mw
-    mm = importlib.import_module('klausmate.manage_models'); mm.mw = mw
+    mm = importlib.import_module('klaus_note.manage_models'); mm.mw = mw
     pending_ops = []
     class Op:
         def __init__(self, parent, op, success):
@@ -40,8 +40,8 @@ with tempfile.TemporaryDirectory(prefix='external clients ') as root:
             check('interpreter lookup collection-free', self.free)
             pending_ops.append(self)
     mm.QueryOp = Op
-    importlib.import_module('klausmate.curation').index_stats = lambda: {'exists': False}
-    bridge = importlib.import_module('klausmate.scripts.mcp_stdio_bridge')
+    importlib.import_module('klaus_note.curation').index_stats = lambda: {'exists': False}
+    bridge = importlib.import_module('klaus_note.scripts.mcp_stdio_bridge')
     script = str(Path(root)/'addon space/scripts/mcp_stdio_bridge.py')
     discovery = str(Path(root)/'user files/mcp_connection.json')
     interpreter = str(Path(root)/'Python 3/python3')

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rebuild klausmate/image_occlusion/excalidraw/ (the "Draw a diagram…"
+# Rebuild klaus_note/image_occlusion/excalidraw/ (the "Draw a diagram…"
 # page): entry.jsx + @excalidraw/excalidraw + React, bundled by esbuild into
 # ONE classic script (IIFE) because Anki serves add-on files over its local
 # /_addons/ server, plus the stylesheet, the fonts and the licences.
@@ -16,7 +16,7 @@ EXCALIDRAW=0.18.1
 REACT=18.3.1
 ESBUILD=0.19.10   # the esbuild Excalidraw 0.18.1 itself builds with
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-OUT="$REPO/klausmate/image_occlusion/excalidraw"
+OUT="$REPO/klaus_note/image_occlusion/excalidraw"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 cd "$TMP"

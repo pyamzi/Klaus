@@ -9,9 +9,9 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '.claude', 'skills', 'klaus-test', 'scripts'))
 from anki_stubs import install, check, report
 install()
-import klausmate.settings as _settings  # noqa: E402
-e = importlib.import_module('klausmate.embeddings')
-c = importlib.import_module('klausmate.ollama_client')
+import klaus_note.settings as _settings  # noqa: E402
+e = importlib.import_module('klaus_note.embeddings')
+c = importlib.import_module('klaus_note.ollama_client')
 check('local provider ignores legacy provider', e.provider_name({'embedding_provider': 'openai'}) == 'ollama')
 check('default native signature', e.index_signature({}) == ('ollama', 'nomic-embed-text', 0))
 check('old cloud index invalidated', not e.signature_matches('openai', 'nomic-embed-text', 768, e.index_signature({})))
@@ -42,8 +42,8 @@ with patch.object(c.OllamaClient, 'embed', side_effect=c.OllamaError('model miss
         check('local actionable error', 'Local models' in exc.user_message() and 'model missing' in str(exc))
 # Drive the real readiness operation with deferred GUI callbacks.
 from types import SimpleNamespace
-setup = importlib.import_module('klausmate.setup_flow')
-runtime = importlib.import_module('klausmate.ollama_runtime')
+setup = importlib.import_module('klaus_note.setup_flow')
+runtime = importlib.import_module('klaus_note.ollama_runtime')
 operations, main, events, patches = [], [], [], []
 class Op:
     def __init__(self, parent, op, success):
@@ -89,7 +89,7 @@ with patch.object(setup, 'QueryOp', Op), patch.object(_settings, 'store', _Store
     before = list(events)
     check('closed profile never begins pending startup', operations[-1].work(None) is None and events == before)
     config['runtime_auto_setup'] = False
-    with patch('klausmate.ollama_setup.ollama_reachable', return_value=False):
+    with patch('klaus_note.ollama_setup.ollama_reachable', return_value=False):
         setup._readiness_after_library_root()
         result = operations[-1].work(None)
         operations[-1].success(result)

@@ -25,9 +25,9 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 
-ts = importlib.import_module("klausmate.tag_sync")
+ts = importlib.import_module("klaus_note.tag_sync")
 plan = ts.plan_library_sync
 
 
@@ -142,10 +142,10 @@ check("everything tagged and present -> []",
 
 # ------------------------------------------------------------ apply layer
 
-curation = importlib.import_module("klausmate.curation")
-drive_store = importlib.import_module("klausmate.drive_store")
-pdf_handler = importlib.import_module("klausmate.pdf_handler")
-retention = importlib.import_module("klausmate.retention")
+curation = importlib.import_module("klaus_note.curation")
+drive_store = importlib.import_module("klaus_note.drive_store")
+pdf_handler = importlib.import_module("klaus_note.pdf_handler")
+retention = importlib.import_module("klaus_note.retention")
 UF = tempfile.mkdtemp(prefix="klaus-k306-")  # fresh: the stub's scratch dir persists between runs
 _settings.user_files_dir = UF
 root = tempfile.mkdtemp(prefix="klaus-root-")
@@ -263,7 +263,7 @@ ts.reconcile_from_tags(col)
 check("a delete is asked about once, not again on the next pass", len(asked) == 1, str(asked))
 ts.note_user_deleted(["!Library::Onc"])  # the folder tag: covers the PDFs under it
 
-pdf_drive = importlib.import_module("klausmate.pdf_drive")
+pdf_drive = importlib.import_module("klaus_note.pdf_drive")
 pdf_drive._move_to_trash = lambda path: trashed.append(path)
 ts._ask = lambda text, on_yes, on_no: on_yes()
 ts.reconcile_from_tags(col)
@@ -307,7 +307,7 @@ ts._schedule_reconcile = lambda: fired.append(1)
 ts.on_operation_did_execute(types.SimpleNamespace(tag=False), None)
 ts.on_operation_did_execute(types.SimpleNamespace(tag=True), None)
 check("one schedule, for the tag change", fired == [1])
-_init = open("klausmate/__init__.py", encoding="utf-8").read()
+_init = open("klaus_note/__init__.py", encoding="utf-8").read()
 check("registered on operation_did_execute",
       "gui_hooks.operation_did_execute.append(_tag_sync.on_operation_did_execute)" in _init)
 

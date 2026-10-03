@@ -6,7 +6,7 @@ ns = {}
 exec(src.split("section(")[0], ns)
 helper = ns["_hex_hits_outside_comments"]
 sees_literal = bool(helper('BLUE = "#AABBCC"\n'))
-drive = open("klausmate/pdf_drive.py", encoding="utf-8").read()
+drive = open("klaus_note/pdf_drive.py", encoding="utf-8").read()
 m = re.search(r"setSizes\(sane if sane is not None else \[(\d+), (\d+)\]\)", drive)
 left = int(m.group(1)) if m else 0
 numeric = sum(int(w) for w in re.findall(r"setColumnWidth\([123], (\d+)\)", drive))

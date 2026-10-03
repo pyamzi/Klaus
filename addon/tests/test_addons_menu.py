@@ -32,7 +32,7 @@ shim.__getattr__ = _ga
 sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
 
-am = importlib.import_module("klausmate.addons_menu")
+am = importlib.import_module("klaus_note.addons_menu")
 
 
 def make_main():
@@ -59,7 +59,7 @@ bar.addMenu("AnkiHub")
 am.install(win, am.MAIN_MENUS)
 check("Anki's own menus stay, the rest go under Add-ons before Help",
       titles(bar) == ["File", "Edit", "View", "Tools", "Add-ons", "Help"], str(titles(bar)))
-addons = win._klausmate_addons_menu
+addons = win._klaus_note_addons_menu
 check("...in the order they were on the bar",
       [a.text() for a in addons.actions()] == ["AMBOSS", "AnKing", "AnkiHub"], str([a.text() for a in addons.actions()]))
 check("an add-on's own items still sit inside its menu",
@@ -96,7 +96,7 @@ section("keep-on-bar exemption (the single window's Browse menus)")
 w3, b3 = make_main()
 am.install(w3, am.MAIN_MENUS)
 keep = QtWidgets.QMenu("Notes", w3)
-w3._klausmate_keep_on_bar = {keep.menuAction()}
+w3._klaus_note_keep_on_bar = {keep.menuAction()}
 am.place_before_help(b3, keep, w3.form.menuHelp)
 app.processEvents()
 app.processEvents()

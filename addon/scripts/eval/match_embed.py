@@ -26,12 +26,12 @@ import numpy as np
 
 HERE = os.environ.get("KLAUS_EVAL_DIR") or os.path.join(tempfile.gettempdir(), "klaus-match-eval")
 os.makedirs(HERE, exist_ok=True)
-UF = os.environ.get("KLAUS_USER_FILES") or os.path.join(os.path.dirname(__file__), "..", "..", "klausmate", "user_files")
+UF = os.environ.get("KLAUS_USER_FILES") or os.path.join(os.path.dirname(__file__), "..", "..", "klaus_note", "user_files")
 COL = os.path.expanduser(os.environ.get("KLAUS_COLLECTION") or "~/Library/Application Support/Anki2/Pouya/collection.anki2")
 OLLAMA = "http://127.0.0.1:11434/api/embed"
 
 
-def strip_html(s: str) -> str:  # mirrors klausmate._strip_html
+def strip_html(s: str) -> str:  # mirrors klaus_note._strip_html
     if not s:
         return ""
     s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)

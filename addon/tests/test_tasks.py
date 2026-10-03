@@ -11,7 +11,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-tasks = importlib.import_module("klausmate.tasks")
+tasks = importlib.import_module("klaus_note.tasks")
 Task = tasks.Task
 now = [100.0]
 tasks.clock = lambda: now[0]

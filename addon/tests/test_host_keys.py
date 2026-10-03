@@ -33,7 +33,7 @@ shim.__getattr__ = _ga
 sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
 
-hk = importlib.import_module("klausmate.host_keys")
+hk = importlib.import_module("klaus_note.host_keys")
 
 section("normalize")
 check("space", hk.normalize(" ") == "Space")

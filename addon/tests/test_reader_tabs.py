@@ -42,18 +42,18 @@ sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["klaus-test"])
 
 UF = tempfile.mkdtemp(prefix="klaus_reader_tabs_")
-sys.modules["klausmate"].USER_FILES = UF  # pre-settings layout
+sys.modules["klaus_note"].USER_FILES = UF  # pre-settings layout
 try:  # the settings seam, where it exists
-    importlib.import_module("klausmate.settings").user_files_dir = UF
+    importlib.import_module("klaus_note.settings").user_files_dir = UF
 except Exception:
     pass
 
-ph = importlib.import_module("klausmate.pdf_handler")
-src = importlib.import_module("klausmate.pdf_source")
+ph = importlib.import_module("klaus_note.pdf_handler")
+src = importlib.import_module("klaus_note.pdf_source")
 src.user_files_dir = lambda: UF
-pj = importlib.import_module("klausmate.pdfjs_viewer")
-rp = importlib.import_module("klausmate.reader_panel")
-rt = importlib.import_module("klausmate.reader_tabs")
+pj = importlib.import_module("klaus_note.pdfjs_viewer")
+rp = importlib.import_module("klaus_note.reader_panel")
+rt = importlib.import_module("klaus_note.reader_tabs")
 
 
 class FakeJsViewer(QtWidgets.QWidget):
@@ -301,7 +301,7 @@ for _n in ("a", "b", "c", "d"):
     with open(os.path.join(UF, "pdfs", _n + ".pdf"), "wb") as f:
         f.write(b"%PDF-1.4\n")
 ph._live_library_root = lambda: None
-importlib.import_module("klausmate.drive_store").record_import(UF, "b", "Bee Lecture")
+importlib.import_module("klaus_note.drive_store").record_import(UF, "b", "Bee Lecture")
 real_menu, rp.QMenu = rp.QMenu, FakeMenu
 real_hook = sys.excepthook
 sys.excepthook = lambda *a: print("[test] slot raised:", a[1])
@@ -414,7 +414,7 @@ nat.cleanup()
 nat.close()
 
 section("Lecture panel: a card's lecture opens as a tab; focus returns to the reviewer")
-lv = importlib.import_module("klausmate.lecture_view")
+lv = importlib.import_module("klaus_note.lecture_view")
 events = []
 
 

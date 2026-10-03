@@ -53,7 +53,7 @@ fresh_hooks()
 
 import importlib  # noqa: E402
 
-io = importlib.import_module("klausmate.image_occlusion")
+io = importlib.import_module("klaus_note.image_occlusion")
 
 
 class Mgr:
@@ -100,7 +100,7 @@ io.tooltip = lambda msg, *a, **k: tips.append(msg)
 
 section("conflict guard: the separate add-on installed and enabled")
 check("CONFLICT_ADDON is IOE's AnkiWeb id", io.CONFLICT_ADDON == "1374772155")
-mgr = Mgr(installed=["1374772155", "klausmate"])
+mgr = Mgr(installed=["1374772155", "klaus_note"])
 mwin = fake_main_window(mgr)
 io.mw = mwin
 check("setup() returns False", io.setup() is False)
@@ -110,18 +110,18 @@ check("no menu action is added",
       mwin.form.menuTools.actions == [] and mwin.form.menuHelp.actions == [])
 check("exactly the conflict tooltip is shown", tips == [CONFLICT_TIP], str(tips))
 check("the guard runs before IOE's modules load",
-      "klausmate.image_occlusion.main" not in sys.modules)
+      "klaus_note.image_occlusion.main" not in sys.modules)
 check("setup() leaves the guard flag off", io._active is False)
 check("occlude() does nothing while the guard is tripped",
       io.occlude(types.SimpleNamespace(addMode=True), "/nonexistent.png") is False
-      and "klausmate.image_occlusion.main" not in sys.modules
-      and "klausmate.image_occlusion.add" not in sys.modules)
+      and "klaus_note.image_occlusion.main" not in sys.modules
+      and "klaus_note.image_occlusion.add" not in sys.modules)
 
-main = importlib.import_module("klausmate.image_occlusion.main")
+main = importlib.import_module("klaus_note.image_occlusion.main")
 main.QAction = Action
 
 for label, mgr in (("disabled", Mgr(installed=["1374772155"], disabled=["1374772155"])),
-                   ("absent", Mgr(installed=["klausmate"]))):
+                   ("absent", Mgr(installed=["klaus_note"]))):
     section("setup with the separate add-on " + label)
     fresh_hooks()
     tips.clear()
@@ -147,10 +147,10 @@ for label, mgr in (("disabled", Mgr(installed=["1374772155"], disabled=["1374772
 
 
 section("the one setWebExports regex")
-tree = ast.parse(open(os.path.join(ROOT, "klausmate", "__init__.py"), encoding="utf-8").read())
+tree = ast.parse(open(os.path.join(ROOT, "klaus_note", "__init__.py"), encoding="utf-8").read())
 calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
          and isinstance(n.func, ast.Attribute) and n.func.attr == "setWebExports"]
-check("klausmate/__init__.py has exactly one setWebExports call", len(calls) == 1)
+check("klaus_note/__init__.py has exactly one setWebExports call", len(calls) == 1)
 pat = calls[0].args[1].value
 for path in ("web/x.css", "user_files/backgrounds/A.JPG", "image_occlusion/web/editor.js",
              "image_occlusion/web/editor.css", "image_occlusion/excalidraw/index.html",
@@ -159,16 +159,16 @@ for path in ("web/x.css", "user_files/backgrounds/A.JPG", "image_occlusion/web/e
 for path in ("image_occlusion/svg-edit/editor/svg-editor.html", "image_occlusion/add.py",
              "user_files/annotations/x.json"):
     check("does not serve " + path, re.fullmatch(pat, path) is None)
-src = open(os.path.join(ROOT, "klausmate", "__init__.py"), encoding="utf-8").read()
-check("klausmate/__init__.py calls image_occlusion.setup() once",
+src = open(os.path.join(ROOT, "klaus_note", "__init__.py"), encoding="utf-8").read()
+check("klaus_note/__init__.py calls image_occlusion.setup() once",
       len(re.findall(r"\b_?image_occlusion\.setup\(\)", src)) == 1)
 
 
 # ------------------------------------------------------------ collection fakes
 
-cfg = importlib.import_module("klausmate.image_occlusion.config")
-ngen = importlib.import_module("klausmate.image_occlusion.ngen")
-add = importlib.import_module("klausmate.image_occlusion.add")
+cfg = importlib.import_module("klaus_note.image_occlusion.config")
+ngen = importlib.import_module("klaus_note.image_occlusion.ngen")
+add = importlib.import_module("klaus_note.image_occlusion.add")
 MODS = (main, cfg, ngen, add)
 
 
@@ -423,7 +423,7 @@ try:
 except Exception as e:  # noqa: BLE001
     raised = e
 check("it does not raise", raised is None, repr(raised))
-check("it logs '[klausmate] image occlusion profile setup failed: …'",
-      "[klausmate] image occlusion profile setup failed:" in out.getvalue(), out.getvalue())
+check("it logs '[klaus_note] image occlusion profile setup failed: …'",
+      "[klaus_note] image occlusion profile setup failed:" in out.getvalue(), out.getvalue())
 
 raise SystemExit(report())

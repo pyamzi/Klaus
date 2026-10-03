@@ -18,7 +18,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, '.claude/skills/klaus-test/scripts')
 from anki_stubs import install
 install()
-runtime = importlib.import_module('klausmate.ollama_runtime')
+runtime = importlib.import_module('klaus_note.ollama_runtime')
 
 
 class Response(io.BytesIO):

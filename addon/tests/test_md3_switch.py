@@ -15,8 +15,8 @@ from anki_stubs import check, code_only, install, report, section
 install()
 import importlib
 
-sw = importlib.import_module("klausmate.md3_switch")
-theme = importlib.import_module("klausmate.theme")
+sw = importlib.import_module("klaus_note.md3_switch")
+theme = importlib.import_module("klaus_note.theme")
 
 section("thumb geometry: grows and slides together")
 check("unchecked thumb is the small MD3 dot",
@@ -86,7 +86,7 @@ check("disabled thumb follows the same endpoint rule — surface off, "
 section("module imports aqt-free logic without a live Qt session")
 check("Md3Switch is defined and importable under the stub harness",
       hasattr(sw, "Md3Switch"))
-_SRC = open("klausmate/md3_switch.py").read()
+_SRC = open("klaus_note/md3_switch.py").read()
 _CODE = code_only(_SRC)
 check("no UI file hardcodes colour — every fill routes through "
       "theme.palette(), never a literal hex swatch for track/thumb",
@@ -170,7 +170,7 @@ check("...and reads it through aqt guarded, so headless tests and a "
       and "except Exception:" in _SRC.split("def _reduce_motion")[1].split("class Md3Switch")[0])
 
 section("manage_models.py wiring")
-_MM = open("klausmate/manage_models.py").read()
+_MM = open("klaus_note/manage_models.py").read()
 check("from .md3_switch import Md3Switch",
       "from .md3_switch import Md3Switch" in _MM)
 # Stated as a RULE, not a head count. This pin used to assert

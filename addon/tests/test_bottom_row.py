@@ -45,12 +45,12 @@ mw = types.SimpleNamespace(
 )
 sys.modules["aqt"].mw = mw
 
-tasks = importlib.import_module("klausmate.tasks")
+tasks = importlib.import_module("klaus_note.tasks")
 tasks.clock = lambda: 1000.0
 tasks.run_on_main = lambda fn: fn()
-theme = importlib.import_module("klausmate.theme")
-sb = importlib.import_module("klausmate.status_bar")
-br = importlib.import_module("klausmate.bottom_row")
+theme = importlib.import_module("klaus_note.theme")
+sb = importlib.import_module("klaus_note.status_bar")
+br = importlib.import_module("klaus_note.bottom_row")
 Task = tasks.Task
 
 section("row_state: what the readout shows")
@@ -74,8 +74,8 @@ check("the gear is no <button> (Anki's bottom-bar CSS would frame it)", "<button
 check("it starts in the state it was rendered with", "klausStatus(" in html and '"Anemia"' in html)
 check("the readout is sized against Anki's first button, and re-sized with the window, so it never runs under it",
       "#outer button" in html and "addEventListener('resize'" in html)
-check("the commands are underscore-namespaced (the editor bridge claims klausmate:)",
-      not br.PREFS_CMD.startswith("klausmate:") and not br.TASKS_CMD.startswith("klausmate:"))
+check("the commands are underscore-namespaced (the editor bridge claims klaus_note:)",
+      not br.PREFS_CMD.startswith("klaus_note:") and not br.TASKS_CMD.startswith("klaus_note:"))
 for night in (False, True):
     pal = {v.lower() for v in theme.palette(night).values() if isinstance(v, str) and v.startswith("#")}
     hexes = {h.lower() for h in re.findall(r"#[0-9A-Fa-f]{6}\b", br.row_html(br.row_state([], 1000.0), night))}
@@ -141,7 +141,7 @@ tasks.clear()
 section("no dock toggle (the Add tab replaced the right dock)")
 state = br.row_state([], 1000.0)
 html = br.row_html(state, False)
-check("the row has no dock toggle and no DOCK_CMD", "klausmate_row_dock" not in html and not hasattr(br, "DOCK_CMD") and not hasattr(br, "_dock_toggle"))
+check("the row has no dock toggle and no DOCK_CMD", "klaus_note_row_dock" not in html and not hasattr(br, "DOCK_CMD") and not hasattr(br, "_dock_toggle"))
 # The deck screens bind no Space shortcut, so a row button left focused by
 # a mouse click took the next Space through klausKey. Mouse presses must
 # not focus them; Tab still does.
@@ -149,7 +149,7 @@ check("a mouse press never leaves focus on a row button (Space would re-fire it)
       "addEventListener('mousedown'" in html and ".klaus-edge [role=button]" in html
       and "preventDefault" in html.split("addEventListener('mousedown'", 1)[-1][:200])
 check("…while Tab still reaches them", html.count('tabindex="0"') == html.count('role="button"') == 3)  # gear, sync entry, readout
-check("an unknown command is left alone", br._on_js_message((False, None), "klausmate_row_dock", None) == (False, None))
+check("an unknown command is left alone", br._on_js_message((False, None), "klaus_note_row_dock", None) == (False, None))
 css = html.split("<style>", 1)[-1]
 gear_rule = [r for r in css.split("}") if ".kr-gear:hover" in r]
 check("the gear keeps its own hover/focus rule (I-3): a wash and no focus ring, not the readout's block",
@@ -180,7 +180,7 @@ check("reported on a deck screen, never from the taller review row", heights == 
 sb.set_row_height = real_set
 
 section("the sync entry (auto sync)")
-auto = importlib.import_module("klausmate.auto_sync")
+auto = importlib.import_module("klaus_note.auto_sync")
 synced: list = []
 auto.sync_now = lambda: synced.append(1)
 TIP = "Synced with AnkiWeb 4 min ago. Click to sync now."

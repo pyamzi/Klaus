@@ -1,4 +1,4 @@
-"""Headless tests for klausmate/browse_retention.py — the Browse "Retention"
+"""Headless tests for klaus_note/browse_retention.py — the Browse "Retention"
 column (K-147).
 
 Run: env QT_QPA_PLATFORM=offscreen python3 tests/test_browse_retention.py
@@ -19,7 +19,7 @@ Four things this suite exists to hold down:
    arithmetic, and the value pins compare against retention.py's functions
    rather than against hardcoded numbers.
 4. AQT-FREE MODULE TOP. Parsed from the AST, not grepped: nothing at module
-   level may import aqt/anki, so ``import klausmate.browse_retention`` is
+   level may import aqt/anki, so ``import klaus_note.browse_retention`` is
    clean under the stub harness and Browse never pays for Qt at import.
 
 The glue is exercised too, with hand-built stand-ins for Anki's ``CellRow``
@@ -49,8 +49,8 @@ from anki_stubs import ADDON, check, code_only, install, report, section  # noqa
 
 install()
 
-br = importlib.import_module("klausmate.browse_retention")
-retention = importlib.import_module("klausmate.retention")
+br = importlib.import_module("klaus_note.browse_retention")
+retention = importlib.import_module("klaus_note.retention")
 
 SRC_PATH = os.path.join(ADDON, "browse_retention.py")
 with open(SRC_PATH, encoding="utf-8") as fh:
@@ -389,7 +389,7 @@ class FakeBrowserColumns:
 
 
 # Set the attribute on the harness's permissive anki.collection rather than
-# replacing the module: other klausmate modules import AddNoteRequest from it.
+# replacing the module: other klaus_note modules import AddNoteRequest from it.
 sys.modules["anki.collection"].BrowserColumns = FakeBrowserColumns
 
 columns: dict = {}
@@ -632,8 +632,8 @@ check(
 )
 check(
     "every `except Exception` logs with the house prefix",
-    SRC.count("[klausmate]") == CODE.count("except Exception") == 7,
-    f"- {SRC.count('[klausmate]')} prints vs {CODE.count('except Exception')} handlers",
+    SRC.count("[klaus_note]") == CODE.count("except Exception") == 7,
+    f"- {SRC.count('[klaus_note]')} prints vs {CODE.count('except Exception')} handlers",
 )
 check(
     "no exec() anywhere (K-114 exec-ban applies to every new surface)",

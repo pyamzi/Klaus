@@ -29,8 +29,8 @@ for _mod in (QtCore, QtGui, QtWidgets):
 sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
 
-ds = importlib.import_module("klausmate.doc_sync")
-ph = importlib.import_module("klausmate.pdf_handler")
+ds = importlib.import_module("klaus_note.doc_sync")
+ph = importlib.import_module("klaus_note.pdf_handler")
 LOG = []
 ds.print = lambda *a, **k: LOG.append(" ".join(map(str, a)))  # pristine output
 

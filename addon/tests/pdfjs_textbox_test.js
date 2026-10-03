@@ -1,5 +1,5 @@
 // Behavioural test for the PDF reader's in-place text box editor
-// (klausmate/web/pdfjs_viewer.html): the REAL openTextEdit,
+// (klaus_note/web/pdfjs_viewer.html): the REAL openTextEdit,
 // sizeTextEdit, positionTextEdit, commitTextEdit, textBoxFor and
 // measureTextBox, extracted from the page and run against a fake DOM.
 // A source pin cannot show what the commit payload carries or what --k
@@ -21,7 +21,7 @@ const path = require("path");
 const vm = require("vm");
 
 const SRC = fs.readFileSync(
-  path.join(__dirname, "..", "klausmate", "web", "pdfjs_viewer.html"), "utf8");
+  path.join(__dirname, "..", "klaus_note", "web", "pdfjs_viewer.html"), "utf8");
 
 function fn(name) {
   const m = new RegExp("\\nfunction " + name + "\\([\\s\\S]*?\\n}\\n").exec(SRC);

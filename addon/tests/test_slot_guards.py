@@ -31,7 +31,7 @@ from anki_stubs import check, install, report, section
 install()
 import importlib
 
-sg = importlib.import_module("klausmate.slot_guard")
+sg = importlib.import_module("klaus_note.slot_guard")
 
 HAVE_QT = True
 try:
@@ -88,7 +88,7 @@ else:
         import sys
         def hook(t, v, tb): print("ESCAPED:" + t.__name__, flush=True)
         sys.excepthook = hook
-        sys.path.insert(0, "klausmate")
+        sys.path.insert(0, "klaus_note")
         from slot_guard import guarded
         from PyQt6 import QtWidgets as W
         app = W.QApplication([]); b = W.QPushButton()
@@ -109,7 +109,7 @@ else:
 
     _rc, _aborted, _out = _run("""
         import sys
-        sys.path.insert(0, "klausmate")
+        sys.path.insert(0, "klaus_note")
         from slot_guard import guarded
         from PyQt6 import QtWidgets as W
         app = W.QApplication([]); b = W.QPushButton()
@@ -223,7 +223,7 @@ def _covered(node) -> bool:
 
 
 section("the files this card owns are covered")
-for _path in ("klausmate/__init__.py", "klausmate/browse_toggles.py"):
+for _path in ("klaus_note/__init__.py", "klaus_note/browse_toggles.py"):
     _hs = _handlers(_path)
     check(f"{os.path.basename(_path)} has connected handlers to check",
           len(_hs) > 0, f"{len(_hs)} found")
@@ -237,8 +237,8 @@ section("the rest of the addon, reported not enforced")
 # K-172 is scoped around them. Counting them here keeps the number honest
 # and visible instead of quietly forgotten.
 _left = []
-for _p in sorted(glob.glob("klausmate/*.py")):
-    if _p in ("klausmate/__init__.py", "klausmate/browse_toggles.py"):
+for _p in sorted(glob.glob("klaus_note/*.py")):
+    if _p in ("klaus_note/__init__.py", "klaus_note/browse_toggles.py"):
         continue
     _left += [f"{os.path.basename(_p)}:{n}"
               for n, node in _handlers(_p).items() if not _covered(node)]
@@ -287,7 +287,7 @@ if HAVE_QT:
         # test_bridge_reentrancy.py's K-169 section pioneered this exact
         # technique for getting __init__.py's REAL top-level code to run
         # under offscreen Qt: a real-Qt-backed aqt.qt shim, then exec the
-        # file fresh via spec_from_file_location so sys.modules["klausmate"]
+        # file fresh via spec_from_file_location so sys.modules["klaus_note"]
         # stops being anki_stubs' empty package stub. gui_hooks is swapped
         # for the real-list fake ABOVE the exec, so every
         # gui_hooks.<name>.append(...) this module (and every submodule it
@@ -306,14 +306,14 @@ if HAVE_QT:
         sys.modules["aqt.qt"] = _qt_shim_r1
         sys.modules["aqt"].gui_hooks = _fake_hooks_r1
         sys.modules["aqt.gui_hooks"] = _fake_hooks_r1
-        for _name_r1 in [m for m in list(sys.modules) if m.startswith("klausmate.")]:
+        for _name_r1 in [m for m in list(sys.modules) if m.startswith("klaus_note.")]:
             del sys.modules[_name_r1]
-        _addon_r1 = os.path.abspath("klausmate")
+        _addon_r1 = os.path.abspath("klaus_note")
         _spec_r1 = _ilu_r1.spec_from_file_location(
-            "klausmate", os.path.join(_addon_r1, "__init__.py"),
+            "klaus_note", os.path.join(_addon_r1, "__init__.py"),
             submodule_search_locations=[_addon_r1])
         _pkg_r1 = _ilu_r1.module_from_spec(_spec_r1)
-        sys.modules["klausmate"] = _pkg_r1
+        sys.modules["klaus_note"] = _pkg_r1
         _spec_r1.loader.exec_module(_pkg_r1)
 
         _pwc_calls_r1 = _fake_hooks_r1.profile_will_close.calls
@@ -322,7 +322,7 @@ if HAVE_QT:
               _pkg_r1._stop_endpoint_on_profile_close in _pwc_calls_r1)
         check("endpoint start is registered on profile open",
               _pkg_r1._start_klaus_endpoint in _pdo_calls_r1)
-        _anki_endpoint_r1 = importlib.import_module("klausmate.anki_endpoint")
+        _anki_endpoint_r1 = importlib.import_module("klaus_note.anki_endpoint")
         _order_log_r1 = []
         _orig_stop_r1 = _anki_endpoint_r1.stop_for_profile
         _orig_start_r1 = _anki_endpoint_r1.start_for_profile
@@ -351,7 +351,7 @@ if HAVE_QT:
         _menu_actions_r1 = _fake_menu_r1.actions()
         _texts_r1 = [a.text() for a in _menu_actions_r1]
         check("Preferences precedes existing Tools actions in their original order",
-              _texts_r1 == ["KlausMate Preferences…", "Undo", "Redo"], str(_texts_r1))
+              _texts_r1 == ["Klaus Note Preferences…", "Undo", "Redo"], str(_texts_r1))
     except Exception as _e_r1:  # noqa: BLE001
         check(f"Task 11 fix round 1 checks ran ({_e_r1})", False)
 else:

@@ -16,15 +16,15 @@ this checkout, so findings name their input:
 
 | module | sha256 | test file(s) run |
 |---|---|---|
-| `klausmate/heatmap.py` | `e5b505c24e61` | `test_heatmap.py` |
-| `klausmate/dashboard.py` | `037ad3d6c80c` | `test_dashboard.py` |
-| `klausmate/background.py` | `7359207abb78` | `test_background.py`, `test_heatmap.py` |
-| `klausmate/pdf_notes.py` | `ee706518137b` | `test_pdf_notes.py` |
-| `klausmate/lecture_view.py` | `534bf13fc9a3` | `test_lecture_view.py` |
-| `klausmate/projection.py` | `cc30f799e389` | `test_projection.py` |
+| `klaus_note/heatmap.py` | `e5b505c24e61` | `test_heatmap.py` |
+| `klaus_note/dashboard.py` | `037ad3d6c80c` | `test_dashboard.py` |
+| `klaus_note/background.py` | `7359207abb78` | `test_background.py`, `test_heatmap.py` |
+| `klaus_note/pdf_notes.py` | `ee706518137b` | `test_pdf_notes.py` |
+| `klaus_note/lecture_view.py` | `534bf13fc9a3` | `test_lecture_view.py` |
+| `klaus_note/projection.py` | `cc30f799e389` | `test_projection.py` |
 
 **Re-run the projection findings before acting on them.**
-`klausmate/projection.py` and `tests/test_projection.py` were being
+`klaus_note/projection.py` and `tests/test_projection.py` were being
 actively edited by another session throughout. The run above copied
 `cc30f799e389` and its sandbox baseline was green, so findings 10 and 11
 are sound *for that version*; within the hour the file had moved to
@@ -44,7 +44,7 @@ works — by making pins fail on demand.
 exits non-zero on any wrong answer:
 
 * **(a) Does it recognise a pin that cannot fail?** It plants
-  `_MUTATION_AUDIT_PLANT = "#AABBCC"` into `klausmate/setup_flow.py` and
+  `_MUTATION_AUDIT_PLANT = "#AABBCC"` into `klaus_note/setup_flow.py` and
   checks the hex pin in `test_setup_crop_theme.py` twice. Against
   today's tokenised helper the pin **fails** (control — without this,
   "the old one survived" would prove nothing; the plant might simply be
@@ -265,7 +265,7 @@ the value is arbitrary:
 *Design markers with no runtime consequence in these tests:*
 
 * `lecture_view.py:54,63` `@dataclass(frozen=True)` on `LectureMatch`/`NoLecture` — unfreezing survives. A one-line "records are frozen" check would be cheap, but nothing mutates them today.
-* `lecture_view.py:663` — the in-code `lecture_view_reopen` default. `klausmate/config.json` ships the key and `test_lecture_view.py:453` pins that it does, so the in-code fallback is belt-and-braces.
+* `lecture_view.py:663` — the in-code `lecture_view_reopen` default. `klaus_note/config.json` ships the key and `test_lecture_view.py:453` pins that it does, so the in-code fallback is belt-and-braces.
 
 *Qt widget configuration, unreachable under the aqt stub:*
 `lecture_view.py:391` `setWordWrap(True)`, `:692` `setCheckable(True)`,
@@ -392,7 +392,7 @@ Stated plainly so nobody over-reads the numbers.
   scratch dir, and every repo file that changes during a run is compared
   against the set of blobs the run produced, so a genuine leak and
   somebody else's edit can never be confused. One external edit
-  (`klausmate/pdf_map.py`) was correctly reported as such during this
+  (`klaus_note/pdf_map.py`) was correctly reported as such during this
   run.
 
 ## Bottom line
@@ -410,7 +410,7 @@ cannot fail — only behaviour nobody got round to pinning.
 
 ---
 
-# Second lane — `klausmate/index_queue.py` (K-162)
+# Second lane — `klaus_note/index_queue.py` (K-162)
 
 The index runner landed with K-152 and was swept by hand (~100
 mutations) before it shipped, but it was never added to
@@ -433,7 +433,7 @@ underneath.
 
 | module | sha256 | test file run |
 |---|---|---|
-| `klausmate/index_queue.py` | `9012ecdb11db` | `test_index_queue.py` (`81037eede0d3`, 122 checks, 0.2s) |
+| `klaus_note/index_queue.py` | `9012ecdb11db` | `test_index_queue.py` (`81037eede0d3`, 122 checks, 0.2s) |
 
 | operator | mutations | caught | crash | source-only | survived |
 |---|---:|---:|---:|---:|---:|
@@ -530,7 +530,7 @@ Nine constants survived **both** strengths. None is worth a card.
 
 *Internal tags with no external contract:* `JOB_CARDS`, `JOB_PDF`
 (`:72,73`) name nothing outside this module — no other file in
-`klausmate/` mentions either — and the tests reference them
+`klaus_note/` mentions either — and the tests reference them
 symbolically, which is correct for an arbitrary tuple tag.
 
 *Counter seeds:* `_seq`, `_hide_gen`, `_waits` (`:293,297,299`) start
@@ -590,10 +590,10 @@ findings closed.
 
 | module | sha256 | test file run | checks |
 |---|---|---|---:|
-| `klausmate/page_store.py` | `9fc229c45cc4` | `test_page_store.py` (`6b78631127f9`) | 16 |
-| `klausmate/cost.py` | `8754377b80b9` | `test_cost.py` (`281e18b72f38`) | 8 |
-| `klausmate/openai_client.py` | `478ed6d1c7a8` | `test_openai_client.py` (`9ce6d8e6ac87`) | 9 |
-| `klausmate/anthropic_client.py` | `5f0dc5a1175d` | `test_anthropic_client.py` (`7ef603227884`) | 39 |
+| `klaus_note/page_store.py` | `9fc229c45cc4` | `test_page_store.py` (`6b78631127f9`) | 16 |
+| `klaus_note/cost.py` | `8754377b80b9` | `test_cost.py` (`281e18b72f38`) | 8 |
+| `klaus_note/openai_client.py` | `478ed6d1c7a8` | `test_openai_client.py` (`9ce6d8e6ac87`) | 9 |
+| `klaus_note/anthropic_client.py` | `5f0dc5a1175d` | `test_anthropic_client.py` (`7ef603227884`) | 39 |
 
 | operator | mutations | caught | crash | survived |
 |---|---:|---:|---:|---:|
@@ -729,9 +729,9 @@ changes the file's hash without changing any executable line.
 
 ---
 
-# Fourth lane — `klausmate/plus.py` (K-249, 2026-09-16)
+# Fourth lane — `klaus_note/plus.py` (K-249, 2026-09-16)
 
-Klaus Plus on the add-on side landed with Task 8 (`klausmate/plus.py`:
+Klaus Plus on the add-on side landed with Task 8 (`klaus_note/plus.py`:
 the key, the endpoint every tagged call carries, the cached verdict) and
 Task 10 (this task) registered it in `AUDIT_MODULES` — aqt-free, stdlib
 `urllib` above one `_urlopen` its own test file replaces, the same shape
@@ -742,7 +742,7 @@ headless.
 
 | module | sha256 | test file | checks | runtime |
 |---|---|---|---:|---:|
-| `klausmate/plus.py` | `132a43e61d97` | `tests/test_plus.py` (`a7ad723b1063`) | 22 | 0.04s |
+| `klaus_note/plus.py` | `132a43e61d97` | `tests/test_plus.py` (`a7ad723b1063`) | 22 | 0.04s |
 
 | operator | mutations | caught | crash | survived |
 |---|---:|---:|---:|---:|
@@ -803,25 +803,25 @@ One tool change came with them. `tests/test_lecture_recorder.py` lifts
 the Klaus Plus service's own `wav_seconds` out of
 `service/klausplus/proxy.py` **by AST** — never importing it — so its
 WAV-header pin proves interop with the real metering code instead of a
-retyped formula. The sandbox copied only `klausmate`, `tests` and the
+retyped formula. The sandbox copied only `klaus_note`, `tests` and the
 klaus-test skill, so that read raised `FileNotFoundError` at module level
 and the baseline was red, which aborts the run. `service/klausplus`
 joined `SANDBOX_TREES` for exactly that one file: it is never a mutation
-target (targets come from `klausmate/<module>.py` alone) and it is hashed
+target (targets come from `klaus_note/<module>.py` alone) and it is hashed
 before and after like every other tree.
 
     python3 scripts/mutation_audit.py --modules pertinence,lecture_recorder
 
 | module | sha256 | test files | checks | mutations |
 |---|---|---|---|---:|
-| `klausmate/pertinence.py` | `a0ade11b60f1` | `tests/test_pertinence.py` (`ad33f4ae04df`), `tests/test_index_queue.py` (`4ed85f023ce7`) | 55 + 162 | 39 |
-| `klausmate/lecture_recorder.py` | `53f4e4d63149` | `tests/test_lecture_recorder.py` (`e0263c7d2e57`) | 41 | 48 |
+| `klaus_note/pertinence.py` | `a0ade11b60f1` | `tests/test_pertinence.py` (`ad33f4ae04df`), `tests/test_index_queue.py` (`4ed85f023ce7`) | 55 + 162 | 39 |
+| `klaus_note/lecture_recorder.py` | `53f4e4d63149` | `tests/test_lecture_recorder.py` (`e0263c7d2e57`) | 41 | 48 |
 
 Whole run: 106 test-file runs, 5,224 s — of which 1,200 s is four
 300-second timeouts (see the recorder lane below) and the rest was
 measured on a machine also running the full test loop, so treat the wall
 clock as an upper bound, not a benchmark. The tree-integrity check
-reported one changed repo file, `klausmate/config.md`, correctly
+reported one changed repo file, `klaus_note/config.md`, correctly
 classified as "another session is editing the checkout" — it was this
 same task's own doc edit landing mid-run, not a sandbox leak.
 

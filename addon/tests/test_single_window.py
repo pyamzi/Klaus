@@ -20,7 +20,7 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 from PyQt6 import QtCore, QtGui, QtWidgets, sip  # noqa: E402
 
 _settings.user_files_dir = tempfile.mkdtemp(prefix="klaus-sw-")  # the Add page's Library tree reads the index
@@ -41,7 +41,7 @@ shim.__getattr__ = _ga
 sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
 
-sw = importlib.import_module("klausmate.single_window")
+sw = importlib.import_module("klaus_note.single_window")
 
 section("pure helpers")
 check("preflight lists what is missing, in order",
@@ -64,7 +64,7 @@ check("toolbar css styles the active tab only", ".klaus-active" in sw.TOOLBAR_CS
 check("browse menus are Anki's five, in bar order",
       sw.BROWSE_MENUS == ("menuEdit", "menuqt_accel_view", "menu_Notes", "menu_Cards", "menuJump"))
 check("flag defaults on", sw.enabled({}) is True and sw.enabled({"single_window": False}) is False)
-check("config ships the flag", json.load(open("klausmate/config.json"))["single_window"] is True)
+check("config ships the flag", json.load(open("klaus_note/config.json"))["single_window"] is True)
 
 section("host layout")
 
@@ -257,18 +257,18 @@ sw.menus_in(mw2, br)
 titles = [a.text() for a in bar.actions()]
 check("Browse's menus sit before Help in the host bar", titles == ["Tools", "Edit", "Notes", "Go", "Help"], str(titles))
 check("their actions are exempt from the Add-ons watcher",
-      {m.menuAction() for m in (brf.menuEdit, brf.menu_Notes, brf.menuJump)} <= mw2._klausmate_keep_on_bar)
+      {m.menuAction() for m in (brf.menuEdit, brf.menu_Notes, brf.menuJump)} <= mw2._klaus_note_keep_on_bar)
 sw.menus_in(mw2, br)
 check("twice is a no-op", [a.text() for a in bar.actions()] == titles and sw._state.menus_in)
 sw.menus_out(mw2)
 check("out removes them", [a.text() for a in bar.actions()] == ["Tools", "Help"] and not sw._state.menus_in)
 brf.menuJump = None
-br._klausmate_addons_menu = QtWidgets.QMenu("Add-ons", br)
+br._klaus_note_addons_menu = QtWidgets.QMenu("Add-ons", br)
 sw.menus_in(mw2, br)
 check("Browse's Add-ons menu is retitled while in the host bar",
       "Browse Add-ons" in [a.text() for a in bar.actions()] and "Add-ons" not in [a.text() for a in bar.actions()])
 sw.menus_out(mw2)
-check("…and gets its title back", br._klausmate_addons_menu.title() == "Add-ons")
+check("…and gets its title back", br._klaus_note_addons_menu.title() == "Add-ons")
 
 section("Browse shortcuts fire only on the Browse tab")
 from PyQt6 import QtTest  # noqa: E402
@@ -333,7 +333,7 @@ press()
 check("…and fires on the Browse tab", hit == [1], str(hit))
 
 section("navigation")
-hk = importlib.import_module("klausmate.host_keys")
+hk = importlib.import_module("klaus_note.host_keys")
 
 
 def pump():
@@ -363,14 +363,14 @@ sw._state.host.listeners.append(sw._on_tab_switch)
 sw._state.add = sw.build_add_page(sw._state.host.pages["add"], mw6)
 mw6.show()
 host6 = sw._state.host
-rh = importlib.import_module("klausmate.reader_host")
+rh = importlib.import_module("klaus_note.reader_host")
 rh.make_reader = lambda parent: type("R0", (QtWidgets.QLabel,), {"cleanup": lambda self: setattr(self, "cleaned", True)})("r", parent)  # never the real PdfSidebar under stubs
 check("the editor slot starts with the placeholder, the splitter holds tree | reader | editor",
       sw._state.add.editor_slot.layout().count() == 1
       and isinstance(sw._state.add.editor_slot.layout().itemAt(0).widget(), QtWidgets.QLabel)
       and sw._state.add.splitter.count() == 3 and sw._state.add.splitter.widget(0) is sw._state.add.tree
       and sw._state.add.splitter.widget(1) is sw._state.add.reader_slot and sw._state.add.splitter.widget(2) is sw._state.add.editor_slot
-      and sw._state.add.splitter.objectName() == "klausmate_add_splitter")
+      and sw._state.add.splitter.objectName() == "klaus_note_add_splitter")
 check("the status bar sits under the splitter; its pane toggles are in the top bar",
       sw._state.add.bar is not None and sw._state.add.bar.sidebar_btn is None and sw._state.add.bar.editor_btn is None
       and sw._state.add.bar.dock_btn is None)
@@ -548,14 +548,14 @@ section("dock state")
 mw6.pm = types.SimpleNamespace(profile={})
 sw._new_edit_dock(mw6).show()
 sw.save_dock_state(mw6)
-check("dock state is saved under Klaus's own profile key", isinstance(mw6.pm.profile.get("klausmate_host_state"), bytes))
+check("dock state is saved under Klaus's own profile key", isinstance(mw6.pm.profile.get("klaus_note_host_state"), bytes))
 sw.restore_dock_state(mw6)
 check("restore leaves every dock hidden (startup: dock closed)", not sw.dock_shown())
 sw._state.docks.pop("edit").deleteLater()
 pump()
 
 section("toolbar indicator")
-tasks = importlib.import_module("klausmate.tasks")
+tasks = importlib.import_module("klaus_note.tasks")
 tasks.clock = lambda: 1000.0
 wc = types.SimpleNamespace(head="", body="")
 sw._on_toolbar_content(wc, type("TopToolbar", (), {})())
@@ -641,9 +641,9 @@ for fake_utils in {id(m): m for m in (sys.modules.get("aqt.utils"), getattr(sys.
     fake_utils.restoreSplitter = lambda w, key: restored.append((w, key))
 hooks.profile_will_close[0]()
 check("profile close saves the dock state and the Add splitter under one key",
-      "klausmate_host_state" in mw8.pm.profile and saved == [(sw._state.add.splitter, "klausmate_add_tab")])
+      "klaus_note_host_state" in mw8.pm.profile and saved == [(sw._state.add.splitter, "klaus_note_add_tab")])
 hooks.profile_did_open[0]()
-check("profile open restores both and hides every dock", not sw.dock_shown() and restored[-1] == (sw._state.add.splitter, "klausmate_add_tab"))
+check("profile open restores both and hides every dock", not sw.dock_shown() and restored[-1] == (sw._state.add.splitter, "klaus_note_add_tab"))
 rh.make_reader = lambda parent: type("R0", (QtWidgets.QLabel,), {"cleanup": lambda self: setattr(self, "cleaned", True)})("r", parent)
 r_before = rh.reader()
 hooks.profile_will_close[0]()

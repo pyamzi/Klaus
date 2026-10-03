@@ -102,13 +102,13 @@ from anki_stubs import LiveStore, install_package_stub  # noqa: E402
 
 install_package_stub()
 
-import klausmate.settings as _settings  # noqa: E402
-pkg = sys.modules["klausmate"]
+import klaus_note.settings as _settings  # noqa: E402
+pkg = sys.modules["klaus_note"]
 
 import importlib  # noqa: E402
 
-tm = importlib.import_module("klausmate.tag_migrate")
-ts = importlib.import_module("klausmate.tag_sync")
+tm = importlib.import_module("klaus_note.tag_migrate")
+ts = importlib.import_module("klaus_note.tag_sync")
 
 
 # ---- fake collection double ------------------------------------------

@@ -14,21 +14,21 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section
 
 install()
-pv = importlib.import_module("klausmate.pdfjs_viewer")
+pv = importlib.import_module("klaus_note.pdfjs_viewer")
 
 section("PDF reader 2/5: the whole-file feed is gone")
 check("chunk_b64 is gone", not hasattr(pv, "chunk_b64"))
 check("CHUNK_CHARS is gone", not hasattr(pv, "CHUNK_CHARS"))
 
 section("page HTML build")
-html = pv.build_page_html("klausmate", night=False)
+html = pv.build_page_html("klaus_note", night=False)
 check("addon substituted into script srcs",
-      '/_addons/klausmate/web/pdfjs/pdf.min.js' in html
-      and '/_addons/klausmate/web/pdfjs/pdf.worker.min.js' in html)
+      '/_addons/klaus_note/web/pdfjs/pdf.min.js' in html
+      and '/_addons/klaus_note/web/pdfjs/pdf.worker.min.js' in html)
 check("no placeholder left behind",
       "__ADDON__" not in html and "__THEME_VARS__" not in html)
 check("theme tokens injected (light bg)", "--bg: #F5F5F7;" in html)
-dark = pv.build_page_html("klausmate", night=True)
+dark = pv.build_page_html("klaus_note", night=True)
 check("theme tokens injected (dark bg)", "--bg: #191919;" in dark)
 # Both substitutions are a GLOBAL str.replace, so a placeholder spelled
 # in the template's prose gets the replacement — the entire palette,
@@ -38,7 +38,7 @@ check("theme tokens injected (dark bg)", "--bg: #191919;" in dark)
 # rendered output. build_page_html's docstring is where those names
 # are spelled; the template describes them instead.
 _TPL = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "..", "klausmate", "web",
+                         "..", "klaus_note", "web",
                          "pdfjs_viewer.html"), encoding="utf-8").read()
 check("template spells __THEME_VARS__ only at its real site "
       "(a prose mention would splice the whole palette in)",
@@ -52,7 +52,7 @@ for fn in ("klausPdfOpen", "klausPdfError",
            "klausGoToPage", "klausSetZoom", "klausSetAnnotations",
            "klausToggleThumbs", "klausScrollTo", "klausZoomReset"):
     check(f"JS API {fn} present", fn in html)
-check("bridge prefix wired", "klausmate_pdfjs:" in html)
+check("bridge prefix wired", "klaus_note_pdfjs:" in html)
 for feature in ("findbar", "findinput", "ctxmenu", "thumbs", "marquee",
                 "hlLayer", "noteLayer"):
     check(f"page has {feature}", feature in html)
@@ -82,11 +82,11 @@ check("there are exactly five render sites",
 
 section("bridge parsing")
 check("non-klaus command ignored", pv.parse_bridge("ankiweb:xyz") is None)
-check("action only", pv.parse_bridge("klausmate_pdfjs:ready") == ("ready", ""))
+check("action only", pv.parse_bridge("klaus_note_pdfjs:ready") == ("ready", ""))
 check("action + payload",
-      pv.parse_bridge("klausmate_pdfjs:page:3:10") == ("page", "3:10"))
+      pv.parse_bridge("klaus_note_pdfjs:page:3:10") == ("page", "3:10"))
 check("payload keeps colons (data urls)",
-      pv.parse_bridge("klausmate_pdfjs:copy-image:iVBOR:w0KG")
+      pv.parse_bridge("klaus_note_pdfjs:copy-image:iVBOR:w0KG")
       == ("copy-image", "iVBOR:w0KG"))
 import base64 as _b64
 payload = _b64.b64encode(b'{"id": "abc"}').decode()
@@ -107,14 +107,14 @@ with _ctxl.redirect_stdout(_fp_out):
     pv.PdfJsViewer._bridge_firstpage(_fp_stand, "412")
 check("Python prints the timing line",
       _fp_out.getvalue().strip()
-      == "[klausmate] pdfjs first page lecture.pdf 412 ms")
+      == "[klaus_note] pdfjs first page lecture.pdf 412 ms")
 
 section("PDF reader 2/5: piece loader (pdf.js asks Python for byte ranges)")
 import builtins as _bi
 import tempfile as _tf
 
-_ps = importlib.import_module("klausmate.pdf_source")
-_ph = importlib.import_module("klausmate.pdf_handler")
+_ps = importlib.import_module("klaus_note.pdf_source")
+_ph = importlib.import_module("klaus_note.pdf_handler")
 _tmp8 = _tf.mkdtemp()
 _pdf8 = os.path.join(_tmp8, "lecture.pdf")
 _w8 = _ph.pypdf.PdfWriter()
@@ -127,7 +127,7 @@ check("fixture is a real PDF larger than the first chunk",
       _data8.startswith(b"%PDF") and len(_data8) > _ps.FIRST_CHUNK)
 
 check("parse_bridge routes range",
-      pv.parse_bridge("klausmate_pdfjs:range:3:0:262144") == ("range", "3:0:262144"))
+      pv.parse_bridge("klaus_note_pdfjs:range:3:0:262144") == ("range", "3:0:262144"))
 check("the viewer has a range handler", hasattr(pv.PdfJsViewer, "_bridge_range"))
 
 _src8 = _ps.DocSource(_pdf8)
@@ -254,17 +254,17 @@ check("the source reads a hard-link snapshot under <user files>/reading",
       os.path.dirname(_link8) == _read8 and os.path.samefile(_link8, _pdf8))
 check("the first load sweeps leftover snapshots, keeping its own",
       not os.path.exists(_leftover8) and os.path.exists(_link8))
-_rep8 = _v8._on_bridge("klausmate_pdfjs:range:1:0:10")
+_rep8 = _v8._on_bridge("klaus_note_pdfjs:range:1:0:10")
 check("_on_bridge RETURNS the range reply (Anki hands it to the JS callback)",
       isinstance(_rep8, dict) and _b64.b64decode(_rep8["b64"]) == _data8[:10])
 check("other bridge commands keep the old (True, None) reply",
-      _v8._on_bridge("klausmate_pdfjs:scroll:5") == (True, None)
+      _v8._on_bridge("klaus_note_pdfjs:scroll:5") == (True, None)
       and _v8._scroll_pos == 5)
 _bake8 = os.path.join(_tmp8, "bake.pdf")
 with open(_bake8, "wb") as _f8:
     _f8.write(_data8 + b"%baked\n")
 os.replace(_bake8, _pdf8)                     # what Klaus's own bake does
-_rep8 = _v8._on_bridge("klausmate_pdfjs:range:1:100:200")
+_rep8 = _v8._on_bridge("klaus_note_pdfjs:range:1:100:200")
 check("a bake (os.replace) does not make the open document stale (R20)",
       "b64" in _rep8 and _b64.b64decode(_rep8["b64"]) == _data8[100:200])
 _data8 = open(_pdf8, "rb").read()
@@ -275,14 +275,14 @@ with _ctxl.redirect_stdout(_out8):
     _v8.load_path(os.path.join(_tmp8, "missing.pdf"), "missing.pdf")
 check("a missing file at load does not raise and opens nothing",
       not any("klausPdfOpen(" in j for j in _v8._web.js)
-      and "[klausmate] pdfjs read failed" in _out8.getvalue())
+      and "[klaus_note] pdfjs read failed" in _out8.getvalue())
 check("...the previous snapshot is closed", not os.path.exists(_link8))
 check("...the page tears the old document down and shows the error",
       any(j.startswith("window.klausPdfClose && window.klausPdfClose(2, ")
           and "Could not open this PDF." in j for j in _v8._web.js))
 check("...and the generation moved on, so the old page's ranges "
       "are refused", _v8._gen == 2
-      and _v8._on_bridge("klausmate_pdfjs:range:1:0:10") == {"refused": True})
+      and _v8._on_bridge("klaus_note_pdfjs:range:1:0:10") == {"refused": True})
 
 _v8._web.js.clear()
 _max8 = pv.MAX_PDF_MB
@@ -313,9 +313,9 @@ class _NowTimer:
 _qt8 = pv.QTimer
 pv.QTimer = _NowTimer
 try:
-    _v8._on_bridge("klausmate_pdfjs:stale:0")
+    _v8._on_bridge("klaus_note_pdfjs:stale:0")
     check("a stale report for an old generation is ignored", _stale8 == [])
-    _v8._on_bridge("klausmate_pdfjs:stale:1")
+    _v8._on_bridge("klaus_note_pdfjs:stale:1")
     check("a stale report for the current generation calls on_stale",
           _stale8 == [1])
 finally:
@@ -329,13 +329,13 @@ check("the default on_stale reloads the current document, keeping the view",
                             and '"lecture.pdf", true);' in j for j in _v8._web.js))
 check("...and closes the previous snapshot", not os.path.exists(_old8))
 check("a stale reload keeps the scroll position", _v8._scroll_pos == 900)
-_v8._on_bridge("klausmate_pdfjs:scroll:0")   # the teardown's scroll to the top
+_v8._on_bridge("klaus_note_pdfjs:scroll:0")   # the teardown's scroll to the top
 check("...through the teardown's scroll-to-top report", _v8._scroll_pos == 900)
 _v8._web.js.clear()
-_v8._on_bridge("klausmate_pdfjs:ready")
+_v8._on_bridge("klaus_note_pdfjs:ready")
 check("...and ready scrolls back there",
       any("klausScrollTo(900)" in j for j in _v8._web.js))
-_v8._on_bridge("klausmate_pdfjs:scroll:40")
+_v8._on_bridge("klaus_note_pdfjs:scroll:40")
 check("after ready, scroll reports count again", _v8._scroll_pos == 40)
 
 _v8._web.js.clear()
@@ -364,7 +364,7 @@ check("getDocument is range-loaded with the agreed options",
       and "rangeChunkSize: 262144," in _FEED8
       and "getDocument({ data" not in html)
 check("ranges are fetched over the bridge with a callback",
-      'pycmd("klausmate_pdfjs:range:" + gen + ":" + begin + ":" + end, resolve)'
+      'pycmd("klaus_note_pdfjs:range:" + gen + ":" + begin + ":" + end, resolve)'
       in _FEED8)
 check("a stale reply aborts the transport and posts stale:<gen>",
       'this.abort();' in _FEED8 and 'post("stale:" + this.gen);' in _FEED8)
@@ -393,7 +393,7 @@ check("klausPdfClose tears the document down, then shows any error where "
 section("live selection reported over the bridge (K-196 task 10)")
 _sel_payload = _b64.b64encode(b'{"text": "abc"}').decode()
 check("parse_bridge routes sel",
-      pv.parse_bridge("klausmate_pdfjs:sel:" + _sel_payload)
+      pv.parse_bridge("klaus_note_pdfjs:sel:" + _sel_payload)
       == ("sel", _sel_payload))
 check("decode_b64_json decodes the selection payload",
       pv.decode_b64_json(_sel_payload) == {"text": "abc"})
@@ -518,13 +518,13 @@ check("the guard is real: a webview destroyed WITHOUT cleanup crashes",
 leaked.cleanup()
 
 section("cleanup is wired into every teardown path")
-reader_panel = importlib.import_module("klausmate.reader_panel")
+reader_panel = importlib.import_module("klaus_note.reader_panel")
 check("PdfSidebar forwards cleanup to the renderer",
       hasattr(reader_panel.PdfSidebar, "cleanup"))
 check("a profile/quit sweep exists as backstop",
       hasattr(reader_panel, "cleanup_all_sidebars"))
 _here = os.path.dirname(os.path.abspath(__file__))
-_src = lambda n: open(os.path.join(_here, "..", "klausmate", n)).read()
+_src = lambda n: open(os.path.join(_here, "..", "klaus_note", n)).read()
 check("the reader host's release() tears the sidebar down, and a Browse closing with no home calls it",
       "r.cleanup()" in _src("reader_host.py") and "reader_host.release()" in _src("library_viewer.py"))
 check("sweep registered on profile switch AND quit",
@@ -532,7 +532,7 @@ check("sweep registered on profile switch AND quit",
 
 section("vendored pdf.js present")
 here = os.path.dirname(os.path.abspath(__file__))
-pdfjs = os.path.join(here, "..", "klausmate", "web", "pdfjs")
+pdfjs = os.path.join(here, "..", "klaus_note", "web", "pdfjs")
 check("pdf.min.js vendored",
       os.path.getsize(os.path.join(pdfjs, "pdf.min.js")) > 100_000)
 check("pdf.worker.min.js vendored",
@@ -710,7 +710,7 @@ check("annobar zoom buttons ride the shared zoom API",
 
 section("K-116: text-add bridge — Python clamps, JS is never trusted")
 check("parse_bridge routes text-add",
-      pv.parse_bridge("klausmate_pdfjs:text-add:eyJ4IjogMX0=")
+      pv.parse_bridge("klaus_note_pdfjs:text-add:eyJ4IjogMX0=")
       == ("text-add", "eyJ4IjogMX0="))
 check("valid payload -> (page, x, y)",
       pv.clamp_text_add({"page": 2, "x": 10.5, "y": 20.25}, 5)
@@ -757,7 +757,7 @@ check("explicit black + 12pt — the validator backfills a missing "
 check("uuid id, empty note", len(rec["id"]) == 32 and rec["note"] == "")
 check("NO origin key — native records must not claim to be external",
       "origin" not in rec)
-_ph = importlib.import_module("klausmate.pdf_handler")
+_ph = importlib.import_module("klaus_note.pdf_handler")
 check("pdf_handler validation round-trips the record UNCHANGED",
       _ph._validate_highlight(rec) == rec)
 _w1 = pv.text_box_size("abc")
@@ -1092,7 +1092,7 @@ check("anything that is not a hex colour falls back, never lands in "
 check("a chosen ink reaches the record",
       pv.records_from_rect_map(
           {"0": [[1, 2, 3, 4]]}, color="#8ae08c")[0]["color"] == "#8ae08c")
-_theme149 = importlib.import_module("klausmate.theme")
+_theme149 = importlib.import_module("klaus_note.theme")
 check("the swatch palette lives in theme.py, not in the page",
       len(_theme149.HIGHLIGHT_INKS) == 5)
 check("yellow stays first and IS the native default — the two "
@@ -1163,7 +1163,7 @@ check("the button lives INSIDE #annobar (the bar every host already "
 section("K-149: merging happens at MINT time, never in storage")
 # pdf_handler collapses duplicates ONLY for origin=="external" records
 # (Preview autosaves the same box repeatedly while you type), and
-# test_klausmate pins that overlapping NATIVE highlights are never
+# test_klaus_note pins that overlapping NATIVE highlights are never
 # collapsed there — K-081's architecture. So the second-drag merge
 # lives here, in the mint path.
 _YEL, _GRN = "#fadc50", "#8ae08c"
@@ -1302,7 +1302,7 @@ check("pdf.js really does build those wrappers (the rule is not "
       "guarding a case that cannot happen)",
       'classList.add("markedContent")'
       in open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "..", "klausmate", "web", "pdfjs",
+                           "..", "klaus_note", "web", "pdfjs",
                            "pdf.min.js"), encoding="utf-8").read())
 
 section("K-149: a non-yellow ink survives the bake (end to end)")
@@ -1313,7 +1313,7 @@ section("K-149: a non-yellow ink survives the bake (end to end)")
 # does not ship — shim it BEFORE pdf_handler's guarded import so
 # BAKE_AVAILABLE matches the Anki runtime (py3.13 has it) instead of
 # silently SKIPPING the one check that proves the ink reaches the file.
-# Same shim as test_klausmate.py's, deliberately local: it has to run
+# Same shim as test_klaus_note.py's, deliberately local: it has to run
 # before this file's first pdf_handler import, and pdfjs_viewer only
 # ever imports pdf_handler lazily, inside functions.
 try:
@@ -1335,7 +1335,7 @@ except ImportError:
 
     sys.modules["typing_extensions"] = _TEModule149("typing_extensions")
 
-_ph149 = importlib.import_module("klausmate.pdf_handler")
+_ph149 = importlib.import_module("klaus_note.pdf_handler")
 import tempfile as _tf149
 _uf149 = _tf149.mkdtemp(prefix="klaus_k149_")
 if not _ph149.BAKE_AVAILABLE:
@@ -1630,7 +1630,7 @@ check("double-clicking an existing box re-opens it, gated OFF the "
       and _H150.find("if (!(ev.metaKey || ev.ctrlKey)) return;")
       < _H150.find("if (ev.metaKey || ev.ctrlKey || state.textEdit) return;"))
 check("parse_bridge routes text-update",
-      pv.parse_bridge("klausmate_pdfjs:text-update:e30=")
+      pv.parse_bridge("klaus_note_pdfjs:text-update:e30=")
       == ("text-update", "e30="))
 
 section("K-150: the body is untrusted input now")
@@ -1807,9 +1807,9 @@ check("a new SIZE is a re-measure",
 # and cut 18pt descenders; the old estimate's +8pt slack had hidden
 # the inset. Outset, the text fits and lands where the reader draws it
 # (the reader has no inset). Proved on a real bake into a temp
-# user_files (never klausmate/user_files).
+# user_files (never klaus_note/user_files).
 import tempfile as _tf930
-_ph930 = importlib.import_module("klausmate.pdf_handler")
+_ph930 = importlib.import_module("klaus_note.pdf_handler")
 _uf930 = _tf930.mkdtemp(prefix="klaus_textbox_bake_")
 _root930 = _ph930._live_library_root
 _ph930._live_library_root = lambda: None   # never the real Library
@@ -2362,9 +2362,9 @@ for _n in ("QApplication", "QImage", "QInputDialog", "QLabel",
     setattr(shim, _n, _Any)
 shim.Qt = _Any()
 sys.modules["aqt.qt"] = shim
-sys.modules.pop("klausmate.pdfjs_viewer", None)
+sys.modules.pop("klaus_note.pdfjs_viewer", None)
 
-pv = importlib.import_module("klausmate.pdfjs_viewer")
+pv = importlib.import_module("klaus_note.pdfjs_viewer")
 
 # Importing is most of the point, but on its own it would also pass if the
 # probe simply failed to reproduce a partial surface. So prove the module
@@ -2377,8 +2377,8 @@ assert pv.PdfJsViewer.__bases__ == (object,), pv.PdfJsViewer.__bases__
 # The aqt-free helpers the card names, each actually exercised (the
 # renderer-flag reader among them is gone with the setting).
 assert pv.handle_range("1:0", None, 1) == {"refused": True}
-assert "__ADDON__" not in pv.build_page_html("klausmate", night=False)
-assert pv.parse_bridge("klausmate_pdfjs:hl-add:a:b") == ("hl-add", "a:b")
+assert "__ADDON__" not in pv.build_page_html("klaus_note", night=False)
+assert pv.parse_bridge("klaus_note_pdfjs:hl-add:a:b") == ("hl-add", "a:b")
 assert pv.decode_b64_json("eyJhIjogMX0=") == {"a": 1}
 assert pv.records_from_rect_map({"0": [[1, 2, 3, 4]]})[0]["page"] == 0
 
@@ -2423,7 +2423,7 @@ import glob as _glob164
 
 def _ctor_sites164():
     out = []
-    for path in sorted(_glob164.glob("klausmate/**/*.py", recursive=True)):
+    for path in sorted(_glob164.glob("klaus_note/**/*.py", recursive=True)):
         rel = path.replace(os.sep, "/")
         if "/vendor/" in rel:
             continue
@@ -2440,10 +2440,10 @@ def _ctor_sites164():
 _sites164 = _ctor_sites164()
 check("exactly one module builds a PdfJsViewer — a second one would need "
       "its own copy of the gate: %s" % (_sites164,),
-      len(_sites164) == 1 and _sites164[0].startswith("klausmate/reader_panel.py:"))
+      len(_sites164) == 1 and _sites164[0].startswith("klaus_note/reader_panel.py:"))
 
 _RP164 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                      "..", "klausmate", "reader_panel.py")
+                      "..", "klaus_note", "reader_panel.py")
 with open(_RP164, encoding="utf-8") as _fh164:
     _rptree164 = _ast164.parse(_fh164.read())
 
@@ -2617,7 +2617,7 @@ _out10 = _io.StringIO()
 
 def _bridge10(cmd):
     with _ctxl.redirect_stdout(_out10):
-        _v10._on_bridge("klausmate_pdfjs:" + cmd)
+        _v10._on_bridge("klaus_note_pdfjs:" + cmd)
 
 
 _BAD10 = ("abc", "nan", "inf", "-2", "", "1.0", "1.005")
@@ -2759,13 +2759,13 @@ check("it goes through the shared number guard",
 
 section("hand-drawn reader 1: the page can load Excalifont and rough.js")
 import re as _re
-_init = open("klausmate/__init__.py", encoding="utf-8").read()
+_init = open("klaus_note/__init__.py", encoding="utf-8").read()
 _pat = _re.search(r'setWebExports\(\s*__name__,.*?\br"([^"]+)"', _init, _re.S).group(1)
 check("web exports serve the font and rough.js",
       _re.fullmatch(_pat, "web/fonts/Excalifont-Regular.ttf") is not None
       and _re.fullmatch(_pat, "web/rough.min.js") is not None
       and _re.fullmatch(_pat, "user_files/annotations/x.json") is None)
-_tpl = open("klausmate/web/pdfjs_viewer.html", encoding="utf-8").read()
+_tpl = open("klaus_note/web/pdfjs_viewer.html", encoding="utf-8").read()
 check("the page declares Excalifont from the add-on's own file",
       '@font-face { font-family: "Excalifont"; src: url("/_addons/__ADDON__/web/fonts/Excalifont-Regular.ttf"); }' in _tpl)
 _pure_at = _tpl.find('<script src="/_addons/__ADDON__/web/pdfjs_pure.js"></script>')
@@ -2773,12 +2773,12 @@ _rough_at = _tpl.find('<script src="/_addons/__ADDON__/web/rough.min.js"></scrip
 _main_at = _tpl.find("<script>", _rough_at)
 check("rough.js loads after pdfjs_pure.js and before the main script", 0 < _pure_at < _rough_at < _main_at)
 check("rough.js ships with its MIT licence and a pinned build script",
-      os.path.isfile("klausmate/web/rough.min.js")
-      and "MIT" in open("klausmate/web/LICENSE-roughjs.txt", encoding="utf-8").read()
+      os.path.isfile("klaus_note/web/rough.min.js")
+      and "MIT" in open("klaus_note/web/LICENSE-roughjs.txt", encoding="utf-8").read()
       and "roughjs@4.6.6" in open("scripts/build_roughjs.sh", encoding="utf-8").read())
 
 section("hand-drawn reader 3: the note record, the card offset and their bridges")
-_phn = importlib.import_module("klausmate.pdf_handler")
+_phn = importlib.import_module("klaus_note.pdf_handler")
 _note = {"id": "n1", "kind": "note", "page": 0, "rects": [[10.0, 20.0, 120.0, 40.0]],
          "text": "remember β", "note": "", "color": "#8ae08c", "size": 12.0}
 check("a note record round-trips exactly", _phn._validate_highlight(dict(_note)) == _note,
@@ -2854,8 +2854,8 @@ check("set_hand_drawn_all exists", callable(getattr(pv, "set_hand_drawn_all", No
 _PV5 = _src("pdfjs_viewer.py")
 check("the page is told the stored value on ready, beside the occlusion state",
       "window.klausSetHandDrawn && " in _PV5 and "window.klausSetOcclusionEnabled && " in _PV5)
-_cfg = json.load(open("klausmate/config.json")) if "json" in dir() else __import__("json").load(open("klausmate/config.json"))
+_cfg = json.load(open("klaus_note/config.json")) if "json" in dir() else __import__("json").load(open("klaus_note/config.json"))
 check("config.json ships hand_drawn on, config.md documents it",
-      _cfg.get("hand_drawn") is True and "**hand_drawn**" in open("klausmate/config.md", encoding="utf-8").read())
+      _cfg.get("hand_drawn") is True and "**hand_drawn**" in open("klaus_note/config.md", encoding="utf-8").read())
 
 raise SystemExit(report())

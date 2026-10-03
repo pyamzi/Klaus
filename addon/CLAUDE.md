@@ -1,4 +1,4 @@
-# CLAUDE.md — Addons repo / Klaus (klausmate)
+# CLAUDE.md — Addons repo / Klaus (klaus_note)
 
 ## Current architecture: local-model reversion
 
@@ -10,7 +10,7 @@ lecture recording was removed on 2026-09-30 (K-314): recording belongs to the
 Klaus app, not the add-on. See [completion evidence and limits](docs/superpowers/reports/2026-09-19-local-model-reversion.md).
 Older API-first and cloud-only designs are dated history, not current guidance.
 
-The real project here is **`klausmate/`** — "Klaus", an Anki addon for a
+The real project here is **`klaus_note/`** — "Klaus", an Anki addon for a
 lecture-PDF library with per-PDF retention scoring, semantic card↔PDF
 matching (indexing a PDF tags every card it covers), a PDF reader
 (pdf.js) with highlights/sticky notes, and image cropping. Around it:
@@ -46,11 +46,11 @@ Plan 3 was never built and is not pending work. Historical specs:
 [API-first](docs/superpowers/specs/2026-09-15-api-first-klaus-design.md),
 [Plus](docs/superpowers/specs/2026-09-16-klaus-plus-subscription-design.md).
 
-**`klausmate/` is tracked in git** as of 2026-08-23. Its `user_files/`
+**`klaus_note/` is tracked in git** as of 2026-08-23. Its `user_files/`
 (personal PDFs, annotations, card index) and `meta.json*` (live config,
 holds API keys) stay ignored — never stage those.
 
-- **Always edit the main checkout**, `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon/klausmate/`,
+- **Always edit the main checkout**, `/Users/pyamzi/Documents/Github/Klaus/klaus-note/addon/klaus_note/`,
   even though worktrees now contain a copy. Anki loads the addon through a
   symlink to the main checkout only, and the PostToolUse compile hook
   compiles that symlink target — so a worktree edit would report success
@@ -61,7 +61,7 @@ holds API keys) stay ignored — never stage those.
 
 - **Run the whole test suite**:
   `failed=0; for t in tests/test_*.py; do env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 "$t" || failed=1; done; test "$failed" -eq 0`
-- **Run one test file**: `python3 tests/test_klausmate.py`. The files that
+- **Run one test file**: `python3 tests/test_klaus_note.py`. The files that
   need real PyQt6 widgets use offscreen rendering. Set that environment
   explicitly; see "Anki runtime & testing".
 - **Add `PYTHONDONTWRITEBYTECODE=1` when you re-run a test after editing the
@@ -73,10 +73,10 @@ holds API keys) stay ignored — never stage those.
   the test passes on it. `scripts/mutation_audit.py` purges both cache roots
   and aborts on a stray `.pyc` for exactly this reason.
 - **Verify syntax through the symlink Anki actually loads** — do this after
-  every `klausmate/*.py` edit (the PostToolUse hook already runs it
+  every `klaus_note/*.py` edit (the PostToolUse hook already runs it
   automatically):
-  `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`
-- **Build the shippable package**: `./scripts/package.sh` → `dist/klausmate.ankiaddon`
+  `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klaus_note/*.py`
+- **Build the shippable package**: `./scripts/package.sh` → `dist/klaus_note.ankiaddon`
 - **The vacuity gate**: `python3 scripts/mutation_audit.py --modules <module>`
   breaks the code on purpose to find pins that cannot fail (`--list <module>`
   shows the mutations, `--selftest` checks the tool). It never touches the
@@ -125,16 +125,16 @@ same reason.
 
 ## How Anki loads the addon
 
-- Symlink: `~/Library/Application Support/Anki2/addons21/klausmate` →
-  `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon/klausmate`. If the repo
+- Symlink: `~/Library/Application Support/Anki2/addons21/klaus_note` →
+  `/Users/pyamzi/Documents/Github/Klaus/klaus-note/addon/klaus_note`. If the repo
   folder is ever renamed, this symlink breaks silently and Anki loads nothing
   — and this file goes stale with it: the repo WAS `Addons/` until the
   2026-08 rename, and both paths here went on naming a dead directory until
   2026-08-31. `ls -l` the link before trusting a path written here.
 - **Never create a second copy under `addons21/`** (e.g. a numbered AnkiWeb
-  install). Two copies race on the same hooks and `editor._klausmate_*`
+  install). Two copies race on the same hooks and `editor._klaus_note_*`
   attribute guards make the collision silent. A removed duplicate is backed up
-  at `~/Library/Application Support/Anki2/klausmate-duplicate-1402639583.backup`.
+  at `~/Library/Application Support/Anki2/klaus-note-duplicate-1402639583.backup`.
 - Anki must be **fully restarted** to pick up code changes.
 
 ## Anki runtime & testing
@@ -148,7 +148,7 @@ same reason.
 - So headless testing = **stub `aqt`/`anki` in `sys.modules` and test
   logic, with real Qt offscreen where widget behavior matters**. The harness lives in `tests/` (see its
   README) with the bootstrap documented in the `klaus-test` skill — use
-  that skill when adding or changing klausmate modules. Run everything:
+  that skill when adding or changing klaus_note modules. Run everything:
   `failed=0; for t in tests/test_*.py; do env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 "$t" || failed=1; done; test "$failed" -eq 0`
 - **Offscreen PyQt6 can verify far more than "does it construct"
   (Pouya, 2026-09-01).** Under `QT_QPA_PLATFORM=offscreen` a real
@@ -175,9 +175,9 @@ same reason.
   python3, so pdf.js pixels cannot be produced headless; say so rather
   than claim them.
 - Verify syntax **through the symlink**:
-  `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`
-  (the PostToolUse hook `.claude/hooks/klausmate-compile.sh` does this
-  automatically after every klausmate `*.py` edit, and fails loudly if the
+  `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klaus_note/*.py`
+  (the PostToolUse hook `.claude/hooks/klaus-note-compile.sh` does this
+  automatically after every klaus_note `*.py` edit, and fails loudly if the
   symlink is missing or dangling — that failure means Anki is not loading
   this code; fix the symlink, don't suppress the hook).
 - Never point tests at the real `user_files` — use a scratch copy.
@@ -190,7 +190,7 @@ same reason.
 ## Module map
 
 - `__init__.py`: bootstrap + gui_hooks; JS bridge
-  (`pycmd("klausmate:<action>:<b64 json>")` routed in `on_js_message`, which
+  (`pycmd("klaus_note:<action>:<b64 json>")` routed in `on_js_message`, which
   splits `":", 2` — only `focus`/`crop`/`log`/`dbg` actions remain, the
   `complete`/`ask` actions are gone with autocomplete/Ask); the
   bootstrap of the **settings store** (`settings.py`, aqt-free; spec
@@ -235,7 +235,7 @@ same reason.
   take `*_args`); image-crop plumbing;
   Tools menu
   (`install_menu`: ONE entry,
-  "KlausMate Preferences…", inserted ahead of Anki's own items — the old
+  "Klaus Note Preferences…", inserted ahead of Anki's own items — the old
   Klaus submenu's actions live inside the Preferences dialog now).
 - `heatmap.py` (aqt-free above its "aqt glue" divider): the **review
   heatmap** — a GitHub-style year grid under the deck list, past days
@@ -396,7 +396,7 @@ same reason.
   stays on per-widget bools (`heatmap_enabled`); `dashboard_order` is
   order ONLY. `_bg_preview_cfg` carries it, and `_write_cfg` patches an
   armed preview so a dashboard edit survives the next preview tick.
-  Bridge `klausmate:dash:<b64 json>`; only `add` refreshes (deferred,
+  Bridge `klaus_note:dash:<b64 json>`; only `add` refreshes (deferred,
   guarded on `mw.state`). `write_cfg` is PUBLIC (K-121) because it is
   the package's one implementation of "patch the armed appearance
   preview too" — heatmap's corner menu writes through it rather than
@@ -409,7 +409,7 @@ same reason.
   (`top_toolbar_will_set_left_tray_content`, `setup_top_bar` called from
   `status_bar.setup`): ◧ ◨ for the Add tab (Library tree, editor) and
   Browse (sidebar, card editor), hidden on Decks; a click is
-  `pycmd("klausmate_pane:left|right")`, and every change (click, tab
+  `pycmd("klaus_note_pane:left|right")`, and every change (click, tab
   switch via `Host.listeners`, a pane hidden elsewhere, toolbar redraw)
   re-pushes `pane_state()` through `klausPanes`. The icon is
   `_PaneToggle`'s geometry as SVG (`pane_icon_svg`); on = `text`, off =
@@ -529,7 +529,7 @@ same reason.
   with Klaus's status bar (`status_bar.install_add_tab`; its ◧ tree /
   ◨ editor toggles are in the top bar, `browse_toggles`) under it; `a` and the Add link switch to it (`open_add` asks Anki for an
   instance when none is live), Close and Escape go back to
-  `Host.previous`, the splitter persists under `klausmate_add_tab`
+  `Host.previous`, the splitter persists under `klaus_note_add_tab`
   (`saveSplitter`), and a click on a PDF row loads it into the reader.
   Edit Current keeps its right dock (the one dock left; it still runs the
   full window height beside the stack — open bug). The Add tab is
@@ -549,7 +549,7 @@ same reason.
   and find it through `mw.mainLayout`, which now IS the Decks page's
   layout) and never detaches a layout. Browse's menus swap into the host
   bar while its tab is active (`menus_in/out`, exempt from
-  `addons_menu`'s watcher via `_klausmate_keep_on_bar`; its Add-ons menu
+  `addons_menu`'s watcher via `_klaus_note_keep_on_bar`; its Add-ons menu
   reads "Browse Add-ons" there), which is also what scopes their
   shortcuts. `host_keys`: the state shortcuts (review keys) are recorded
   from `state_shortcuts_will_change` and DISABLED (never cleared and
@@ -559,7 +559,7 @@ same reason.
   Close and Escape go back to the previous tab (a close filter;
   Anki's own teardown, `_close_event_has_cleaned_up`, passes); Edit
   Current's dock is reaped once the registry shows it closed. Startup:
-  Decks, dock closed (`mw.saveState` under `klausmate_host_state`).
+  Decks, dock closed (`mw.saveState` under `klaus_note_host_state`).
   Fallback: any preflight or shim failure restores Anki's creators for
   the session, with a toolbar tooltip and a sticky error task; `false`
   in config is stock Anki. Live-verified 2026-09-30 on 26.09.2 with
@@ -611,7 +611,7 @@ same reason.
   unavailable" label. The PDF loads in pieces: Python hands the page the
   file length and the first 256 KB (`first_chunk`), and pdf.js's
   `PDFDataRangeTransport` asks for the rest on demand over
-  `pycmd("klausmate_pdfjs:range:<gen>:<begin>:<end>")`, answered by
+  `pycmd("klaus_note_pdfjs:range:<gen>:<begin>:<end>")`, answered by
   `handle_range` → `pdf_source.range_reply` (at most 1 MB a call; a
   request from an older document generation is refused; a stale
   fingerprint makes the reader reload in place). `teardown()` destroys
@@ -862,9 +862,9 @@ same reason.
   verbatim, pinned equal by `tests/test_top_bar.py`) in a 26×26 box on
   `LOGO_VIEWBOX`, the file's 1254 box cropped to the k plus ~4% so it
   fills the seat; `logo_html()` fills it
-  `var(--klaus-accent, currentColor)`, never stroked, click → Klaus Preferences via `klausmate:settings` on
+  `var(--klaus-accent, currentColor)`, never stroked, click → Klaus Preferences via `klaus_note:settings` on
   `webview_did_receive_js_message`; the same hook also routes the
-  on-screen gradient editor's `klausmate:bggrad` drag-end messages
+  on-screen gradient editor's `klaus_note:bggrad` drag-end messages
   into `background.grad_edit_event`). Because it only restyles, Anki's links
   and AnkiHub's toolbar items all keep working and inherit the look via
   the shared `.hitem` class. **Anki draws the toolbar in
@@ -935,7 +935,7 @@ same reason.
   Preferences dialog, `gradient_edit_eval_js`/`gradient_edit_js` grow
   a draggable centre dot + size ring on each gradient screen (JS
   repaints the page inline per pointermove; drag-end lands as a
-  `klausmate:bggrad` pycmd carrying an OP — geom / pick / add /
+  `klaus_note:bggrad` pycmd carrying an OP — geom / pick / add /
   remove — clamped in `grad_edit_event`, JS never trusted, and flows
   through the sink into the dialog's pending spec: geom stays QUIET
   (never refresh mid-drag), structural ops replant the editor, pick
@@ -1104,7 +1104,7 @@ same reason.
 - `lecture_view.py` (aqt-free above its aqt-glue divider; K-119): the
   review-time Lecture panel. A FUNCTIONAL (never design-gated)
   "Library" button injected beside More on the reviewer's bottom bar
-  (`ReviewerBottomBar` name-match; `pycmd("klausmate:lecture")`,
+  (`ReviewerBottomBar` name-match; `pycmd("klaus_note:lecture")`,
   answered by this module's own js-message handler — the hook filters
   CHAIN and the final return wins, so `__init__`'s blanket non-Editor
   swallow upstream is harmless) toggles a panel hosting a standalone
@@ -1434,7 +1434,7 @@ same reason.
     (a plain list return here crashed every profile open — `on_op_finished`
     reads `.changes` off a `CollectionOp`'s result).
   - `manage_models.py`: the "Manage models" dialog (`manage_models_dialog`,
-    also first-run setup; Tools menu label "KlausMate Preferences…", and
+    also first-run setup; Tools menu label "Klaus Note Preferences…", and
     the top bar's k opens it too; Appearance also carries Anki's
     own Follow-System/Light/Dark switch, applied on Save through
     `mw.set_theme` — the one row writing an Anki preference).
@@ -1615,7 +1615,7 @@ same reason.
   `workspace.py` (K-102, the sidebar-shell follow-up) lasted one day —
   deleted 2026-08-25 as the wrong shape; the unified-UI ask is served
   by `top_bar.py`'s toolbar restyle instead (`settings._scrub_legacy`
-  scrubs `workspace_enabled`). Config lives in `klausmate/config.json` +
+  scrubs `workspace_enabled`). Config lives in `klaus_note/config.json` +
   Anki's addon config (`meta.json`) + `config.md`. `settings.migrate()`
   (profile_did_open) cleans up legacy `chat_*`/`claude_*` keys left from the
   deleted Claude-Ask feature; keep it until users have upgraded past it.
@@ -1710,7 +1710,7 @@ same reason.
   and failed the same way one call later. The index_queue tests fake
   curation entirely, so neither showed up there:
   `tests/test_curation_embed.py` runs the real `_embed_plan`. After a
-  refactor that deletes helpers, run `uvx pyflakes klausmate/*.py | grep
+  refactor that deletes helpers, run `uvx pyflakes klaus_note/*.py | grep
   "undefined name"`.
 - **A GUI-launched app inherits a minimal PATH**: binary discovery must
   account for GUI launch environments. The removed `agent_host.find_claude`
@@ -1735,9 +1735,9 @@ same reason.
   Ban pins live in tests/test_bridge_reentrancy.py + test_drive.py.
 - Defensive `try/except` around every Qt call; guarded imports with `None`
   fallbacks (`PDFJS_AVAILABLE` pattern); log with
-  `print("[klausmate] ...")`; tooltips only for capture-style actions
+  `print("[klaus_note] ...")`; tooltips only for capture-style actions
   (selection/copy is silent, Preview-style).
-- pypdf is vendored in `klausmate/vendor/` (6.11.0, has
+- pypdf is vendored in `klaus_note/vendor/` (6.11.0, has
   `pypdf.annotations`); no other bundled Python dependencies or native
   Python extensions. Ollama is a separate native executable.
 - The embedding model stays free-text with local model inventory and pull

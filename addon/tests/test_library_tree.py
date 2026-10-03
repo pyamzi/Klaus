@@ -1,4 +1,4 @@
-"""The Add tab's Library tree (klausmate/library_tree.py): Klaus's own view
+"""The Add tab's Library tree (klaus_note/library_tree.py): Klaus's own view
 over the index library_sidebar builds — same rows, icons, names, retention
 %, right-click items, ⟳ and +PDF header and Finder drops as Browse's sidebar,
 plus a filter box; a single click on a PDF opens it.
@@ -21,7 +21,7 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 from PyQt6 import QtCore, QtGui, QtWidgets  # noqa: E402
 
 shim = types.ModuleType("aqt.qt")
@@ -41,10 +41,10 @@ sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
 
 UF = tempfile.mkdtemp(prefix="klaus-tree-")  # never the real user_files
-retention = importlib.import_module("klausmate.retention")
+retention = importlib.import_module("klaus_note.retention")
 _settings.user_files_dir = UF
-ls = importlib.import_module("klausmate.library_sidebar")
-lt = importlib.import_module("klausmate.library_tree")
+ls = importlib.import_module("klaus_note.library_sidebar")
+lt = importlib.import_module("klaus_note.library_tree")
 
 drive = {"folders": ["2-BiB/Exam 1/Week 1", "Empty"],
          "pdfs": {"Intro_to_CBC": {"folder": "2-BiB/Exam 1/Week 1", "display": "04-L-Intro to CBC.pdf"},
@@ -53,7 +53,7 @@ prefs = {"Intro_to_CBC": {"tag": "!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to
          "Hemolysis": {"tag": "!Library::2-BiB::Exam_1::05-L-Hemolysis"}}
 os.makedirs(os.path.dirname(retention._prefs_path()), exist_ok=True)
 json.dump(prefs, open(retention._prefs_path(), "w"))
-drive_store = importlib.import_module("klausmate.drive_store")
+drive_store = importlib.import_module("klaus_note.drive_store")
 json.dump(dict(drive, version=drive_store.DRIVE_VERSION), open(drive_store._drive_path(UF), "w"))
 ls._cache["key"] = None
 
@@ -134,7 +134,7 @@ check("after refresh: Week 1 still expanded, Hemolysis still hidden",
 tree.filter.setText("")
 
 section("right-click items match Browse's")
-act = importlib.import_module("klausmate.library_actions")
+act = importlib.import_module("klaus_note.library_actions")
 act.pdfs_under = lambda folder: ["Intro_to_CBC"] if folder == "2-BiB/Exam 1/Week 1" else []
 labels = lambda key: [e[0] for e in ls.menu_entries(tree, key) if e is not None]  # noqa: E731
 check("root", labels(ROOT) == ["Import PDFs…", "New Folder…"])
@@ -143,7 +143,7 @@ check("a folder with PDFs", labels(WEEK) == ["New Folder…", "Import PDFs Here�
 check("an empty folder", labels(EMPTY) == ["New Folder…", "Import PDFs Here…", "Rename Folder…", "Remove Folder", "Exclude from Index"])
 check("separators are None entries, first", ls.menu_entries(tree, CBC)[0] is None)
 check("the Browse hook still builds the same menu through menu_entries",
-      "menu_entries(" in open("klausmate/library_sidebar.py").read().split("def on_context_menu")[1].split("\ndef ")[0])
+      "menu_entries(" in open("klaus_note/library_sidebar.py").read().split("def on_context_menu")[1].split("\ndef ")[0])
 shown = []
 tree.popup_menu = lambda menu, pos: shown.append([a.text() for a in menu.actions() if not a.isSeparator()])
 tree._on_context_menu(tree.view.visualRect(tree.index_for(CBC)).center())
@@ -153,7 +153,7 @@ section("drops and the header row")
 check("drops are accepted on the view", tree.view.viewport().acceptDrops() and isinstance(getattr(tree, "_drops", None), ls.PdfDropFilter))
 check("no footer", not hasattr(tree, "footer"))
 check("the header row: the filter, then ⟳ and +PDF",
-      [a.objectName() for a in tree.header.actions()] == ["klausmate_library_refresh", "klausmate_library_add_pdf"]
+      [a.objectName() for a in tree.header.actions()] == ["klaus_note_library_refresh", "klaus_note_library_add_pdf"]
       and tree.layout().itemAt(0).layout() is not None
       and tree.layout().itemAt(0).layout().itemAt(0).widget() is tree.filter
       and tree.layout().itemAt(0).layout().itemAt(1).widget() is tree.header)
@@ -171,9 +171,9 @@ tree.refresh = lambda: rebuilt.append(1)
 ls.refresh_trees()
 check("refresh_trees rebuilds every tree", rebuilt == [1])
 check("pdf_drive's library-changed fan-out reaches the trees",
-      "refresh_trees()" in open("klausmate/pdf_drive.py").read().split("def _library_changed")[1].split("\ndef ")[0])
+      "refresh_trees()" in open("klaus_note/pdf_drive.py").read().split("def _library_changed")[1].split("\ndef ")[0])
 check("refresh_status no longer bails when only trees exist",
-      "if not _sidebars and not _trees" in open("klausmate/library_sidebar.py").read())
+      "if not _sidebars and not _trees" in open("klaus_note/library_sidebar.py").read())
 
 section("row icons follow the theme (UI review #1)")
 _themed = []

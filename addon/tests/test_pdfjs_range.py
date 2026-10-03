@@ -47,7 +47,7 @@ def build_pdf(path: str) -> None:
 section("range feed against the vendored pdf.js (node)")
 if shutil.which("node"):
     here = os.path.dirname(os.path.abspath(__file__))
-    web = os.path.join(here, "..", "klausmate", "web")
+    web = os.path.join(here, "..", "klaus_note", "web")
     pdf = os.path.join(tempfile.mkdtemp(), "range.pdf")
     build_pdf(pdf)
     proc = subprocess.run(

@@ -98,14 +98,14 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-#: Copied into the sandbox.  ``klausmate/user_files`` (real PDFs, the
+#: Copied into the sandbox.  ``klaus_note/user_files`` (real PDFs, the
 #: card index, annotations) and ``meta.json`` (API keys) are excluded —
 #: they are half a gigabyte and none of it is ours to duplicate.
-SANDBOX_TREES = ("klausmate", "tests", os.path.join(".claude", "skills", "klaus-test"))
+SANDBOX_TREES = ("klaus_note", "tests", os.path.join(".claude", "skills", "klaus-test"))
 _COPY_SKIP_DIRS = {"user_files", "__pycache__", ".git"}
 _COPY_SKIP_NAMES = {"meta.json", "meta.json.bak"}
 
-#: The modules K-139 scopes the audit to.  Every other klausmate
+#: The modules K-139 scopes the audit to.  Every other klaus_note
 #: module and every other test file belongs to another session.
 AUDIT_MODULES = (
     "heatmap",
@@ -780,8 +780,8 @@ def _tests_for_module(module):
     """
     primary = "tests/test_%s.py" % module
     order = [primary]
-    needle_a = "klausmate.%s" % module
-    needle_b = "klausmate/%s.py" % module
+    needle_a = "klaus_note.%s" % module
+    needle_b = "klaus_note/%s.py" % module
     for other in ALLOWED_TESTS:
         if other == primary or other == "tests/test_setup_crop_theme.py":
             continue
@@ -798,7 +798,7 @@ def _tests_for_module(module):
 def audit(session, modules, out=sys.stdout):
     results = []
     for module in modules:
-        rel = "klausmate/%s.py" % module
+        rel = "klaus_note/%s.py" % module
         src = session.pristine(rel)
         muts, pre_skipped = enumerate_mutations(rel, src)
         tests = _tests_for_module(module)
@@ -877,7 +877,7 @@ _VACUOUS_HELPER = '''def _hex_hits_outside_comments(src: str) -> list:
     return hits
 '''
 
-#: Planted into klausmate/setup_flow.py.  A working hex pin must see it.
+#: Planted into klaus_note/setup_flow.py.  A working hex pin must see it.
 _PLANTED_HEX = '_MUTATION_AUDIT_PLANT = "#AABBCC"\n'
 
 #: The check whose vacuity K-135 exposed.  It appears twice in the file
@@ -926,7 +926,7 @@ def selftest(scratch, out=sys.stdout):
 
     session = Session(scratch)
     setup_test = "tests/test_setup_crop_theme.py"
-    flow_rel = "klausmate/setup_flow.py"
+    flow_rel = "klaus_note/setup_flow.py"
 
     print("\n== selftest (a): the known-vacuous K-135 pin ==", file=out)
 
@@ -982,7 +982,7 @@ def selftest(scratch, out=sys.stdout):
         session.restore(flow_rel)
 
     print("\n== selftest (b): two decoys in a well-pinned module ==", file=out)
-    hm_rel = "klausmate/heatmap.py"
+    hm_rel = "klaus_note/heatmap.py"
     hm_src = session.pristine(hm_rel)
     hm_tests = ["tests/test_heatmap.py"]
     decoys = []
@@ -1034,7 +1034,7 @@ def main(argv=None):
     before = _hash_tree(guarded)
 
     if args.list_module:
-        rel = "klausmate/%s.py" % args.list_module
+        rel = "klaus_note/%s.py" % args.list_module
         with open(os.path.join(REPO, rel), encoding="utf-8") as fh:
             muts, skipped = enumerate_mutations(rel, fh.read())
         for m in muts:

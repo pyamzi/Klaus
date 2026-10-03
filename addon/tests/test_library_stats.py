@@ -14,7 +14,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-ph = importlib.import_module("klausmate.pdf_handler")
+ph = importlib.import_module("klaus_note.pdf_handler")
 
 
 def world(tmp: str):

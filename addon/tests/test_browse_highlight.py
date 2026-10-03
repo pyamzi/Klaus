@@ -12,7 +12,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section
 
 install()
-bh = importlib.import_module("klausmate.browse_highlight")
+bh = importlib.import_module("klaus_note.browse_highlight")
 
 tok = bh.SearchTokenizer()
 

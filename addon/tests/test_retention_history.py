@@ -1,4 +1,4 @@
-"""Tests for klausmate.retention_history (K-118) + retention count keys.
+"""Tests for klaus_note.retention_history (K-118) + retention count keys.
 
 Covers: snapshot recording (append / same-day replace / 730 cap /
 atomicity / corrupt-file tolerance), the aqt-free chart math (point
@@ -26,22 +26,22 @@ from anki_stubs import check, code_only, install, report, section
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 
-rh = importlib.import_module("klausmate.retention_history")
-retention = importlib.import_module("klausmate.retention")
-curation = importlib.import_module("klausmate.curation")
-pdf_handler = importlib.import_module("klausmate.pdf_handler")
-card_index = importlib.import_module("klausmate.card_index")
-pdf_index = importlib.import_module("klausmate.pdf_index")
-embeddings = importlib.import_module("klausmate.embeddings")
+rh = importlib.import_module("klaus_note.retention_history")
+retention = importlib.import_module("klaus_note.retention")
+curation = importlib.import_module("klaus_note.curation")
+pdf_handler = importlib.import_module("klaus_note.pdf_handler")
+card_index = importlib.import_module("klaus_note.card_index")
+pdf_index = importlib.import_module("klaus_note.pdf_index")
+embeddings = importlib.import_module("klaus_note.embeddings")
 
 tmp = tempfile.mkdtemp(prefix="klaus_rh_")
 # NEVER the real user_files: every retention storage path below reads the
 # module globals, so point them at the scratch tree for the whole file.
 _settings.user_files_dir = tmp
 
-_RH_SRC = open("klausmate/retention_history.py").read()
+_RH_SRC = open("klaus_note/retention_history.py").read()
 _RH_CODE = code_only(_RH_SRC)
 
 

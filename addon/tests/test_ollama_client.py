@@ -13,7 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, '.claude/skills/klaus-test/scripts')
 from anki_stubs import install
 install()
-client_module = importlib.import_module('klausmate.ollama_client')
+client_module = importlib.import_module('klaus_note.ollama_client')
 OllamaClient = client_module.OllamaClient
 OllamaError = client_module.OllamaError
 

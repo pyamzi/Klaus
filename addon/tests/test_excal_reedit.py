@@ -64,7 +64,7 @@ def attempt(fn, *a, **k):
         return False, repr(exc)
 
 
-em = importlib.import_module("klausmate.image_occlusion.excal_masks")
+em = importlib.import_module("klaus_note.image_occlusion.excal_masks")
 remap = getattr(em, "remap_masks", None)
 check("excal_masks.remap_masks exists", remap is not None)
 
@@ -417,14 +417,14 @@ def tip(msg, *a, **k):
     TIPS.append(msg)
 
 
-io = importlib.import_module("klausmate.image_occlusion")
-cfg = importlib.import_module("klausmate.image_occlusion.config")
-ngen = importlib.import_module("klausmate.image_occlusion.ngen")
-add = importlib.import_module("klausmate.image_occlusion.add")
-ed_mod = importlib.import_module("klausmate.image_occlusion.editor")
-main = importlib.import_module("klausmate.image_occlusion.main")
-et = importlib.import_module("klausmate.image_occlusion.excal_tab")
-utils = importlib.import_module("klausmate.image_occlusion.utils")
+io = importlib.import_module("klaus_note.image_occlusion")
+cfg = importlib.import_module("klaus_note.image_occlusion.config")
+ngen = importlib.import_module("klaus_note.image_occlusion.ngen")
+add = importlib.import_module("klaus_note.image_occlusion.add")
+ed_mod = importlib.import_module("klaus_note.image_occlusion.editor")
+main = importlib.import_module("klaus_note.image_occlusion.main")
+et = importlib.import_module("klaus_note.image_occlusion.excal_tab")
+utils = importlib.import_module("klaus_note.image_occlusion.utils")
 for mod in (add, ngen, main, io, et):
     mod.tooltip = tip
 ASKS: list = []
@@ -897,7 +897,7 @@ if dlg is not None:
 
 
 section("io_ask: a continuation that raises becomes a tooltip, never escapes the slot")
-dialogs = importlib.import_module("klausmate.image_occlusion.dialogs")
+dialogs = importlib.import_module("klaus_note.image_occlusion.dialogs")
 dialogs.tooltip = tip
 HOOKED: list = []
 _hook = sys.excepthook

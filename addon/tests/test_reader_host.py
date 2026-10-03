@@ -1,4 +1,4 @@
-"""The reader host (klausmate/reader_host.py): the ONE PDF reader and its
+"""The reader host (klaus_note/reader_host.py): the ONE PDF reader and its
 two homes — the Add tab's reader slot and, on loan, Browse's viewer mode.
 Spec: docs/superpowers/specs/2026-10-01-add-tab-design.md, "The reader".
 
@@ -38,7 +38,7 @@ shim.__getattr__ = _ga
 sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
 
-rh = importlib.import_module("klausmate.reader_host")
+rh = importlib.import_module("klaus_note.reader_host")
 
 
 def pump():
@@ -137,7 +137,7 @@ n1 = rh.borrowed_note()
 rh.set_home(slot2)
 check("set_home again drops the old note and keeps one", rh.borrowed_note() is not n1 and sip.isdeleted(n1) or n1.isHidden(),
       f"n1 deleted={sip.isdeleted(n1)}")
-check("…exactly one note label in the slot", len([w for w in slot2.findChildren(QtWidgets.QLabel) if w.objectName() == "klausmate_reader_borrowed" and not sip.isdeleted(w)]) == 1)
+check("…exactly one note label in the slot", len([w for w in slot2.findChildren(QtWidgets.QLabel) if w.objectName() == "klaus_note_reader_borrowed" and not sip.isdeleted(w)]) == 1)
 
 section("guarded: nothing raises on bad input")
 raised = []

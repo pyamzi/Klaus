@@ -4,8 +4,8 @@ import base64, http.server, importlib, json, os, sys, tempfile, threading
 sys.path.insert(0, '.claude/skills/klaus-test/scripts')
 from anki_stubs import install, check, section, report
 install()
-ph = importlib.import_module('klausmate.pdf_handler')
-oc = importlib.import_module('klausmate.ollama_client')
+ph = importlib.import_module('klaus_note.pdf_handler')
+oc = importlib.import_module('klaus_note.ollama_client')
 
 # Verbatim from Bootcamp Heme/Onc page 70 (0-based 69) and a clean page.
 GARBLED = ('%RRWFDPS\x11FRP2QFRORJ\\\x1d\x033ULQFLSOHV\x03RI\x032QFRORJ\\\x03DQG\x037KHUDSHXWLFV\n'

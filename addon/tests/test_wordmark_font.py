@@ -1,6 +1,6 @@
 """The Preferences wordmark is set in Excalifont (Pouya, 2026-10-01).
 
-The font ships as klausmate/web/fonts/Excalifont-Regular.ttf (built by
+The font ships as klaus_note/web/fonts/Excalifont-Regular.ttf (built by
 scripts/build_excalifont.sh) and theme registers it once, from bytes, the
 first time the dialog stylesheet is built.
 
@@ -15,16 +15,16 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section
 
 install()
-theme = importlib.import_module("klausmate.theme")
+theme = importlib.import_module("klaus_note.theme")
 
-FONT = os.path.join("klausmate", "web", "fonts", "Excalifont-Regular.ttf")
+FONT = os.path.join("klaus_note", "web", "fonts", "Excalifont-Regular.ttf")
 
 section("the font file")
 check("Excalifont-Regular.ttf ships with the add-on", os.path.isfile(FONT))
 check("its licence ships beside it",
-      os.path.isfile(os.path.join("klausmate", "web", "fonts", "LICENSE-excalidraw.txt")))
+      os.path.isfile(os.path.join("klaus_note", "web", "fonts", "LICENSE-excalidraw.txt")))
 check("the build script that makes it is kept", os.path.isfile("scripts/build_excalifont.sh"))
-_lic = open(os.path.join("klausmate", "web", "fonts", "LICENSE-excalidraw.txt"), encoding="utf-8").read()
+_lic = open(os.path.join("klaus_note", "web", "fonts", "LICENSE-excalidraw.txt"), encoding="utf-8").read()
 check("the licence is Excalifont's real one, the SIL Open Font License 1.1 (Excalidraw's own font notes say so)",
       "SIL OPEN FONT LICENSE Version 1.1" in _lic and "(license: MIT)" not in _lic
       and "Copyright (c) 2024 by Excalidraw" in _lic)

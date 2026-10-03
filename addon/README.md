@@ -1,17 +1,17 @@
-# KlausMate: a lecture-PDF library with local card matching for Anki
+# Klaus Note: a lecture-PDF library with local card matching for Anki
 
 Klaus organizes lecture PDFs and matches them to cards using local Ollama
 embeddings. Lecture recording lives in the Klaus app, not the add-on. Matching
 and duplicate detection use cosine thresholds. PDF viewing, annotations,
 retention scores and image cropping remain part of the add-on.
-See the [user guide](klausmate/README.md) and [architecture guide](AGENTS.md).
+See the [user guide](klaus_note/README.md) and [architecture guide](AGENTS.md).
 
 **Privacy:** Embeddings run against the configured local Ollama server. Runtime
 and model downloads use the network. An external MCP client can request lecture
 text, images and card context, and its chosen model provider may receive
 that context. Local inference in Klaus does not make external-client processing
-local. See [configuration](klausmate/config.md), [embeddings](klausmate/embeddings.py)
-and [endpoint](klausmate/anki_endpoint.py).
+local. See [configuration](klaus_note/config.md), [embeddings](klaus_note/embeddings.py)
+and [endpoint](klaus_note/anki_endpoint.py).
 
 ## What it does
 
@@ -21,7 +21,7 @@ and [endpoint](klausmate/anki_endpoint.py).
 | **Adding a PDF** | Click **Add to Library** at the bottom of the deck list or a deck's overview, drop a lecture PDF on either screen, or drop it straight into the Library window. |
 | **Card matching** | Right-click a PDF in the Library → **Add to Search Index**. Klaus searches the whole collection by meaning and tags every card that lecture covers with the PDF's own `!Library::…` tag. |
 | **Library** | The **Library** link in the top toolbar opens a window listing every PDF you've imported, in folders you create, each with a retention score, card/note counts, and a right-click menu to index, re-tag, suspend, chart, or open it. |
-| **Copying matches into a deck** | Select notes in Browse → **Notes → KlausMate: Create Curated Deck from Selection…**. One undo step, originals untouched. |
+| **Copying matches into a deck** | Select notes in Browse → **Notes → Klaus Note: Create Curated Deck from Selection…**. One undo step, originals untouched. |
 | **PDF viewer** | Native viewer opened from the Library or the editor's drop panel — text selection, page/slide image copy, highlights with sticky notes baked in as real PDF annotations. |
 | **Image cropping** | Right-click or double-click an image in a note field to crop it; saves as a new media file. |
 
@@ -34,13 +34,13 @@ This local build has automated checks; compatibility across native Anki versions
 and operating systems still requires installation verification.
 
 Build with `bash scripts/package.sh`, then choose **Tools → Add-ons → Install
-from file…**, select `dist/klausmate.ankiaddon`, and restart Anki. Developers can
-copy or symlink `klausmate/` into `addons21/` instead. Locate that folder using
+from file…**, select `dist/klaus_note.ankiaddon`, and restart Anki. Developers can
+copy or symlink `klaus_note/` into `addons21/` instead. Locate that folder using
 **Tools → Add-ons → View Files**. The package includes vendored pypdf.
 
 ## Local model setup
 
-Open **Tools → KlausMate Preferences… → Local models** (the toolbar star
+Open **Tools → Klaus Note Preferences… → Local models** (the toolbar star
 also opens Preferences). The initial endpoint is `http://127.0.0.1:11434`
 and embedding model is `nomic-embed-text`.
 
@@ -67,16 +67,16 @@ approval in Anki. Treat lecture content as untrusted input. The bridge is local;
 this is not a public endpoint or a direct ChatGPT connector. Real Claude Desktop
 and live Anki integration remain installation checks, not automated-test claims.
 
-The exact defaults and controls are documented in [configuration](klausmate/config.md)
-and implemented by [Preferences](klausmate/manage_models.py).
+The exact defaults and controls are documented in [configuration](klaus_note/config.md)
+and implemented by [Preferences](klaus_note/manage_models.py).
 
 ## Source and packaging
 
-- [embeddings.py](klausmate/embeddings.py), [ollama_client.py](klausmate/ollama_client.py),
-  [ollama_runtime.py](klausmate/ollama_runtime.py), [ollama_setup.py](klausmate/ollama_setup.py): local embedding/runtime management.
-- [anki_endpoint.py](klausmate/anki_endpoint.py) and [mcp_stdio_bridge.py](klausmate/scripts/mcp_stdio_bridge.py): authenticated local tools and external-client bridge.
-- [config.json](klausmate/config.json) and [config.md](klausmate/config.md): defaults and reference.
-- [package.sh](scripts/package.sh): stages only `klausmate/`, updates manifest build
+- [embeddings.py](klaus_note/embeddings.py), [ollama_client.py](klaus_note/ollama_client.py),
+  [ollama_runtime.py](klaus_note/ollama_runtime.py), [ollama_setup.py](klaus_note/ollama_setup.py): local embedding/runtime management.
+- [anki_endpoint.py](klaus_note/anki_endpoint.py) and [mcp_stdio_bridge.py](klaus_note/scripts/mcp_stdio_bridge.py): authenticated local tools and external-client bridge.
+- [config.json](klaus_note/config.json) and [config.md](klaus_note/config.md): defaults and reference.
+- [package.sh](scripts/package.sh): stages only `klaus_note/`, updates manifest build
   time, excludes `meta.json*`, bytecode and personal `user_files/`, and adds only
   the storage README under `user_files/`. The archive has no wrapper directory.
 
@@ -86,8 +86,8 @@ published or merged. [ANKIWEB.md](ANKIWEB.md) is listing copy for a future relea
 
 ## License
 
-See the existing [repository license](LICENSE), [packaged license](klausmate/LICENSE)
-and [vendored pypdf license](klausmate/vendor/pypdf-6.11.0.dist-info/licenses/LICENSE).
+See the existing [repository license](LICENSE), [packaged license](klaus_note/LICENSE)
+and [vendored pypdf license](klaus_note/vendor/pypdf-6.11.0.dist-info/licenses/LICENSE).
 External runtimes and models have their own license terms; this change does not
 create new license grants.
 

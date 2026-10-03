@@ -25,10 +25,10 @@ UF = os.path.join(TMP, "user_files")
 ROOT = os.path.join(TMP, "Library")
 os.makedirs(UF)
 os.makedirs(ROOT)
-importlib.import_module("klausmate.settings").user_files_dir = UF
-ph = importlib.import_module("klausmate.pdf_handler")
+importlib.import_module("klaus_note.settings").user_files_dir = UF
+ph = importlib.import_module("klaus_note.pdf_handler")
 ph._live_library_root = lambda: ROOT
-ds = importlib.import_module("klausmate.doc_sync")
+ds = importlib.import_module("klaus_note.doc_sync")
 ds._sync = lambda: None  # no real watcher: classification is driven by hand
 pypdf = ph.pypdf
 from pypdf.annotations import Highlight as _Hl  # noqa: E402  (vendored, after install)
@@ -218,7 +218,7 @@ check("the re-bake succeeds and the page stays deleted, the Klaus mark once",
       ok and counts(DOC4) == (1, 0, 2), f"{ok} {counts(DOC4)}")
 
 section("Round 3 (R54): no revert window between the stat check and the carry scan")
-_asv = importlib.import_module("klausmate.annotation_save")
+_asv = importlib.import_module("klaus_note.annotation_save")
 captures = []
 _real_cap = ph._capture_pristine_stripped
 

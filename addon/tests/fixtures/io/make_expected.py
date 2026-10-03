@@ -1,6 +1,6 @@
 """Regenerate tests/fixtures/io/expected/{ao,oa}/*-{Q,A}.svg with the Task 1
 VERBATIM ngen (31c3134, IOE v1.4.0 byte-for-byte), under stubs. From the repo root:
-    d=$(mktemp -d); git archive 31c3134 klausmate/image_occlusion | tar -x -C "$d"
+    d=$(mktemp -d); git archive 31c3134 klaus_note/image_occlusion | tar -x -C "$d"
     PYTHONDONTWRITEBYTECODE=1 python3 tests/fixtures/io/make_expected.py "$d"
 """
 import copy, os, shutil, sys, tempfile, types, importlib
@@ -10,7 +10,7 @@ VERB = sys.argv[1]
 sys.path.insert(0, os.path.join(REPO, ".claude/skills/klaus-test/scripts"))
 from anki_stubs import install, _permissive_module  # noqa: E402
 
-install(os.path.join(VERB, "klausmate"))
+install(os.path.join(VERB, "klaus_note"))
 for n in ("aqt.addcards", "aqt.editcurrent", "aqt.reviewer", "anki.notes", "anki.errors", "anki.config"):
     _permissive_module(n)
 
@@ -24,8 +24,8 @@ class Note(dict):
 
 
 sys.modules["anki.notes"].Note = Note
-ngen = importlib.import_module("klausmate.image_occlusion.ngen")
-cfg = importlib.import_module("klausmate.image_occlusion.config")
+ngen = importlib.import_module("klaus_note.image_occlusion.ngen")
+cfg = importlib.import_module("klaus_note.image_occlusion.config")
 ngen.Note = Note
 
 

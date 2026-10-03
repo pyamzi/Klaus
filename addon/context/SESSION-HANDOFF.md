@@ -13,7 +13,7 @@ paths, and outstanding obligations.
 
 ## Session intent
 
-Bring KlausMate's UI up to a deliberate, documented standard, using
+Bring Klaus Note's UI up to a deliberate, documented standard, using
 SynapsePro (`scripts/SynapsePro-main`) as the reference: a central token
 system, a settings shell, accent theming, seamless window chrome — then
 audit and revise the whole addon against it. Two live segfaults surfaced
@@ -28,33 +28,33 @@ mid-arc and were fixed.
 
 ## Files created this arc
 
-- `klausmate/browse_highlight.py` — Browse search-term highlighting
+- `klaus_note/browse_highlight.py` — Browse search-term highlighting
   (K-113), adapted from `References/highlight-search-results-main`.
-- `klausmate/md3_switch.py` — MD3 track-and-thumb switch.
-- `klausmate/background.py` — custom background + frosted-bar CSS.
-- `klausmate/top_bar.py` — restyles Anki's top toolbar in place.
+- `klaus_note/md3_switch.py` — MD3 track-and-thumb switch.
+- `klaus_note/background.py` — custom background + frosted-bar CSS.
+- `klaus_note/top_bar.py` — restyles Anki's top toolbar in place.
 - `PRODUCT.md`, `DESIGN.md`, `.impeccable/design.json`,
-  `.impeccable/critique/2026-08-26T06-04-26Z__klausmate.md`.
+  `.impeccable/critique/2026-08-26T06-04-26Z__klaus_note.md`.
 - Tests: `test_bridge_reentrancy.py`, `test_md3_switch.py`,
   `test_browse_highlight.py`, `test_setup_crop_theme.py`,
   `test_background.py`, `test_top_bar.py`, `test_theme.py`.
 
 ## Files substantially modified
 
-- `klausmate/theme.py` — the design system's single source of truth:
+- `klaus_note/theme.py` — the design system's single source of truth:
   `palette(night)`, `COLOR_THEMES` (13 accents + `custom` via
   `custom_overrides`/`set_custom_colour`), the test-enforced radius/font
   scale, `toolbar_css()`/`bottombar_css()` and the shared
   `_chip_base_rules`/`_chip_hover_rules`/`_chip_active_rules`.
-- `klausmate/manage_models.py` — Preferences: `SettingsNav` list shell,
+- `klaus_note/manage_models.py` — Preferences: `SettingsNav` list shell,
   `_page()`/`_row()`, accent swatches, deferred-save machinery.
-- `klausmate/pdfjs_viewer.py`, `klausmate/pdf_viewer.py`,
-  `klausmate/web/pdfjs_viewer.html` — viewer parity, zoom affordances.
-- `klausmate/pdf_drive.py` — worst-first retention sort, themed dialogs.
-- `klausmate/deck_curate.py`, `klausmate/setup_flow.py`,
-  `klausmate/crop_dialog.py`, `klausmate/browse_toggles.py` — theming
+- `klaus_note/pdfjs_viewer.py`, `klaus_note/pdf_viewer.py`,
+  `klaus_note/web/pdfjs_viewer.html` — viewer parity, zoom affordances.
+- `klaus_note/pdf_drive.py` — worst-first retention sort, themed dialogs.
+- `klaus_note/deck_curate.py`, `klaus_note/setup_flow.py`,
+  `klaus_note/crop_dialog.py`, `klaus_note/browse_toggles.py` — theming
   and bridge-deferral fixes.
-- `klausmate/__init__.py` — `_apply_color_theme` on `profile_did_open`,
+- `klaus_note/__init__.py` — `_apply_color_theme` on `profile_did_open`,
   `browse_highlight.setup()`, widened `setWebExports`.
 
 ## Decisions that must not be re-litigated
@@ -200,7 +200,7 @@ pdfjs's two static `QInputDialog` helpers.
   must be AGPL-compatible or drop that module. Also unresolved: an
   "inspired by vs. copied" attribution audit of the SynapsePro-derived
   theme conventions.
-- **Critique backlog** (`.impeccable/critique/…__klausmate.md`, scored
+- **Critique backlog** (`.impeccable/critique/…__klaus_note.md`, scored
   27/40): Help & Documentation 1/4 and Recognition-over-Recall were the
   weakest dimensions. Deferred items include provider/model jargon on
   the first-run screen, no on-demand concept help, and no severity
@@ -222,10 +222,10 @@ seen rendering**. Anki must be fully restarted to load changes.
 
 ## Environment constraints (easy to forget, expensive to rediscover)
 
-- Edit **only** `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon/klausmate/`
+- Edit **only** `/Users/pyamzi/Documents/Github/Klaus/klaus-note/addon/klaus_note/`
   — Anki loads it through a symlink; worktree edits compile nothing.
 - System `python3` is 3.9.6 and **cannot import aqt**. Headless tests
   stub `aqt`/`anki` via `.claude/skills/klaus-test/scripts/anki_stubs.py`;
   Qt widgets are never constructed in tests.
-- Never stage `klausmate/user_files/` or `meta.json*` (API keys).
+- Never stage `klaus_note/user_files/` or `meta.json*` (API keys).
 - Board state changes only through `python3 board/board.py`.

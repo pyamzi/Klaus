@@ -21,8 +21,8 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
-ph = importlib.import_module("klausmate.pdf_handler")
+import klaus_note.settings as _settings  # noqa: E402
+ph = importlib.import_module("klaus_note.pdf_handler")
 plan = ph.plan_rescan
 fp = ph.page_fingerprint
 
@@ -125,7 +125,7 @@ def write_text(path, text):
 
 ph.extract_pages = lambda path: read_text(path).split("|")
 ph.repair_garbled_pages = lambda path, pages, **k: pages
-ps5 = importlib.import_module("klausmate.page_store")
+ps5 = importlib.import_module("klaus_note.page_store")
 _real_ensure = ps5.ensure_records
 ensured = []
 ps5.ensure_records = lambda uf_, safe, path, pages: ensured.append((safe, path, list(pages)))
@@ -320,7 +320,7 @@ check("recorded at ingest", _fresh is not None and ph.load_library_stats(uf5).ge
 put("Fresh.pdf", "fresh|one|edited before the next pass")
 check("an edit before the next pass is reported", scan()["changed_text"] == [_fresh])
 
-ds5 = importlib.import_module("klausmate.doc_sync")
+ds5 = importlib.import_module("klaus_note.doc_sync")
 ds5._paths["Closed"] = os.path.join(root5, "Closed.pdf")
 put("Closed.pdf", "open in a reader|y")
 check("an open file is left to its reader", ph.prepare_rescan(uf5, root5)["changed"] == {})
@@ -330,7 +330,7 @@ ph.extract_pages, ph.repair_garbled_pages = _stub_extract, _stub_repair
 ps5.ensure_records = _real_ensure
 
 section("the background op never holds the collection")
-pdf_drive = importlib.import_module("klausmate.pdf_drive")
+pdf_drive = importlib.import_module("klaus_note.pdf_drive")
 ops = []
 
 
@@ -362,9 +362,9 @@ check("one op, without the collection", len(ops) == 1 and ops[0].no_col)
 check("its result is applied back on the main thread", len(applied) == 1 and done == [{"moved": []}])
 section("an imported PDF gets what every import gets")
 calls = []
-ps = importlib.import_module("klausmate.page_store")
-iq = importlib.import_module("klausmate.index_queue")
-tsync = importlib.import_module("klausmate.tag_sync")
+ps = importlib.import_module("klaus_note.page_store")
+iq = importlib.import_module("klaus_note.index_queue")
+tsync = importlib.import_module("klaus_note.tag_sync")
 ps.ensure_records = lambda uf_, safe, path, pages: calls.append(("pages", safe))
 tsync._schedule_reconcile = lambda: calls.append(("tag", None))  # scheduled, not inline: our renames land first
 pdf_drive.mw = type("MW", (), {"col": object()})()
@@ -379,7 +379,7 @@ check("the background rescan hands what it ingested on", ("pages", "x") in calls
 
 section("deleting a folder never takes the user's own files with it")
 import importlib as _il  # noqa: E402
-pdf_drive = _il.reload(_il.import_module("klausmate.pdf_drive"))
+pdf_drive = _il.reload(_il.import_module("klaus_note.pdf_drive"))
 ph._live_library_root = lambda: root
 _settings.user_files_dir = uf
 trashed = []
@@ -393,7 +393,7 @@ os.makedirs(os.path.join(root, "Empty"))
 open(os.path.join(root, "Empty", ".DS_Store"), "w").write("")
 pdf_drive.delete_folder("Empty")
 check("an empty folder goes to the Trash", trashed == ["Empty"], str(trashed))
-real_trash = _il.reload(_il.import_module("klausmate.pdf_drive"))._move_to_trash
+real_trash = _il.reload(_il.import_module("klaus_note.pdf_drive"))._move_to_trash
 os.makedirs(os.path.join(root, "Kept"))
 open(os.path.join(root, "Kept", "a.md"), "w").write("x")
 real_trash(os.path.join(root, "Kept"))  # the stub Qt has no Trash: the fallback runs
@@ -411,7 +411,7 @@ iq._queue.clear()
 iq._current = None
 
 section("the folder scan shows in the status bar (status bar 5/6)")
-tasks = importlib.import_module("klausmate.tasks")
+tasks = importlib.import_module("klaus_note.tasks")
 tasks.run_on_main = lambda fn: fn()
 tasks.clear()
 held = []
@@ -435,7 +435,7 @@ class HoldOp:
         pass
 
 
-pd5 = importlib.import_module("klausmate.pdf_drive")
+pd5 = importlib.import_module("klaus_note.pdf_drive")
 pd5.QueryOp = HoldOp
 pd5.mw = type("MW", (), {"col": object()})()
 pd5._rescan.update(running=False, again=False)
@@ -451,7 +451,7 @@ check("...and a failure stays in the bar with its reason",
       [(t.key, t.error, "disk" in t.message) for t in tasks.snapshot()] == [("rescan", True, True)], str(tasks.snapshot()))
 tasks.clear()
 
-_init = open("klausmate/__init__.py", encoding="utf-8").read()
+_init = open("klaus_note/__init__.py", encoding="utf-8").read()
 check("profile open starts the background rescan",
       "_pdf_drive.start_library_rescan()" in _init and "_pdf_drive.rescan_library_root()" not in _init)
 
@@ -462,8 +462,8 @@ import types  # noqa: E402
 
 def _point_user_files(path):
     """HEAD reads the package's USER_FILES, the settings seam reads settings."""
-    sys.modules["klausmate"].USER_FILES = path
-    _s = sys.modules.get("klausmate.settings")
+    sys.modules["klaus_note"].USER_FILES = path
+    _s = sys.modules.get("klaus_note.settings")
     if _s is not None:
         _s.user_files_dir = path
 
@@ -512,7 +512,7 @@ class FakeTimer:
 
 
 section("readers hear moved, missing and back only after the mapping is applied")
-pdg = importlib.reload(importlib.import_module("klausmate.pdf_drive"))
+pdg = importlib.reload(importlib.import_module("klaus_note.pdf_drive"))
 ufg = tempfile.mkdtemp(prefix="klaus-t5b-uf-")
 rootg = tempfile.mkdtemp(prefix="klaus-t5b-root-")
 os.makedirs(os.path.join(ufg, "contexts"))
@@ -634,8 +634,8 @@ for _p in (_young_tmp, _other):
     os.remove(_p)
 
 section("deleting a PDF drops its pending save before the readers let go of it")
-_asv5 = importlib.import_module("klausmate.annotation_save")
-_ts5 = importlib.import_module("klausmate.tag_sync")
+_asv5 = importlib.import_module("klaus_note.annotation_save")
+_ts5 = importlib.import_module("klaus_note.tag_sync")
 _order = []
 _saved5 = (_asv5.pipeline, pdg._close_in_panels, _ts5.sync_after_delete, ph.delete_context, pdg._library_changed)
 _asv5.pipeline = lambda: types.SimpleNamespace(forget=lambda s: _order.append(("forget", s)))
@@ -651,10 +651,10 @@ check("the save pipeline forgets it first, so closing its reader bakes nothing",
       _order == [("forget", "Edited"), ("close", "Edited")], str(_order))
 
 section("the watcher tick skips the rescan when it saw only Klaus's own files")
-pvs = types.ModuleType("klausmate.reader_panel")  # the tick must not need the real one
-_had_pv = sys.modules.get("klausmate.reader_panel"), getattr(sys.modules["klausmate"], "reader_panel", None)
-sys.modules["klausmate.reader_panel"] = pvs
-sys.modules["klausmate"].reader_panel = pvs
+pvs = types.ModuleType("klaus_note.reader_panel")  # the tick must not need the real one
+_had_pv = sys.modules.get("klaus_note.reader_panel"), getattr(sys.modules["klaus_note"], "reader_panel", None)
+sys.modules["klaus_note.reader_panel"] = pvs
+sys.modules["klaus_note"].reader_panel = pvs
 starts = []
 _real_start = pdg.start_library_rescan
 pdg.start_library_rescan = lambda *a, **k: starts.append(1)
@@ -731,13 +731,13 @@ _real_start()
 
 pdg.start_library_rescan = _real_start
 if _had_pv[0] is not None:
-    sys.modules["klausmate.reader_panel"] = _had_pv[0]
+    sys.modules["klaus_note.reader_panel"] = _had_pv[0]
 else:
-    sys.modules.pop("klausmate.reader_panel", None)
+    sys.modules.pop("klaus_note.reader_panel", None)
 if _had_pv[1] is not None:
-    sys.modules["klausmate"].reader_panel = _had_pv[1]
+    sys.modules["klaus_note"].reader_panel = _had_pv[1]
 else:
-    delattr(sys.modules["klausmate"], "reader_panel")
+    delattr(sys.modules["klaus_note"], "reader_panel")
 _unsub()
 ds5.resync = _real_resync
 iq.request_pdf = _real_request_pdf

@@ -145,7 +145,7 @@ def board_dir() -> str:
     whenever that folder is replaced.
 
     Order: an explicit BOARD_DIR (or its KLAUS_BOARD_DIR alias, kept for
-    the klausmate checkout this skill was extracted from) wins; then an
+    the klaus_note checkout this skill was extracted from) wins; then an
     existing board already in the project (./board/ then ./); otherwise
     ./board/, which is where `init` creates one.
     """

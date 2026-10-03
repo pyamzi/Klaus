@@ -20,10 +20,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, ".claude/skills/klaus-test/scripts"))
 from anki_stubs import _permissive_module, check, install, report, section  # noqa: E402
 
-PKG = os.path.join(ROOT, "klausmate", "image_occlusion")
+PKG = os.path.join(ROOT, "klaus_note", "image_occlusion")
 FILES = sorted(glob.glob(os.path.join(PKG, "*.py")))
 
-# The harness purges klausmate/__pycache__ only; drop this subpackage's too.
+# The harness purges klaus_note/__pycache__ only; drop this subpackage's too.
 sys.dont_write_bytecode = True
 _prefix = getattr(sys, "pycache_prefix", None)
 for _root in [os.path.join(PKG, "__pycache__")] + (
@@ -104,7 +104,7 @@ check("no assignment to Reviewer._showAnswer", not violations["showAnswer"],
       str(violations["showAnswer"]))
 check("no mw.col.conf access (config goes through get_config/set_config)",
       not violations["col.conf"], str(violations["col.conf"]))
-check("no setWebExports call (Klaus has one, in klausmate/__init__.py)",
+check("no setWebExports call (Klaus has one, in klaus_note/__init__.py)",
       not violations["webexports"], str(violations["webexports"]))
 
 
@@ -120,7 +120,7 @@ import importlib  # noqa: E402
 M = {}
 for _n in ("consts", "config", "dialogs", "editor", "options", "ngen", "nconvert",
            "add", "web", "main"):
-    M[_n] = importlib.import_module("klausmate.image_occlusion." + _n)
+    M[_n] = importlib.import_module("klaus_note.image_occlusion." + _n)
 
 
 def set_mw(fake):
@@ -133,12 +133,12 @@ def set_mw(fake):
 section("web assets are served from the subpackage")
 web = M["web"]
 check("MODULE_ADDON names the subpackage path",
-      M["consts"].MODULE_ADDON == "klausmate/image_occlusion", M["consts"].MODULE_ADDON)
-check("editor css/js read /_addons/klausmate/image_occlusion/web/",
-      '/_addons/klausmate/image_occlusion/web/editor.css' in web.editor_html
-      and '/_addons/klausmate/image_occlusion/web/editor.js' in web.editor_html)
-check("reviewer js reads /_addons/klausmate/image_occlusion/web/",
-      '/_addons/klausmate/image_occlusion/web/reviewer.js' in web.reviewer_html)
+      M["consts"].MODULE_ADDON == "klaus_note/image_occlusion", M["consts"].MODULE_ADDON)
+check("editor css/js read /_addons/klaus_note/image_occlusion/web/",
+      '/_addons/klaus_note/image_occlusion/web/editor.css' in web.editor_html
+      and '/_addons/klaus_note/image_occlusion/web/editor.js' in web.editor_html)
+check("reviewer js reads /_addons/klaus_note/image_occlusion/web/",
+      '/_addons/klaus_note/image_occlusion/web/reviewer.js' in web.reviewer_html)
 
 
 # ------------------------------------------------------------ config
@@ -548,8 +548,8 @@ shim.sip = sip
 shim.qconnect = lambda sig, fn: sig.connect(fn)
 sys.modules["aqt.qt"] = shim
 sys.modules["aqt"].qt = shim
-del sys.modules["klausmate.image_occlusion.dialogs"]
-dq = importlib.import_module("klausmate.image_occlusion.dialogs")
+del sys.modules["klaus_note.image_occlusion.dialogs"]
+dq = importlib.import_module("klaus_note.image_occlusion.dialogs")
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 QMB = QtWidgets.QMessageBox
 win = QtWidgets.QWidget()

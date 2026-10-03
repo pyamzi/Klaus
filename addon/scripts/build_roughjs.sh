@@ -10,6 +10,6 @@ trap 'rm -rf "$TMP"' EXIT
 cd "$TMP"
 npm pack "$VERSION" >/dev/null
 tar -xzf roughjs-*.tgz
-cp package/bundled/rough.js "$HERE/klausmate/web/rough.min.js"
-cp package/LICENSE "$HERE/klausmate/web/LICENSE-roughjs.txt"
+cp package/bundled/rough.js "$HERE/klaus_note/web/rough.min.js"
+cp package/LICENSE "$HERE/klaus_note/web/LICENSE-roughjs.txt"
 echo "vendored $VERSION"

@@ -1,6 +1,6 @@
 """K-310: anki_stubs.install() must never leave USER_FILES on the real Library.
 
-klausmate/ is symlinked into Anki's addons21, so klausmate/user_files IS the
+klaus_note/ is symlinked into Anki's addons21, so klaus_note/user_files IS the
 user's Library. On 2026-09-28 test_library_sync.py wrote drive.json,
 library_map.json and contexts/ there through curation.USER_FILES (now
 settings.user_files()). This pins that every user-files path the harness
@@ -20,10 +20,10 @@ from anki_stubs import ADDON, check, install, report, section  # noqa: E402
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 
-curation = importlib.import_module("klausmate.curation")
-anki_tools = importlib.import_module("klausmate.anki_tools")
+curation = importlib.import_module("klaus_note.curation")
+anki_tools = importlib.import_module("klaus_note.anki_tools")
 
 REAL = os.path.realpath(os.path.join(ADDON, "user_files"))
 TMP = os.path.realpath(tempfile.gettempdir())
@@ -33,7 +33,7 @@ paths = {
     "anki_tools._USER_FILES": anki_tools._USER_FILES,
 }
 
-section("no USER_FILES points at the real klausmate/user_files")
+section("no USER_FILES points at the real klaus_note/user_files")
 for name, p in paths.items():
     real = os.path.realpath(p)
     check(f"{name} is not the real Library", real != REAL, real)

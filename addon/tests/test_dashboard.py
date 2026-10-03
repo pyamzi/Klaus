@@ -1,4 +1,4 @@
-"""Headless tests for klausmate.dashboard — the Control-Center-style
+"""Headless tests for klaus_note.dashboard — the Control-Center-style
 widget editing on the deck-browser screen.
 
 The DOM half (wrapping, edit chrome, drag) is tested for real by
@@ -19,8 +19,8 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, code_only, install, report, section  # noqa: E402
 
 install()
-dash = importlib.import_module("klausmate.dashboard")
-theme = importlib.import_module("klausmate.theme")
+dash = importlib.import_module("klaus_note.dashboard")
+theme = importlib.import_module("klaus_note.theme")
 
 
 # ------------------------------------------------------------- registry
@@ -31,7 +31,7 @@ check("decks is mandatory — no visibility key, so no delete badge and "
       dict((w, k) for w, k, _l in dash.WIDGETS)["decks"] is None)
 check("every removable widget's visibility key is a real config key, "
       "so ⊖/＋ writes land on something the defaults define",
-      all(f'"{key}"' in open("klausmate/config.json").read()
+      all(f'"{key}"' in open("klaus_note/config.json").read()
           for _w, key, _l in dash.WIDGETS if key))
 check("today's registry is exactly decks + heatmap",
       dash.widget_ids() == ["decks", "heatmap"]
@@ -158,12 +158,12 @@ check("unparseable or center-less html is returned untouched",
       dash.wrap_foreign("<center><div class=a>never closed</center>") == "<center><div class=a>never closed</center>"
       and dash.wrap_foreign("<div>no center</div>") == "<div>no center</div>")
 
-_DSRC = open("klausmate/dashboard.py", encoding="utf-8").read()
+_DSRC = open("klaus_note/dashboard.py", encoding="utf-8").read()
 check("the deck screen's HTML goes through wrap_foreign before the boot script is added",
       "web_content.body = wrap_foreign(web_content.body, hidden_foreign(_config()))" in _DSRC
       and _DSRC.index("wrap_foreign(web_content.body") < _DSRC.index("web_content.body += boot_html("))
 check("the page's reorder is CSS order only: no widget is ever re-inserted by drag or order",
-      "insertBefore(w, neighbour" not in open("klausmate/web/dashboard.js").read()
+      "insertBefore(w, neighbour" not in open("klaus_note/web/dashboard.js").read()
       and "center.klaus-dash-col" in dash.dashboard_css())
 
 section("bridge payload parsing")
@@ -378,7 +378,7 @@ check("a dragged widget stops jiggling — a CSS animation would "
       "animation: none !important; z-index: 7;" in _css)
 
 section("the wiring (source pins)")
-_SRC = open("klausmate/dashboard.py").read()
+_SRC = open("klaus_note/dashboard.py").read()
 _CODE = code_only(_SRC)
 _gate_slice = _SRC.split("def _on_webview_will_set_content")[1].split(
     "def _on_js_message")[0]
@@ -413,9 +413,9 @@ section("bridge handler behaviour (stubbed)")
 _calls = []
 dash.write_cfg = lambda u: _calls.append(u)  # glue stubbed; policy real
 check("a foreign message passes through untouched",
-      dash._on_js_message(("sentinel",), "klausmate:settings", None)
+      dash._on_js_message(("sentinel",), "klaus_note:settings", None)
       == ("sentinel",))
-_b = lambda obj: "klausmate:dash:" + base64.b64encode(
+_b = lambda obj: "klaus_note:dash:" + base64.b64encode(
     json.dumps(obj).encode()).decode()
 _r_on = dash._on_js_message((False, None), _b({"action": "edit-on"}), None)
 check("edit-on arms the session flag", dash._EDIT is True)
@@ -430,7 +430,7 @@ _r_mand = dash._on_js_message(
 check("removing the mandatory widget writes NOTHING",
       _calls == [{"heatmap_enabled": False}])
 check("malformed payloads are swallowed",
-      dash._on_js_message((False, None), "klausmate:dash:!!!", None)
+      dash._on_js_message((False, None), "klaus_note:dash:!!!", None)
       == (True, None))
 
 # The "we handled this" half of the bridge contract. Every RETURN out of a
@@ -443,13 +443,13 @@ check("malformed payloads are swallowed",
 # above it makes impossible — that one is dead defensive code, and stays a
 # survivor by construction rather than by omission.
 check("EVERY dash: outcome reports the message handled — armed, cleared, "
-      "refused by the policy gate, and written — so a klausmate: pycmd "
+      "refused by the policy gate, and written — so a klaus_note: pycmd "
       "never falls through to the rest of Anki's hook chain",
       _r_on == (True, None) and _r_off == (True, None)
       and _r_mand == (True, None) and _r_rm == (True, None))
 check("a foreign message is the ONE case that keeps travelling, and it "
       "travels unchanged",
-      dash._on_js_message(("passing", "through"), "klausmate:lecture", None)
+      dash._on_js_message(("passing", "through"), "klaus_note:lecture", None)
       == ("passing", "through"))
 
 
@@ -463,7 +463,7 @@ if shutil.which("node"):
     _here = os.path.dirname(os.path.abspath(__file__))
     _proc = subprocess.run(
         ["node", os.path.join(_here, "dashboard_js_dom_test.js"),
-         os.path.join(_here, "..", "klausmate", "web", "dashboard.js")],
+         os.path.join(_here, "..", "klaus_note", "web", "dashboard.js")],
         capture_output=True, text=True)
     check("wraps both widgets, applies the saved order, survives theme "
           "mode and foreign addon content, is idempotent, and the whole "

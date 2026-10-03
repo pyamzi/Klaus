@@ -50,17 +50,17 @@ from anki_stubs import check, install, report, section
 install()
 
 _MODULES = {
-    "__init__": open("klausmate/__init__.py").read(),
-    "top_bar": open("klausmate/top_bar.py").read(),
-    "pdf_drop": open("klausmate/pdf_drop.py").read(),
-    "pdfjs_viewer": open("klausmate/pdfjs_viewer.py").read(),
-    "pdf_drive": open("klausmate/pdf_drive.py").read(),
-    "heatmap": open("klausmate/heatmap.py").read(),
-    "dashboard": open("klausmate/dashboard.py").read(),
-    "setup_flow": open("klausmate/setup_flow.py").read(),
-    "curation": open("klausmate/curation.py").read(),
-    "bottom_row": open("klausmate/bottom_row.py").read(),
-    "reader_host": open("klausmate/reader_host.py").read(),
+    "__init__": open("klaus_note/__init__.py").read(),
+    "top_bar": open("klaus_note/top_bar.py").read(),
+    "pdf_drop": open("klaus_note/pdf_drop.py").read(),
+    "pdfjs_viewer": open("klaus_note/pdfjs_viewer.py").read(),
+    "pdf_drive": open("klaus_note/pdf_drive.py").read(),
+    "heatmap": open("klaus_note/heatmap.py").read(),
+    "dashboard": open("klaus_note/dashboard.py").read(),
+    "setup_flow": open("klaus_note/setup_flow.py").read(),
+    "curation": open("klaus_note/curation.py").read(),
+    "bottom_row": open("klaus_note/bottom_row.py").read(),
+    "reader_host": open("klaus_note/reader_host.py").read(),
 }
 # Parsed once per module — _func_src and both roster scans below walk
 # these shared trees instead of re-parsing per lookup.
@@ -101,7 +101,7 @@ for mod in _MODULES:
             _registered.add(f"{mod}.{node.args[0].id}")
 
 # STILL FIVE after K-151, with one member RENAMED. That card retired the
-# armed drop square and its "klausmate_disarm" command, and its board
+# armed drop square and its "klaus_note_disarm" command, and its board
 # text predicted the roster would fall to four — but what left was a
 # COMMAND, not a handler: on_deck_js_message stays registered for the
 # square's remaining Browse… click, which is the single most important
@@ -154,7 +154,7 @@ section("pdf_drop: the drop square's file picker")
 # K-146 removed this file's other two bridge branches with the curate
 # button (_on_curate_clicked, which deferred _curate_with's scope dialog
 # and _pick_pdf_menu's nested menu.exec()); K-151 removed the third with
-# the armed square (the × that sent klausmate_disarm). The Browse…
+# the armed square (the × that sent klaus_note_disarm). The Browse…
 # picker is the ONLY branch left — and it is the one that matters most:
 # QFileDialog opened straight out of the webchannel call.
 _BROWSE = _func_src("pdf_drop", "_on_browse_clicked")
@@ -264,7 +264,7 @@ section("manage_models: Preferences opens non-modal, never exec()")
 # docstrings right next to the call.
 from anki_stubs import code_only as _no_prose  # noqa: E402
 
-_MM_SRC = open("klausmate/manage_models.py").read()
+_MM_SRC = open("klaus_note/manage_models.py").read()
 _MM_CODE2 = _no_prose(_MM_SRC)
 check("the Preferences dialog is shown non-modal with dlg.show()",
       "dlg.show()" in _MM_CODE2 and "dlg.open()" not in _MM_CODE2)
@@ -356,13 +356,13 @@ check("pdf_drive: no dialog exec either (converted under K-117, pinned "
       and "msg.exec()" not in _K114["pdf_drive"])
 
 # The vendored Image Occlusion port (Image Occlusion 1/3, Task 2): every
-# module in klausmate/image_occlusion/ joins the roster. IOE's blocking
+# module in klaus_note/image_occlusion/ joins the roster. IOE's blocking
 # asks became io_ask callbacks; its dialogs open window-modal. The
 # behaviour (and an AST version of these bans) is in
 # tests/test_image_occlusion_rules.py.
 import glob as _glob  # noqa: E402
 
-_IO_FILES = sorted(_glob.glob("klausmate/image_occlusion/*.py"))
+_IO_FILES = sorted(_glob.glob("klaus_note/image_occlusion/*.py"))
 check("the image_occlusion roster found the package", len(_IO_FILES) >= 15,
       str(_IO_FILES))
 for _p in _IO_FILES:
@@ -372,7 +372,7 @@ for _p in _IO_FILES:
                          "QMessageBox.information", "QMessageBox.critical",
                          "QMessageBox.warning", ".getColor(") if t in _c]
     check(f"{_p}: no exec() and no exec-internally helper", not _hits, str(_hits))
-_IO_DIALOGS = _no_prose(open("klausmate/image_occlusion/dialogs.py").read())
+_IO_DIALOGS = _no_prose(open("klaus_note/image_occlusion/dialogs.py").read())
 check("image_occlusion: io_ask opens window-modal and answers from finished",
       "box.open()" in _IO_DIALOGS
       and "box.finished.connect(on_finished)" in _IO_DIALOGS

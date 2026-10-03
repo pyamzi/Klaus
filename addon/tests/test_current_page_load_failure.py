@@ -14,7 +14,7 @@ from anki_stubs import check, install, report, section
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6 import QtCore, QtGui, QtWidgets
 
@@ -32,11 +32,11 @@ sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["klaus-test"])
 sys.modules["aqt"].mw.taskman = types.SimpleNamespace(
     run_on_main=lambda callback: QtCore.QTimer.singleShot(0, callback))
-rp = importlib.import_module("klausmate.reader_panel")
-vc = importlib.import_module("klausmate.viewer_context")
-ps = importlib.import_module("klausmate.page_store")
-ep = importlib.import_module("klausmate.anki_endpoint")
-pj = importlib.import_module("klausmate.pdfjs_viewer")
+rp = importlib.import_module("klaus_note.reader_panel")
+vc = importlib.import_module("klaus_note.viewer_context")
+ps = importlib.import_module("klaus_note.page_store")
+ep = importlib.import_module("klaus_note.anki_endpoint")
+pj = importlib.import_module("klaus_note.pdfjs_viewer")
 
 
 class FakeJsViewer(QtWidgets.QWidget):

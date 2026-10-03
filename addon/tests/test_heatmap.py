@@ -1,4 +1,4 @@
-"""Headless tests for klausmate.heatmap — the review heatmap.
+"""Headless tests for klaus_note.heatmap — the review heatmap.
 
 Three kinds of check live here:
 
@@ -21,9 +21,9 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-heatmap = importlib.import_module("klausmate.heatmap")
-theme = importlib.import_module("klausmate.theme")
-background = importlib.import_module("klausmate.background")
+heatmap = importlib.import_module("klaus_note.heatmap")
+theme = importlib.import_module("klaus_note.theme")
+background = importlib.import_module("klaus_note.background")
 
 DAY = heatmap.SECS_PER_DAY
 
@@ -262,10 +262,10 @@ _html = heatmap.heatmap_html({99: 40, 98: 0}, {101: 6}, 100, _stats,
                              history_days=14, forecast_days=7)
 check("the panel wears the .klaus-hm hook background.panel_css frosts",
       '<div class="klaus-hm">' in _html)
-check("a day with reviews is clickable", "klausmate:heatmap:99" in _html)
+check("a day with reviews is clickable", "klaus_note:heatmap:99" in _html)
 check("a day with NOTHING on it is not — an empty Browse reads as a "
-      "broken link", "klausmate:heatmap:98" not in _html)
-check("a scheduled day is clickable too", "klausmate:heatmap:101" in _html)
+      "broken link", "klaus_note:heatmap:98" not in _html)
+check("a scheduled day is clickable too", "klaus_note:heatmap:101" in _html)
 check("future cells are drawn from the future ramp",
       "f1" in _html or "f2" in _html or "f3" in _html or "f4" in _html)
 check("tooltips use the reference's phrasing — cards reviewed / cards "
@@ -653,10 +653,10 @@ check("the klausday token, its resolver hook and its query helper are "
       and not hasattr(heatmap, "cards_reviewed_on")
       and not hasattr(heatmap, "_on_browser_will_search")
       and "browser_will_search"
-      not in open("klausmate/heatmap.py", encoding="utf8").read())
+      not in open("klaus_note/heatmap.py", encoding="utf8").read())
 
 section("the KlausBook design gate")
-_HM_SRC = open("klausmate/heatmap.py", encoding="utf8").read()
+_HM_SRC = open("klaus_note/heatmap.py", encoding="utf8").read()
 _render_slice = _HM_SRC.split("def _on_deck_browser_content")[1].split(
     "def _on_webview_will_set_content")[0]
 _css_slice = _HM_SRC.split("def _on_webview_will_set_content")[1].split(
@@ -728,12 +728,12 @@ finally:
 
 section("bridge")
 check("a click is deferred, never run inside the webchannel handler",
-      "QTimer.singleShot" in open("klausmate/heatmap.py", encoding="utf8").read())
+      "QTimer.singleShot" in open("klaus_note/heatmap.py", encoding="utf8").read())
 check("a foreign message is passed straight through untouched",
-      heatmap._on_js_message(("sentinel",), "klausmate:settings", None)
+      heatmap._on_js_message(("sentinel",), "klaus_note:settings", None)
       == ("sentinel",))
 check("a malformed day is swallowed rather than raising into Anki",
-      heatmap._on_js_message((False, None), "klausmate:heatmap:xyz", None)
+      heatmap._on_js_message((False, None), "klaus_note:heatmap:xyz", None)
       == (True, None))
 # The two bridge sites worker-K could not reach from its own claim
 # (K-142). Returning (False, None) re-opens the message to the rest of
@@ -758,7 +758,7 @@ sys.modules["aqt.qt"] = _fake_qt
 check("a day click is answered as handled AND deferred off the bridge "
       "— running Browse inside the webchannel call is the reentrancy "
       "hazard tests/test_bridge_reentrancy.py exists for",
-      heatmap._on_js_message((False, None), "klausmate:heatmap:20000", None)
+      heatmap._on_js_message((False, None), "klaus_note:heatmap:20000", None)
       == (True, None)
       and len(_timer_calls) == 1 and _timer_calls[0][0] == 0)
 

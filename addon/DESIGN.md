@@ -1,5 +1,5 @@
 ---
-name: KlausMate
+name: Klaus Note
 description: The Quiet Clinic — Apple-calm study chrome inside Anki, with one hand-drawn k.
 colors:
   fog-white: "#F5F5F7"
@@ -98,13 +98,13 @@ components:
     padding: "4px 8px"
 ---
 
-# Design System: KlausMate
+# Design System: Klaus Note
 
 ## Overview
 
 **Creative North Star: "The Quiet Clinic"**
 
-KlausMate dresses Anki the way a well-run clinic dresses a hospital:
+Klaus Note dresses Anki the way a well-run clinic dresses a hospital:
 calm, sterile-clean Apple surfaces where nothing shouts, because the
 patient — a medical student mid-exam-cycle — is already carrying enough
 stimulation. The visual world is the Apple system palette held under
@@ -114,11 +114,11 @@ sparingly. Into this sterile field walks one deliberately human
 artifact: Pouya's hand-drawn k, a brush-like lowercase letter with a
 separate dash at its left, filled solid in the accent colour and never
 boxed into an icon square inside Klaus — the warm pulse in the clinic.
-Beside it, the "KlausMate" wordmark in Excalifont, the same hand-drawn
+Beside it, the "Klaus Note" wordmark in Excalifont, the same hand-drawn
 hand as the k, is the single display voice in an otherwise system-sans
 world.
 
-The system is implemented as one Python module (`klausmate/theme.py`)
+The system is implemented as one Python module (`klaus_note/theme.py`)
 of semantic tokens and per-surface QSS builders; the entire look of
 every dialog, panel, toolbar, and webview is a function of
 `palette(night)`. That is not an implementation detail, it is the
@@ -204,7 +204,7 @@ page dissolves into it.
 
 ## Typography
 
-**Display Font:** Excalifont (bundled as `klausmate/web/fonts/
+**Display Font:** Excalifont (bundled as `klaus_note/web/fonts/
 Excalifont-Regular.ttf`, registered by `theme.register_wordmark_font`;
 falls back to Garamond → Georgia → serif) — the wordmark only.
 **Body Font:** the Apple system stack (-apple-system, BlinkMacSystemFont,
@@ -215,7 +215,7 @@ text world — a handwritten name on an otherwise standardized door, in
 the same hand as the k.
 
 ### Hierarchy
-- **Wordmark** (400, 18px): "KlausMate" in Excalifont, sidebar and
+- **Wordmark** (400, 18px): "Klaus Note" in Excalifont, sidebar and
   identity moments only. Excalifont has one weight; the hand is the point.
 - **Page Title** (600, 24px): one per settings page ("General",
   "Appearance"…).
@@ -401,7 +401,7 @@ preserved.
   (`--klaus-accent` / `blue_accent`), never stroked, on a transparent
   ground, in a viewBox cropped to the letter so it fills its seat.
   The brand file's #2393f4 tile belongs to the app icon only.
-  Clicking the k opens KlausMate Preferences.
+  Clicking the k opens Klaus Note Preferences.
 
 ## Do's and Don'ts
 

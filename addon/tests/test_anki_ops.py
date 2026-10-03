@@ -21,11 +21,11 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 
-ep = importlib.import_module("klausmate.anki_endpoint")
-pdf_map = importlib.import_module("klausmate.pdf_map")
-manage_models = importlib.import_module("klausmate.manage_models")
+ep = importlib.import_module("klaus_note.anki_endpoint")
+pdf_map = importlib.import_module("klaus_note.pdf_map")
+manage_models = importlib.import_module("klaus_note.manage_models")
 aqt = sys.modules["aqt"]
 operations = sys.modules["aqt.operations"]
 
@@ -229,16 +229,16 @@ import re  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
 
-_init = open("klausmate/__init__.py", encoding="utf-8").read()
+_init = open("klaus_note/__init__.py", encoding="utf-8").read()
 _pat = re.search(r'setWebExports\(\s*__name__,.*?\br"([^"]+)"', _init, re.S).group(1)
 check("an upper-case background extension is served (IMG_1234.JPG was refused)",
       re.fullmatch(_pat, "user_files/backgrounds/IMG_1234.JPG") is not None
       and re.fullmatch(_pat, "user_files/backgrounds/x.png") is not None
       and re.fullmatch(_pat, "user_files/backgrounds/x.exe") is None)
 
-retention = importlib.import_module("klausmate.retention")
-tag_sync = importlib.import_module("klausmate.tag_sync")
-pdf_handler = importlib.import_module("klausmate.pdf_handler")
+retention = importlib.import_module("klaus_note.retention")
+tag_sync = importlib.import_module("klaus_note.tag_sync")
+pdf_handler = importlib.import_module("klaus_note.pdf_handler")
 _settings.user_files_dir = tempfile.mkdtemp(prefix="klaus-k305-")
 _real_write = pdf_handler._atomic_write_json
 
@@ -260,7 +260,7 @@ check("concurrent prefs writers both survive (the lock serializes them)",
       _prefs.get("A", {}).get("threshold") == 0.6 and _prefs.get("B", {}).get("tag") == "!Library::B",
       str(_prefs))
 
-_ci = importlib.import_module("klausmate.card_index")
+_ci = importlib.import_module("klaus_note.card_index")
 _loads = []
 _real_load = _ci.load
 _ci.load = lambda d: (_loads.append(d), None)[1]
@@ -271,15 +271,15 @@ finally:
 check("batch retags load the card index once, not once per PDF",
       len(_loads) == 1 and out == {"a": None, "b": None, "c": None})
 
-_mm = open("klausmate/manage_models.py", encoding="utf-8").read()
+_mm = open("klaus_note/manage_models.py", encoding="utf-8").read()
 check("Preferences stops its preview timer on every close",
       "dlg.finished.connect(lambda _result: _preview_timer.stop())" in _mm)
-_pd = open("klausmate/pdf_drive.py", encoding="utf-8").read()
-_la = open("klausmate/library_actions.py", encoding="utf-8").read()
-check("the /tmp debug log is gone", "klausmate-debug" not in _pd and "_dbg(" not in _pd)
+_pd = open("klaus_note/pdf_drive.py", encoding="utf-8").read()
+_la = open("klaus_note/library_actions.py", encoding="utf-8").read()
+check("the /tmp debug log is gone", "klaus-note-debug" not in _pd and "_dbg(" not in _pd)
 check("context menus and the threshold dialog are freed",
       "dlg.finished.connect(dlg.deleteLater)" in _la
       # The ＋ menu moved from __init__ into the reader (PDF reader 3/5).
-      and "menu.deleteLater()" in open("klausmate/reader_panel.py", encoding="utf-8").read())
+      and "menu.deleteLater()" in open("klaus_note/reader_panel.py", encoding="utf-8").read())
 
 raise SystemExit(report())

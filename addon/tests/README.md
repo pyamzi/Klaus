@@ -1,4 +1,4 @@
-# klausmate tests
+# klaus_note tests
 
 Headless logic tests. Anki's Python (3.13 bytecode) and its PyQt6 cannot be
 imported by this machine's `python3` (3.9), so these stub `aqt`/`anki` and
@@ -14,7 +14,7 @@ done
 
 | File | Covers |
 |---|---|
-| `test_klausmate.py` | embedding providers + HTTP retries, `pdf_index` storage/resume, retention & FSRS math |
+| `test_klaus_note.py` | embedding providers + HTTP retries, `pdf_index` storage/resume, retention & FSRS math |
 | `test_drive.py` | `drive_store` folders/display names, `pdf_drop` pure helpers |
 | `test_dialog_logic.py` | Manage-models dialog state machine (job assignment, missing-model warnings) |
 

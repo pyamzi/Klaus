@@ -1,4 +1,4 @@
-"""Tests for klausmate.page_store (K-221, Task 1 of the page-store-and-
+"""Tests for klaus_note.page_store (K-221, Task 1 of the page-store-and-
 api-clients plan).
 
 One record per (PDF, page): its slide text, keyed by the document's
@@ -28,7 +28,7 @@ from anki_stubs import check, install, report, section  # noqa: E402
 install()
 
 import os, tempfile, json, shutil
-ps = importlib.import_module("klausmate.page_store")
+ps = importlib.import_module("klaus_note.page_store")
 root = tempfile.mkdtemp(prefix="klaus-pages-")
 pdf = os.path.join(root, "lec.pdf"); open(pdf, "wb").write(b"%PDF-1.4 fake")
 
@@ -196,11 +196,11 @@ section("__init__.import_pdf_file seeds page records at import (PR1 review fix)"
 # __init__.py's own funnel (every import surface — editor drop bar,
 # deck-screen drop, drive window — returns through it), so this needs
 # the REAL __init__.py loaded under real (offscreen) Qt — anki_stubs'
-# own exec_klausmate_under_qt, the same recipe test_slot_guards.py and
+# own exec_klaus_note_under_qt, the same recipe test_slot_guards.py and
 # test_bridge_reentrancy.py hand-rolled before the helper existed. This
-# runs last in this FILE (not shared with test_klausmate.py's own much
+# runs last in this FILE (not shared with test_klaus_note.py's own much
 # larger process, which by this point has already imported half the
-# addon under its own bootstrap — exec_klausmate_under_qt needs a clean
+# addon under its own bootstrap — exec_klaus_note_under_qt needs a clean
 # sys.modules to bind curation/tag_sync/etc. to the fresh stubs it just
 # installed, and only a small, single-purpose file like this one gives
 # it that).
@@ -210,10 +210,10 @@ with open(_ipf_raw, "wb") as _f:
     _f.write(b"%PDF-1.4\n%%EOF")
 _ipf_module = None
 try:
-    from anki_stubs import exec_klausmate_under_qt
+    from anki_stubs import exec_klaus_note_under_qt
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    _ipf_module = exec_klausmate_under_qt(_ipf_uf)
+    _ipf_module = exec_klaus_note_under_qt(_ipf_uf)
 except Exception as exc:
     print(f"  SKIP import_pdf_file (needs real offscreen Qt): {exc}")
 if _ipf_module is not None:

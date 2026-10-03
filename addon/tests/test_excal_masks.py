@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(ROOT, ".claude/skills/klaus-test/scripts"))
 from anki_stubs import install, check, section, report  # noqa: E402
 
 install()
-em = importlib.import_module("klausmate.image_occlusion.excal_masks")
+em = importlib.import_module("klaus_note.image_occlusion.excal_masks")
 
 with open(os.path.join(ROOT, "tests/fixtures/io/flowchart.excalidraw"), encoding="utf-8") as f:
     scene = json.load(f)

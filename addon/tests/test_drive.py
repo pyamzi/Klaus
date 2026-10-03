@@ -15,7 +15,7 @@ import tokenize
 import types
 
 ADDON = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klausmate"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klaus_note"
 )
 
 # The harness's package stub, so every USER_FILES lands in scratch, never
@@ -25,13 +25,13 @@ from anki_stubs import install_package_stub  # noqa: E402
 
 install_package_stub()
 
-import klausmate.settings as _settings  # noqa: E402
-pkg = sys.modules["klausmate"]
+import klaus_note.settings as _settings  # noqa: E402
+pkg = sys.modules["klaus_note"]
 
 import importlib
 
-drive_store = importlib.import_module("klausmate.drive_store")
-viewer_context = importlib.import_module("klausmate.viewer_context")
+drive_store = importlib.import_module("klaus_note.drive_store")
+viewer_context = importlib.import_module("klaus_note.viewer_context")
 
 PASS = FAIL = 0
 
@@ -304,7 +304,7 @@ stub("aqt.editor", Editor=_Any)
 stub("anki")
 stub("anki.collection", AddNoteRequest=_Any)
 
-for mod in ("klausmate.pdf_drop", "klausmate.pdf_drive"):
+for mod in ("klaus_note.pdf_drop", "klaus_note.pdf_drive"):
     try:
         importlib.import_module(mod)
         check(f"{mod.split('.')[-1]} imports", True)
@@ -313,11 +313,11 @@ for mod in ("klausmate.pdf_drop", "klausmate.pdf_drive"):
 
 # pdf_drop pure surface
 try:
-    dp = sys.modules["klausmate.pdf_drop"]
+    dp = sys.modules["klaus_note.pdf_drop"]
     check("the ONE surviving command is underscore-namespaced (a colon "
           "name is swallowed by the editor bridge's non-Editor guard)",
-          dp.BROWSE_CMD == "klausmate_browse"
-          and not dp.BROWSE_CMD.startswith("klausmate:"))
+          dp.BROWSE_CMD == "klaus_note_browse"
+          and not dp.BROWSE_CMD.startswith("klaus_note:"))
     # Every message check below passes a VALID deck context (DeckBrowser
     # is stubbed as _Any above, so an _Any() instance satisfies the
     # handler's own isinstance gate). That is load-bearing: with
@@ -345,7 +345,7 @@ try:
         check("and the K-151-retired disarm command falls through it "
               "too; a handler that claimed-and-ignored the name would "
               "silently eat an identical message from anyone else",
-              dp.on_deck_js_message((False, None), "klausmate_disarm",
+              dp.on_deck_js_message((False, None), "klaus_note_disarm",
                                     _Any()) == (False, None))
     finally:
         del _Any.singleShot
@@ -523,17 +523,17 @@ print("== the drop square is gone; Add to Library joins Anki's bottom row ==")
 # Anki's own bottom-bar HTML), so the button goes where Anki's are.
 for _sym in ("_drop_square_html", "on_deck_browser_content", "on_overview_content"):
     check(f"pdf_drop carries no {_sym}", _sym not in _DP_IDENTS)
-_dp = sys.modules["klausmate.pdf_drop"]
+_dp = sys.modules["klaus_note.pdf_drop"]
 _links = [["", "shared", "Get Shared"]]
 _dp.add_library_link(_links)
 _dp.add_library_link(_links)
 check("the deck list's row gains Add to Library, once however often setup runs",
-      _links == [["", "shared", "Get Shared"], ["", "klausmate_browse", "Add to Library"]], repr(_links))
+      _links == [["", "shared", "Get Shared"], ["", "klaus_note_browse", "Add to Library"]], repr(_links))
 _handler = object()
 _ov = [["O", "opts", "Options"]]
 check("the overview's row gains it too, and the filter hands back Anki's link handler",
       _dp.on_overview_will_render_bottom(_handler, _ov) is _handler
-      and _ov[-1] == ["", "klausmate_browse", "Add to Library"], repr(_ov))
+      and _ov[-1] == ["", "klaus_note_browse", "Add to Library"], repr(_ov))
 check("setup installs both", _calls_in_func(_DP_SRC, "setup", "add_library_link")
       and "overview_will_render_bottom.append(on_overview_will_render_bottom)" in _DP_SRC)
 check("a click from the overview's row is claimed too (OverviewBottomBar context)",
@@ -553,7 +553,7 @@ print("== pdf_handler.list_by_recency (last_used missing for some pdfs) ==")
 # bar's ＋ menu reads it), so the coverage moved down to the function
 # instead of leaving with the caller.
 try:
-    _ph_rec = importlib.import_module("klausmate.pdf_handler")
+    _ph_rec = importlib.import_module("klaus_note.pdf_handler")
     tmp_dc = tempfile.mkdtemp(prefix="klaus_drive_")
     ctx_dir = os.path.join(tmp_dc, "contexts")
     os.makedirs(ctx_dir, exist_ok=True)
@@ -583,7 +583,7 @@ except Exception as e:
 
 shutil.rmtree(tmp, ignore_errors=True)
 
-pdf_drive = importlib.import_module("klausmate.pdf_drive")
+pdf_drive = importlib.import_module("klaus_note.pdf_drive")
 
 print("== no Trash never means a permanent delete (Codex on PR #9) ==")
 _qt = sys.modules["aqt.qt"]
@@ -617,7 +617,7 @@ _g_uf = tempfile.mkdtemp(prefix="drive_glue_uf_")
 _g_root = tempfile.mkdtemp(prefix="drive_glue_root_")
 os.makedirs(os.path.join(_g_uf, "contexts"))
 _settings.user_files_dir = _g_uf
-_ph = importlib.import_module("klausmate.pdf_handler")
+_ph = importlib.import_module("klaus_note.pdf_handler")
 _orig_llr = _ph._live_library_root
 _ph._live_library_root = lambda: _g_root
 try:
@@ -640,7 +640,7 @@ print("== K-076: apply_folder_change moves the disk dir with the tree ==")
 _k_uf = tempfile.mkdtemp(prefix="drive_k76_uf_")
 _k_root = tempfile.mkdtemp(prefix="drive_k76_root_")
 try:
-    _ph = importlib.import_module("klausmate.pdf_handler")
+    _ph = importlib.import_module("klaus_note.pdf_handler")
     os.makedirs(os.path.join(_k_uf, "contexts"))
     os.makedirs(os.path.join(_k_root, "Bootcamp"))
     with open(os.path.join(_k_root, "Bootcamp", "Biostats.pdf"), "wb") as fh:

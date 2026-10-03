@@ -38,13 +38,13 @@ sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
 
 calls: list[str] = []
-sys.modules["klausmate"].manage_models_dialog = lambda: calls.append("klaus")
+sys.modules["klaus_note"].manage_models_dialog = lambda: calls.append("klaus")
 sys.modules["aqt"].mw = types.SimpleNamespace(onPrefs=lambda: calls.append("anki"))
 
-tasks = importlib.import_module("klausmate.tasks")
+tasks = importlib.import_module("klaus_note.tasks")
 tasks.clock = lambda: 1000.0  # every fixture task (started ≤ 3.0) is long past SHOW_DELAY_S
-theme = importlib.import_module("klausmate.theme")
-sb = importlib.import_module("klausmate.status_bar")
+theme = importlib.import_module("klaus_note.theme")
+sb = importlib.import_module("klaus_note.status_bar")
 Task = tasks.Task
 
 
@@ -111,7 +111,7 @@ check("the gear is a painted icon, not a font glyph with a menu arrow", bar.gear
 check("a click doesn't leave a focus ring behind (Tab still reaches it)",
       all(w.focusPolicy() == QtCore.Qt.FocusPolicy.TabFocus for w in (bar.gear, bar.sidebar_btn, bar.editor_btn)))
 check("an on toggle carries no chip (the filled column shows the state)",
-      "elif on:" not in open("klausmate/browse_toggles.py").read())
+      "elif on:" not in open("klaus_note/browse_toggles.py").read())
 
 main = sb.StatusBar(QtWidgets.QMainWindow())
 b.activateWindow()
@@ -235,7 +235,7 @@ for night in (False, True):
           "QWidget#KlausStatusBar" in qss and hexes <= pal, str(hexes - pal))
 
 section("single window: no Close Browse ✕, no dock toggle")
-sw = importlib.import_module("klausmate.single_window")
+sw = importlib.import_module("klaus_note.single_window")
 sw.is_active = lambda: True
 b4, _side4, _col4 = make_browser()
 bar4 = sb.StatusBar(b4, browser=b4)
@@ -292,7 +292,7 @@ sb.set_row_height(0)
 sw.is_active = lambda: False
 
 section("the top bar's pane toggles (single window)")
-bt = importlib.import_module("klausmate.browse_toggles")
+bt = importlib.import_module("klaus_note.browse_toggles")
 for side in ("left", "right"):
     svg = bt.pane_icon_svg(side)
     check(f"the {side} icon is the Qt toggle's drawing: frame, divider, a fillable column",
@@ -347,10 +347,10 @@ fired = []
 bt.QTimer = types.SimpleNamespace(singleShot=lambda _ms, fn: fired.append(fn))
 check("a pane click is handled, a tick later", bt._on_js_message((False, None), f"{bt.PANE_CMD}:left", None) == (True, None)
       and len(fired) == 1)
-check("other messages pass through", bt._on_js_message((False, None), "klausmate:settings", None) == (False, None))
+check("other messages pass through", bt._on_js_message((False, None), "klaus_note:settings", None) == (False, None))
 
 section("the sync entry (auto sync)")
-auto = importlib.import_module("klausmate.auto_sync")
+auto = importlib.import_module("klaus_note.auto_sync")
 host5 = QtWidgets.QWidget()
 bar5 = sb.StatusBar(host5)
 FULL = "AnkiWeb needs a full sync. Click to choose whether to upload or download."

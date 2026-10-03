@@ -1,4 +1,4 @@
-"""Headless tests for klausmate.theme — the design-token module.
+"""Headless tests for klaus_note.theme — the design-token module.
 
 theme.py must stay aqt-free at module top (only night_mode() touches aqt,
 lazily, degrading to light mode) so every QSS builder is testable here.
@@ -12,7 +12,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section
 
 install()
-theme = importlib.import_module("klausmate.theme")
+theme = importlib.import_module("klaus_note.theme")
 
 section("palette structure")
 check("LIGHT and DARK have identical key sets",
@@ -96,10 +96,10 @@ check("dialog combos carry a real chevron per palette, a hover "
       and "QComboBox QAbstractItemView::item" in theme.dialog_qss(False))
 import os as _os  # noqa: E402
 
-check("both chevron assets actually ship in klausmate/web (a QSS "
+check("both chevron assets actually ship in klaus_note/web (a QSS "
       "url() to a missing file is silently blank — back to no arrow)",
-      _os.path.exists("klausmate/web/chevron-day.svg")
-      and _os.path.exists("klausmate/web/chevron-night.svg"))
+      _os.path.exists("klaus_note/web/chevron-day.svg")
+      and _os.path.exists("klaus_note/web/chevron-night.svg"))
 
 section("colour themes (K-107 — SynapsePro's accent presets)")
 BLUE_KEYS = {"blue", "blue_hover", "blue_pressed", "blue_border",
@@ -223,24 +223,24 @@ for night in (False, True):
         check(f"dialog_qss(night={night}) styles {sel}", sel in d3)
 
 section("drop zone + helpers")
-dz = theme.drop_zone_qss(False, "klausmateLibraryDropZone")
+dz = theme.drop_zone_qss(False, "klausNoteLibraryDropZone")
 check("drop zone scopes rules to the given objectName",
-      "#klausmateLibraryDropZone {" in dz
-      and '#klausmateLibraryDropZone[dragOver="true"]' in dz)
+      "#klausNoteLibraryDropZone {" in dz
+      and '#klausNoteLibraryDropZone[dragOver="true"]' in dz)
 check("drop zone styles its Browse button",
-      "#klausmateLibraryDropZone QPushButton" in dz)
+      "#klausNoteLibraryDropZone QPushButton" in dz)
 # K-132: the Library's empty state is a drop target that must not
 # ADVERTISE as a box while idle — the pane already carries one dashed
 # square below the tree. Same builder, idle half muted.
 for _n in (False, True):
-    _dzq = theme.drop_zone_qss(_n, "klausmateLibraryEmpty",
+    _dzq = theme.drop_zone_qss(_n, "klausNoteLibraryEmpty",
                                idle_border=False)
     _c = theme.palette(_n)
     check(f"idle_border=False (night={_n}) drops the idle dashed box",
           "dashed" not in _dzq)
     check(f"idle_border=False (night={_n}) keeps the SHARED drag-over "
           "half — the empty state lights up exactly like the square",
-          '#klausmateLibraryEmpty[dragOver="true"]' in _dzq
+          '#klausNoteLibraryEmpty[dragOver="true"]' in _dzq
           and _c["blue_bright"] in _dzq and _c["selection_bg"] in _dzq)
     check(f"idle_border=False (night={_n}) makes that border "
           "TRANSPARENT rather than removing it — the box model has to "
@@ -331,7 +331,7 @@ section("one PDF viewer everywhere (K-153): pdf_panel_qss, self-applied")
 # Everything else drifted because it relied on ancestry: PdfSidebar
 # carried no sheet and no styled background, so it painted nothing and
 # the host showed through every gap.
-_pdf_panel_src = open("klausmate/reader_panel.py").read()
+_pdf_panel_src = open("klaus_note/reader_panel.py").read()
 
 for night in (False, True):
     c = theme.palette(night)

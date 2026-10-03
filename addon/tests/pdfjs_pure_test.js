@@ -1,12 +1,12 @@
 // PDF reader 2/5: the pure helpers behind the render cache, the
-// per-page mark redraw and the incremental find (klausmate/web/pdfjs_pure.js).
+// per-page mark redraw and the incremental find (klaus_note/web/pdfjs_pure.js).
 // Run by tests/test_pdfjs_pure.py when `node` is present. Exit 1 on failure.
 "use strict";
 const assert = require("assert");
 const path = require("path");
 const { KEEP_RENDERED, evictable, changedPages, findOrder,
         FIND_BUDGET_MS, shouldYield, insertMatch, seedFor, cardSpot } =
-  require(path.join(__dirname, "..", "klausmate", "web", "pdfjs_pure.js"));
+  require(path.join(__dirname, "..", "klaus_note", "web", "pdfjs_pure.js"));
 
 const failures = [];
 function check(name, fn) {

@@ -18,8 +18,8 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-ph = importlib.import_module("klausmate.pdf_handler")
-asv = importlib.import_module("klausmate.annotation_save")
+ph = importlib.import_module("klaus_note.pdf_handler")
+asv = importlib.import_module("klaus_note.annotation_save")
 LOG = []
 asv.print = lambda *a, **k: LOG.append(" ".join(map(str, a)))  # keep output pristine
 
@@ -309,7 +309,7 @@ asv._run_on_main = real_rom
 check("start_timer goes through run_on_main", len(hops) == 1)
 
 section("doc_sync wiring: pin resolves, 'back' retries a failed save")
-ds = importlib.import_module("klausmate.doc_sync")
+ds = importlib.import_module("klaus_note.doc_sync")
 asv._pin("A", STAT)
 check("_pin reaches doc_sync.pin_own_write", ds.classify("A", STAT) == "own")
 ds.pin_own_write("A", None)
@@ -345,7 +345,7 @@ ds._subs[:] = subs_before
 wired = []
 real_cls, real_wire = asv.SavePipeline, asv._wire_doc_sync
 asv.SavePipeline, asv._wire_doc_sync = FakePipe, wired.append
-sys.modules["klausmate"].USER_FILES = tempfile.mkdtemp()  # pre-settings layout
+sys.modules["klaus_note"].USER_FILES = tempfile.mkdtemp()  # pre-settings layout
 asv._PIPELINE = None
 pipe = asv.pipeline()
 asv.SavePipeline, asv._wire_doc_sync = real_cls, real_wire

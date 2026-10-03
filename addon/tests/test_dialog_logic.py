@@ -104,7 +104,7 @@ print("== SynapsePro settings shell (K-106) ==")
 # screenshot): sidebar of nav pills + a QStackedWidget of pages, each
 # page a PageTitle/PageSubtitle over ONE rounded group of _row()s.
 # Replaced the K-105 card grid outright.
-_src2 = open("klausmate/manage_models.py").read()
+_src2 = open("klaus_note/manage_models.py").read()
 check("no tabs and no card grid left — sidebar + stacked pages",
       "QTabWidget" not in _src2
       and "_install_grid_layout" not in _src2
@@ -112,10 +112,10 @@ check("no tabs and no card grid left — sidebar + stacked pages",
 check("sidebar carries the app identity",
       'setObjectName("SettingsSidebar")' in _src2
       and 'setObjectName("SidebarAppName")' in _src2
-      and 'QLabel("KlausMate")' in _src2)
+      and 'QLabel("Klaus Note")' in _src2)
 check("sidebar identity: the k logo beside the Excalifont wordmark",
       "_logo_pixmap" in _src2
-      and 'QLabel("KlausMate")' in _src2
+      and 'QLabel("Klaus Note")' in _src2
       and "_top_bar.logo_svg(colour)" in _src2)
 check("the logo fills the text colour (matches the wordmark) and repaints on a theme save",
       'QColor(c["text"])' in _src2
@@ -190,13 +190,13 @@ check("clickable pills show the pointing-hand cursor",
       _src2.count("PointingHandCursor") >= 2)
 check("footer says Cancel, like SynapsePro's",
       'QPushButton("Cancel")' in _src2)
-_init_src = open("klausmate/__init__.py").read()
+_init_src = open("klaus_note/__init__.py").read()
 check("the accent preset is applied at profile open, before any "
       "Klaus surface draws",
       "profile_did_open.append(_apply_color_theme)" in _init_src
       and _init_src.index("append(_apply_color_theme)")
       < _init_src.index("append(settings.migrate)"))
-_cfgj = open("klausmate/config.json").read()
+_cfgj = open("klaus_note/config.json").read()
 check("color_theme ships in config.json with the ocean default",
       '"color_theme": "ocean"' in _cfgj
       and '"color_theme_custom": "#0071D3"' in _cfgj)
@@ -316,9 +316,9 @@ check("nav geometry is pure view geometry: setSizeHint rows + list "
 # that only marks dirty (no preview), a Save that leaves the override
 # armed (a stale preview would shadow later config), and a close that
 # forgets to revert (a discarded accent lingering all session).
-_mm_src = open("klausmate/manage_models.py").read()
-_init_src = open("klausmate/__init__.py").read()
-_tb_src = open("klausmate/top_bar.py").read()
+_mm_src = open("klaus_note/manage_models.py").read()
+_init_src = open("klaus_note/__init__.py").read()
+_tb_src = open("klaus_note/top_bar.py").read()
 
 check("save and preview read the SAME flattening of the state's view — "
       "prefs_state.flatten_appearance — so a key can no longer ride one "
@@ -326,7 +326,7 @@ check("save and preview read the SAME flattening of the state's view — "
       "gradient parity lessons, pinned once in tests/test_prefs_state.py)",
       "_prefs_state.flatten_appearance(state.view())"
       in _mm_src.split("def _bg_preview_cfg")[1].split("def apply_appearance_live")[0]
-      and "flatten_appearance(after)" in open("klausmate/prefs_state.py").read()
+      and "flatten_appearance(after)" in open("klaus_note/prefs_state.py").read()
       and "def save_general" not in _mm_src)
 check("both image captions render a rounded thumbnail from the STORED "
       "copy under user_files/backgrounds — what the wallpaper will "
@@ -361,8 +361,8 @@ check("structural ops are bounded and replant: add is capped at "
       in _mm_src)
 check("the sphere lists ride save AND preview for both screens as "
       "DEEP COPIES — config must never alias live dialog state",
-      "v = [dict(g) for g in (v or [])]" in open("klausmate/prefs_state.py").read()
-      and "copy.deepcopy" in open("klausmate/prefs_state.py").read())
+      "v = [dict(g) for g in (v or [])]" in open("klaus_note/prefs_state.py").read()
+      and "copy.deepcopy" in open("klaus_note/prefs_state.py").read())
 check("editing arms on open with the dialog's sink and disarms on "
       "finished — connected BEFORE the preview revert, so exactly one "
       "refresh clears the handles on every close path",
@@ -376,7 +376,7 @@ check("Save is the dialog's DEFAULT button — HIG: a dialog names its "
       "default action, and Return should save once there is something "
       "to save (Qt never fires a disabled default)",
       "save_btn.setDefault(True)" in _mm_src)
-# Anki's own Light/Dark switch, mirrored into KlausMate Preferences
+# Anki's own Light/Dark switch, mirrored into Klaus Note Preferences
 # (2026-08-30, Pouya) — the ONE row writing an Anki preference.
 check("the Anki theme row seeds from mw.pm.theme(), marks dirty like "
       "every deferred pref, and Save applies via mw.set_theme ONLY on "
@@ -384,7 +384,7 @@ check("the Anki theme row seeds from mw.pm.theme(), marks dirty like "
       '_Binding(state, "anki_theme"' in _mm_src
       and 'state.reseed("anki_theme", _cur_theme)' in _mm_src
       and "mw.set_theme(_Theme(int(effect[1])))" in _mm_src
-      and '("anki_theme", after["anki_theme"])' in open("klausmate/prefs_state.py").read())
+      and '("anki_theme", after["anki_theme"])' in open("klaus_note/prefs_state.py").read())
 check("accent swatches carry accessible names — a bare colour square "
       "is silent in VoiceOver; the name mirrors the tooltip identity",
       'sw.setAccessibleName(' in _mm_src
@@ -443,7 +443,7 @@ check("the shell dispatches the index_sweep effect, which tooltips where to "
       and "REINDEX_HINT" in _fn_src("save_all")
       and "_run_index_sweep(effect[1])" in _fn_src("_run_effect"))
 
-_iq_code = code_only(open("klausmate/index_queue.py").read())
+_iq_code = code_only(open("klaus_note/index_queue.py").read())
 check("the card-index confirm is raised window-modal — open() and a finished "
       "callback, never exec() (K-114: exec's nested app-modal loop "
       "segfaults on Qt 6.11 + macOS 26, and the Preferences window this "

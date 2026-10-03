@@ -15,7 +15,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-A = importlib.import_module("klausmate.auto_sync")
+A = importlib.import_module("klaus_note.auto_sync")
 
 section("due")
 base = dict(last_input=0.0, last_attempt=0.0, review_left_at=None, state="deckBrowser", ready=True)

@@ -16,8 +16,8 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
-ps = importlib.import_module("klausmate.pdf_source")
-ph = importlib.import_module("klausmate.pdf_handler")
+ps = importlib.import_module("klaus_note.pdf_source")
+ph = importlib.import_module("klaus_note.pdf_handler")
 
 tmp = tempfile.mkdtemp()
 

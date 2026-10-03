@@ -186,22 +186,22 @@ def png_bytes(w, h, colour="white") -> bytes:
     return bytes(buf.data())
 
 
-io = importlib.import_module("klausmate.image_occlusion")
-masks = importlib.import_module("klausmate.image_occlusion.excal_masks")
-theme = importlib.import_module("klausmate.theme")
-ok_import, et = attempt(importlib.import_module, "klausmate.image_occlusion.excal_tab")
+io = importlib.import_module("klaus_note.image_occlusion")
+masks = importlib.import_module("klaus_note.image_occlusion.excal_masks")
+theme = importlib.import_module("klaus_note.theme")
+ok_import, et = attempt(importlib.import_module, "klaus_note.image_occlusion.excal_tab")
 check("excal_tab imports", ok_import, str(et))
 et = et if ok_import else None
-cfg = importlib.import_module("klausmate.image_occlusion.config")
-ngen = importlib.import_module("klausmate.image_occlusion.ngen")
-add = importlib.import_module("klausmate.image_occlusion.add")
-ed_mod = importlib.import_module("klausmate.image_occlusion.editor")
-main = importlib.import_module("klausmate.image_occlusion.main")
+cfg = importlib.import_module("klaus_note.image_occlusion.config")
+ngen = importlib.import_module("klaus_note.image_occlusion.ngen")
+add = importlib.import_module("klaus_note.image_occlusion.add")
+ed_mod = importlib.import_module("klaus_note.image_occlusion.editor")
+main = importlib.import_module("klaus_note.image_occlusion.main")
 for mod in (add, ngen, main, io) + ((et,) if et else ()):
     mod.tooltip = tip
 
 TMP = tempfile.mkdtemp(prefix="klaus_excal_flow_")
-PAGE = "/_addons/klausmate/image_occlusion/excalidraw/"
+PAGE = "/_addons/klaus_note/image_occlusion/excalidraw/"
 SERVER = "http://127.0.0.1:40000/"
 
 # A scene: a box with a bound label, a free label, a blank text (skipped).
@@ -248,7 +248,7 @@ if et is not None:
         check("...800×600", (img.width(), img.height()) == (800, 600))
         check("...white", img.pixelColor(400, 300) == QtGui.QColor("white")
               and img.pixelColor(0, 0) == QtGui.QColor("white"))
-        utils = importlib.import_module("klausmate.image_occlusion.utils")
+        utils = importlib.import_module("klaus_note.image_occlusion.utils")
         check("...IOE reads its size", utils.get_image_dimensions(p) == (800, 600))
 
 section("prepare_occlusion: PNG, mask SVG, sidecar")
@@ -419,7 +419,7 @@ if et is not None and ok:
     TIPS.clear()
     ok2, _ = attempt(web._onBridgeCmd, "klausexcal:occlude:@@@not-base64")
     check("a garbled message is logged, never raised", ok2 and len(USED) == 1)
-    ok2, _ = attempt(web._onBridgeCmd, "klausmate:something:else")
+    ok2, _ = attempt(web._onBridgeCmd, "klaus_note:something:else")
     check("other messages are ignored", ok2 and len(USED) == 1)
     tab.shutdown()
     web.evals.clear()
@@ -429,7 +429,7 @@ if et is not None and ok:
 
 
 section("page chrome: rebuilt bundle and CSS hides")
-EXD = os.path.join(ROOT, "klausmate", "image_occlusion", "excalidraw")
+EXD = os.path.join(ROOT, "klaus_note", "image_occlusion", "excalidraw")
 js = open(os.path.join(EXD, "excalidraw.js"), encoding="utf-8").read()
 html = open(os.path.join(EXD, "index.html"), encoding="utf-8").read()
 src = open(os.path.join(EXD, "entry.jsx"), encoding="utf-8").read()
@@ -1053,7 +1053,7 @@ finally:
 
 
 section("the source menu's actions never raise out of the Qt slot")
-dlg_mod = importlib.import_module("klausmate.image_occlusion.dialogs")
+dlg_mod = importlib.import_module("klaus_note.image_occlusion.dialogs")
 dlg_mod.tooltip = tip
 HOOKED: list = []
 _hook, _btn = sys.excepthook, main.onImgOccButton
@@ -1078,10 +1078,10 @@ finally:
 
 section("the Draw page's folder is derived from the add-on's package")
 src = open(et.__file__, encoding="utf-8").read() if et else ""
-check("excal_tab names no add-on folder", "/_addons/klausmate" not in src)
+check("excal_tab names no add-on folder", "/_addons/klaus_note" not in src)
 if et is not None:
     other = types.ModuleType("1374772155.image_occlusion.excal_tab")
-    other.__package__ = "klausmate.image_occlusion"  # its imports resolve as usual
+    other.__package__ = "klaus_note.image_occlusion"  # its imports resolve as usual
     other.__file__ = et.__file__
     ok, r = attempt(exec, compile(src, et.__file__, "exec"), other.__dict__)
     check("the module loads under another add-on folder", ok, str(r))
@@ -1092,7 +1092,7 @@ if et is not None:
         nav = other.DrawPage.acceptNavigationRequest
         check("its page check accepts that folder",
               nav(None, QtCore.QUrl(SERVER + want[1:] + "index.html"), 0, True) is True)
-        check("...and refuses klausmate's",
+        check("...and refuses klaus_note's",
               nav(None, QtCore.QUrl(SERVER + PAGE[1:] + "index.html"), 0, True) is False)
 
 raise SystemExit(report())

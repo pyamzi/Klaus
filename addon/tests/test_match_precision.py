@@ -22,14 +22,14 @@ from anki_stubs import LiveStore, check, install, report, section  # noqa: E402
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 
-card_index = importlib.import_module("klausmate.card_index")
-pdf_index = importlib.import_module("klausmate.pdf_index")
-curation = importlib.import_module("klausmate.curation")
-retention = importlib.import_module("klausmate.retention")
-tag_sync = importlib.import_module("klausmate.tag_sync")
-index_queue = importlib.import_module("klausmate.index_queue")
+card_index = importlib.import_module("klaus_note.card_index")
+pdf_index = importlib.import_module("klaus_note.pdf_index")
+curation = importlib.import_module("klaus_note.curation")
+retention = importlib.import_module("klaus_note.retention")
+tag_sync = importlib.import_module("klaus_note.tag_sync")
+index_queue = importlib.import_module("klaus_note.index_queue")
 
 cfg: dict = {"embedding_model": "nomic-embed-text"}
 _settings.store = LiveStore(cfg)

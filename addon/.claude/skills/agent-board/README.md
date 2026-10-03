@@ -99,4 +99,4 @@ Python 3 standard library only. No dependencies, no network access.
 ## License
 
 MIT — see `LICENSE` in this directory. Licensed separately from the
-AGPL v3 covering the `klausmate/` add-on in the containing repository.
+AGPL v3 covering the `klaus_note/` add-on in the containing repository.

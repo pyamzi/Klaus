@@ -1,4 +1,4 @@
-"""Tests for klausmate/pdf_map.py — the embedding map window (K-123).
+"""Tests for klaus_note/pdf_map.py — the embedding map window (K-123).
 
 Pure viewport model first (transform round-trips, fit-to-view centering,
 the zoom-at-cursor fixed-point invariant, hit-testing, node sizing, the
@@ -50,9 +50,9 @@ from anki_stubs import ADDON, check, code_only, install, report, section  # noqa
 
 install()
 
-import klausmate.settings as _settings  # noqa: E402
+import klaus_note.settings as _settings  # noqa: E402
 
-pdf_map = importlib.import_module("klausmate.pdf_map")
+pdf_map = importlib.import_module("klaus_note.pdf_map")
 Viewport = pdf_map.Viewport
 
 _SRC = open(os.path.join(ADDON, "pdf_map.py")).read()
@@ -802,7 +802,7 @@ section("K-174 — hard points, crisp links, a slow full turn")
 #     (#E0E0E0) over `bg` mixes to. So the design brief and the "no
 #     invented colour" rule agree, which is lucky rather than clever.
 
-_STARPAL = importlib.import_module("klausmate.theme").palette(True)
+_STARPAL = importlib.import_module("klaus_note.theme").palette(True)
 
 
 def _hexlum(h: str) -> int:
@@ -1193,7 +1193,7 @@ check("K-158: the hovered/focused node's name is drawn BY THE CANVAS — "
       "into view",
       "QToolTip" not in _CODE
       and "node_lines(p)" in _method_seg("_MapCanvas", "_paint_label"))
-check("house logging prefix present", '"[klausmate] ' in _SRC.replace("f\"", "\""))
+check("house logging prefix present", '"[klaus_note] ' in _SRC.replace("f\"", "\""))
 check("empty-state copy is pinned",
       pdf_map.EMPTY_TEXT == "No indexed PDFs to map yet."
       and "EMPTY_TEXT" in _CODE)
@@ -1259,19 +1259,19 @@ class _NoAqt:
 
 _saved_aqt = {k: v for k, v in sys.modules.items()
               if k == "aqt" or k.startswith("aqt.")}
-_saved_map = sys.modules.pop("klausmate.pdf_map")
+_saved_map = sys.modules.pop("klaus_note.pdf_map")
 for _k in _saved_aqt:
     del sys.modules[_k]
 sys.meta_path.insert(0, _NoAqt())
 try:
-    importlib.import_module("klausmate.pdf_map")
+    importlib.import_module("klaus_note.pdf_map")
     _qtfree = (True, "")
 except Exception as _e:  # noqa: BLE001
     _qtfree = (False, f"{type(_e).__name__}: {_e}")
 finally:
     sys.meta_path.pop(0)
     sys.modules.update(_saved_aqt)
-    sys.modules["klausmate.pdf_map"] = _saved_map
+    sys.modules["klaus_note.pdf_map"] = _saved_map
 check("...which is the actual guarantee, checked the only honest way: "
       "with every aqt import made to FAIL, this module still imports — "
       "the pure viewport model is tested headless and the divider pin "
@@ -1433,7 +1433,7 @@ check("select_pdf with NO map open is a silent no-op — the viewer must "
       "be free to call it on every file without asking first",
       pdf_map._instance is None and pdf_map.select_pdf("anything") is False)
 
-curation = importlib.import_module("klausmate.curation")
+curation = importlib.import_module("klaus_note.curation")
 tmp = tempfile.mkdtemp(prefix="klaus_map_")
 _orig_uf = _settings.user_files_dir
 _settings.user_files_dir = tmp  # NEVER the real user_files
@@ -1563,7 +1563,7 @@ if _HAVE_QT:
     _qt_shim.__getattr__ = _qt_getattr
     sys.modules["aqt.qt"] = _qt_shim
 
-    theme = importlib.import_module("klausmate.theme")
+    theme = importlib.import_module("klaus_note.theme")
     _orig_night = theme.night_mode
     _app = _QtW.QApplication.instance() or _QtW.QApplication(["klaus-test"])
 

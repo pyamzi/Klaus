@@ -1,9 +1,9 @@
 ---
 name: klaus-test
-description: Write and run headless tests for the klausmate Anki addon. Use when adding or changing klausmate Python modules, when verifying addon logic without launching Anki, or when the user asks to test klausmate. Provides the aqt-stub bootstrap that makes importing addon modules possible under this machine's Python.
+description: Write and run headless tests for the klaus_note Anki addon. Use when adding or changing klaus_note Python modules, when verifying addon logic without launching Anki, or when the user asks to test klaus_note. Provides the aqt-stub bootstrap that makes importing addon modules possible under this machine's Python.
 ---
 
-# Testing klausmate headlessly
+# Testing klaus_note headlessly
 
 Anki's Python cannot be used to test this addon, and the addon cannot be
 imported normally. This skill provides the workaround and the conventions.
@@ -36,8 +36,8 @@ import sys, importlib
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import install, check, section, report
 
-install()                     # synthetic klausmate package + aqt/anki stubs
-retention = importlib.import_module("klausmate.retention")
+install()                     # synthetic klaus_note package + aqt/anki stubs
+retention = importlib.import_module("klaus_note.retention")
 
 section("retention math")
 check("R at t=s is 0.90", abs(retention.fsrs_retrievability(10, 0.5, 10) - 0.9) < 1e-9)
@@ -45,7 +45,7 @@ check("R at t=s is 0.90", abs(retention.fsrs_retrievability(10, 0.5, 10) - 0.9) 
 raise SystemExit(report())
 ```
 
-`install()` registers a synthetic `klausmate` package pointing at the
+`install()` registers a synthetic `klaus_note` package pointing at the
 working tree, plus stub `aqt`, `aqt.operations`, `aqt.utils`, `aqt.qt`,
 `aqt.gui_hooks`, `anki`, and `anki.collection`. Modules that are already
 aqt-free (`embeddings`, `card_index`, `pdf_index`, `drive_store`) need only
@@ -89,19 +89,19 @@ silently flipped the configured engine.
   `QMimeData` — keep a Python reference bound, or the event points at
   freed memory.
 
-- **Never point tests at `klausmate/user_files/`** — it holds real PDFs,
+- **Never point tests at `klaus_note/user_files/`** — it holds real PDFs,
   annotations, and the card index. Use `tempfile.mkdtemp()` and pass that as
   `user_files_dir`; every storage function takes it as its first argument.
   (Project settings also deny writes there.)
 - Every new module needs `from __future__ import annotations` so `str | None`
   annotations compile under 3.9.
 - Syntax-check through the symlink, which also proves Anki is loading this
-  tree: `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`
+  tree: `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klaus_note/*.py`
   (the PostToolUse hook does this automatically on every edit).
 
 ## Existing suites
 
-`tests/test_klausmate.py` (embeddings, pdf_index, retention math),
+`tests/test_klaus_note.py` (embeddings, pdf_index, retention math),
 `tests/test_drive.py` (drive_store, pdf_drop helpers),
 `tests/test_dialog_logic.py` (Manage-models dialog state machine).
 Run all three after any change to the modules they cover.

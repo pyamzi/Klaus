@@ -14,7 +14,7 @@ This gate runs tests/test_pdf_map.py twice, each in its own process
 with a purged __pycache__ and PYTHONDONTWRITEBYTECODE=1 (the K-117
 lesson): once untouched, where the file must be green and the K-201
 pins must actually RUN and pass (a gate that matches nothing must not
-pass — the k143_gate lesson), and once with ``klausmate.pdf_map
+pass — the k143_gate lesson), and once with ``klaus_note.pdf_map
 .map_canvas`` wrapped so every canvas it returns answers ``_sweep()``
 with 0 — the exact mutation the K-201 investigation used, applied
 through sys.modules only, never to pdf_map.py on disk. It passes only
@@ -39,7 +39,7 @@ MUTATED_FLAG = "--mutated-run"
 
 
 def _purge_bytecode() -> None:
-    for sub in ("klausmate", "tests", os.path.join(".claude", "skills", "klaus-test", "scripts")):
+    for sub in ("klaus_note", "tests", os.path.join(".claude", "skills", "klaus-test", "scripts")):
         shutil.rmtree(os.path.join(ROOT, sub, "__pycache__"), ignore_errors=True)
 
 
@@ -57,7 +57,7 @@ def _run(mutated: bool) -> tuple[int, str]:
 
 
 def _mutated_main() -> None:
-    """The child: import klausmate.pdf_map under the test harness's own
+    """The child: import klaus_note.pdf_map under the test harness's own
     stubs, wrap map_canvas so every canvas fits single-pose, then run
     the test file as __main__ — its own install() call re-stubs aqt but
     leaves the already-imported, wrapped module in sys.modules."""
@@ -65,7 +65,7 @@ def _mutated_main() -> None:
     from anki_stubs import install  # noqa: E402
 
     install()
-    pdf_map = importlib.import_module("klausmate.pdf_map")
+    pdf_map = importlib.import_module("klaus_note.pdf_map")
     real_map_canvas = pdf_map.map_canvas
 
     def gate_off(parent=None, graph=None):

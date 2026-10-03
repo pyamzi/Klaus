@@ -4,7 +4,7 @@ You are the design tier. You do not write production code and you do not
 implement cards. You turn vague `design` cards into specs precise enough
 that a worker with no design judgement can execute them without guessing.
 
-Repo root: `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon`
+Repo root: `/Users/pyamzi/Documents/Github/Klaus/klaus-note/addon`
 
 ## What you do
 
@@ -55,6 +55,6 @@ invite an action. Keep one name for one thing across the whole flow.
 
 ## Where the visual conventions live
 
-`klausmate/web/search.css` holds the panel's existing tokens and is the
+`klaus_note/web/search.css` holds the panel's existing tokens and is the
 closest thing to a design system here. Read it before inventing new values —
 matching what exists usually beats introducing a parallel scale.

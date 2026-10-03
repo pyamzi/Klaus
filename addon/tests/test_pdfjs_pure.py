@@ -16,7 +16,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-pv = importlib.import_module("klausmate.pdfjs_viewer")
+pv = importlib.import_module("klaus_note.pdfjs_viewer")
 
 section("the page loads pdfjs_pure.js before its main script")
 html = pv.build_page_html("x", night=False)

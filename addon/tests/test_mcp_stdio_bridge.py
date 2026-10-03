@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import install, check, report, section
 install()
-ep = importlib.import_module("klausmate.anki_endpoint")
+ep = importlib.import_module("klaus_note.anki_endpoint")
 
 
 def request(rid, method, **params):
@@ -26,7 +26,7 @@ def request(rid, method, **params):
 with tempfile.TemporaryDirectory(prefix="klaus bridge spaces ") as scratch:
     root = Path(scratch)
     script = root / "bridge with spaces.py"
-    source = Path("klausmate/scripts/mcp_stdio_bridge.py")
+    source = Path("klaus_note/scripts/mcp_stdio_bridge.py")
     check("standalone script exists", source.is_file())
     if not source.is_file():
         raise SystemExit(report())

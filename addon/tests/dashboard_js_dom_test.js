@@ -1,10 +1,10 @@
-// Behavioural test for klausmate/web/dashboard.js — the dashboard's
+// Behavioural test for klaus_note/web/dashboard.js — the dashboard's
 // entire DOM half (wrapping, ordering, Control-Center edit mode),
 // where a source pin proves nothing.
 //
 // Run by tests/test_dashboard.py when `node` is present (and honestly
 // reported as skipped when it is not). Usage:
-//     node tests/dashboard_js_dom_test.js klausmate/web/dashboard.js
+//     node tests/dashboard_js_dom_test.js klaus_note/web/dashboard.js
 //
 // The fake DOM models Anki's deck-browser shapes, verified against
 // aqt/deckbrowser.pyc:
@@ -188,8 +188,8 @@ function build(opts) {
 const SENT = [];
 const decoded = (i) => {
   const msg = SENT[i];
-  if (!msg || !msg.startsWith("klausmate:dash:")) return null;
-  return JSON.parse(Buffer.from(msg.slice("klausmate:dash:".length), "base64").toString("utf8"));
+  if (!msg || !msg.startsWith("klaus_note:dash:")) return null;
+  return JSON.parse(Buffer.from(msg.slice("klaus_note:dash:".length), "base64").toString("utf8"));
 };
 
 const src = fs.readFileSync(process.argv[2], "utf8");
