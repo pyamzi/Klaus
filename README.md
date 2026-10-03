@@ -38,7 +38,7 @@ Later milestones add **Documents** (PDF annotation), **Linking** (sections, link
 
 ```
 ┌────────────── Tauri window (WKWebView) ──────────────┐
-│ KlausNote screens (Svelte 5)    Anki's pages (Svelte)    │
+│ KlausNote screens (Svelte 5)   Anki's pages (Svelte) │
 └───────────────┬──────────────────────────────────────┘
                 │  POST /_anki/<method>  (protobuf, Anki's contract)
 ┌───────────────▼──────────────────────────────────────┐
