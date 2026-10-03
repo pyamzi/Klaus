@@ -1,4 +1,4 @@
-"""Klaus Note — semantic lecture-PDF library for Anki.
+"""KlausNote — semantic lecture-PDF library for Anki.
 
 Bootstrap and Qt glue for the add-on: the PDF viewer panel and its tabs,
 the editor's PDF bar, image cropping, and the Browse toolbar toggles.
@@ -327,7 +327,7 @@ def _launch_crop_dialog(editor: Editor, fname: str) -> None:
     """
     try:
         if editor.note is None:
-            tooltip("Klaus: no note loaded", parent=editor.widget)
+            tooltip("KlausNote: no note loaded", parent=editor.widget)
             return
         if getattr(editor, "_klaus_note_crop_open", False):
             return
@@ -339,18 +339,18 @@ def _launch_crop_dialog(editor: Editor, fname: str) -> None:
             or "\\" in fname
             or ".." in fname
         ):
-            tooltip("Klaus: invalid image filename", parent=editor.widget)
+            tooltip("KlausNote: invalid image filename", parent=editor.widget)
             return
         path = os.path.join(editor.mw.col.media.dir(), fname)
         if not os.path.isfile(path):
             tooltip(
-                f"Klaus: image not found: {fname}", parent=editor.widget
+                f"KlausNote: image not found: {fname}", parent=editor.widget
             )
             return
         image = QImage(path)
         if image.isNull():
             tooltip(
-                "Klaus: could not load image (unsupported format)",
+                "KlausNote: could not load image (unsupported format)",
                 parent=editor.widget,
             )
             return
@@ -386,7 +386,7 @@ def _launch_crop_dialog(editor: Editor, fname: str) -> None:
                                 any_change = True
                         if not any_change:
                             tooltip(
-                                f"Klaus: saved {new_fname}, but the note's "
+                                f"KlausNote: saved {new_fname}, but the note's "
                                 "HTML doesn't reference the original image",
                                 parent=editor.widget,
                             )
@@ -396,7 +396,7 @@ def _launch_crop_dialog(editor: Editor, fname: str) -> None:
                             editor._save_current_note()
                         editor.loadNoteKeepingFocus()
                         tooltip(
-                            f"Klaus: cropped image saved as {new_fname}",
+                            f"KlausNote: cropped image saved as {new_fname}",
                             parent=editor.widget,
                         )
                     except Exception as e:
@@ -472,8 +472,8 @@ def open_config() -> None:
 def install_menu() -> None:
     """Single Tools-menu entry point, at the top of the menu.
 
-    Everything that used to live in a 'Klaus' submenu (Clear library tag,
-    Manage models…, Check Connection) now lives inside the Klaus Note
+    Everything that used to live in a 'KlausNote' submenu (Clear library tag,
+    Manage models…, Check Connection) now lives inside the KlausNote
     Preferences dialog itself (manage_models.py) — a menu that only ever
     grows one deeper is still one click, and it keeps this menu from
     forking into a second place users have to think to look. Anki has
@@ -482,7 +482,7 @@ def install_menu() -> None:
     ahead of Anki's own items rather than appending after them.
     """
     menu = mw.form.menuTools
-    action = QAction("Klaus Note Preferences…", mw)
+    action = QAction("KlausNote Preferences…", mw)
     action.triggered.connect(manage_models_dialog)
     existing_actions = menu.actions()
     if existing_actions:
@@ -579,7 +579,7 @@ def import_pdf_file(path: str, replace: bool = False) -> str | None:
         )
     except Exception as e:
         print(f"[klaus_note] drive display-name record failed: {e}")
-    tooltip(f"Klaus: loaded '{info['name']}'")
+    tooltip(f"KlausNote: loaded '{info['name']}'")
     # Importing does not index: the Library's ⟳ does (manual indexing).
     return str(info["name"])
 

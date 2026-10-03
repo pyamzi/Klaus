@@ -475,7 +475,7 @@ else:
           "counted as a pass")
 
 section("sizes and Same Look: config policy")
-check("Klaus fixes each widget's box from its measured content; unknown add-on blocks share one",
+check("KlausNote fixes each widget's box from its measured content; unknown add-on blocks share one",
       dash.size_of("decks") == "4x3" and dash.size_of("heatmap") == "4x2"
       and dash.size_of("x:amboss-qbank-widget") == "4x2"
       and dash.size_of("x:.ankihub-thing") == dash.FOREIGN_SIZE == "2x2")

@@ -94,11 +94,11 @@ COLUMN_LABEL = "Retention"
 EMPTY_CELL = "—"
 
 CARDS_TOOLTIP = (
-    "Klaus Note: estimated chance of recalling this card right now (FSRS "
+    "KlausNote: estimated chance of recalling this card right now (FSRS "
     "retrievability). New cards show —. This column cannot be sorted."
 )
 NOTES_TOOLTIP = (
-    "Klaus Note: the lowest retention among this note's cards — the one "
+    "KlausNote: the lowest retention among this note's cards — the one "
     "nearest to being forgotten. Notes with no studied cards show —. This "
     "column cannot be sorted."
 )

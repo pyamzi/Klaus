@@ -1,4 +1,4 @@
-# Klaus Note: lecture PDFs and local matching
+# KlausNote: lecture PDFs and local matching
 
 **Privacy:** Embeddings run against the configured local Ollama server. Runtime
 and model downloads use the network. An external MCP client can request lecture
@@ -26,7 +26,7 @@ and [endpoint](anki_endpoint.py).
   on the PDF itself. Right-click adds Match Sensitivity…, Retention
   History… and Show in Finder.
 - **Copying matches into a deck** — select the notes you want in Browse and
-  use **Notes → Klaus Note: Create Curated Deck from Selection…**. It's one
+  use **Notes → KlausNote: Create Curated Deck from Selection…**. It's one
   undo step, and your originals are untouched.
 - **PDF viewer** — opens PDFs from the Library or the editor's drop panel.
   Drag-select text and copy it (**Cmd+C** or right-click **Copy**);
@@ -40,7 +40,7 @@ and [endpoint](anki_endpoint.py).
 
 ## Local model setup
 
-Open **Tools → Klaus Note Preferences… → Local models** (the hand-drawn k at
+Open **Tools → KlausNote Preferences… → Local models** (the hand-drawn k at
 the left of the toolbar also opens Preferences). The initial endpoint is `http://127.0.0.1:11434`
 and embedding model is `nomic-embed-text`.
 

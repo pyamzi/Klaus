@@ -14,7 +14,7 @@ from . import settings
 
 LOCAL_MODELS_COPY = (
     "Semantic search uses local Ollama embeddings. Configure your Ollama endpoint "
-    "and embedding model in Klaus Note Preferences → Local models."
+    "and embedding model in KlausNote Preferences → Local models."
 )
 
 
@@ -61,7 +61,7 @@ def first_run_check() -> None:
     _first_run_dialog_shown_this_session = True
 
     body_lines = [
-        "Klaus adds a PDF workspace and semantic search to Anki.",
+        "KlausNote adds a PDF workspace and semantic search to Anki.",
         "",
         "• The PDF sidebar lets you read a lecture PDF, highlight it, and "
         "keep it open next to your cards.",
@@ -74,7 +74,7 @@ def first_run_check() -> None:
     msg = _themed_message_box(mw, "Welcome to Klaus", QMessageBox.Icon.Information)
     msg.setText("\n".join(body_lines))
     manage_btn = msg.addButton(
-        "Klaus Note Preferences", QMessageBox.ButtonRole.ActionRole
+        "KlausNote Preferences", QMessageBox.ButtonRole.ActionRole
     )
     msg.addButton(
         "Later", QMessageBox.ButtonRole.AcceptRole
@@ -137,10 +137,10 @@ def _library_root_check(then: Callable[[], None]) -> None:
         return
 
     msg = _themed_message_box(
-        mw, "Klaus Note: Library folder", QMessageBox.Icon.Question
+        mw, "KlausNote: Library folder", QMessageBox.Icon.Question
     )
     msg.setText(
-        "Klaus can keep your Library PDFs in a real folder on disk "
+        "KlausNote can keep your Library PDFs in a real folder on disk "
         "(instead of tucked inside the add-on) so they show up in "
         "Finder/Explorer too, and any existing PDFs get moved there.\n\n"
         "Choose a folder now?"
@@ -160,7 +160,7 @@ def _library_root_check(then: Callable[[], None]) -> None:
         from aqt.qt import QFileDialog
 
         chosen = QFileDialog.getExistingDirectory(
-            mw, "Choose a folder for your Klaus Library"
+            mw, "Choose a folder for your KlausNote Library"
         )
         if not chosen:
             then()
@@ -186,11 +186,11 @@ def _library_root_check(then: Callable[[], None]) -> None:
             failed = (result or {}).get("failed") or {}
             if failed:
                 tooltip(
-                    f"Klaus: Library folder set. {len(failed)} file(s) "
+                    f"KlausNote: Library folder set. {len(failed)} file(s) "
                     "couldn't be moved and stay in the old location"
                 )
             else:
-                tooltip("Klaus: Library folder set")
+                tooltip("KlausNote: Library folder set")
 
         def on_fail(exc: Exception) -> None:
             if generation != _profile_generation:
@@ -357,7 +357,7 @@ def _readiness_after_library_root() -> None:
 def _readiness_check_body() -> None:
     """Offer local setup after the background connection check fails."""
     generation = _profile_generation
-    msg = _themed_message_box(mw, "Klaus Note: local models", QMessageBox.Icon.Warning)
+    msg = _themed_message_box(mw, "KlausNote: local models", QMessageBox.Icon.Warning)
     msg.setText(LOCAL_MODELS_COPY)
     msg.setInformativeText("Start Ollama and make the selected embedding model available to enable semantic search.")
     manage_btn = msg.addButton("Local models", QMessageBox.ButtonRole.ActionRole)

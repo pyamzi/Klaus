@@ -13,7 +13,7 @@ paths, and outstanding obligations.
 
 ## Session intent
 
-Bring Klaus Note's UI up to a deliberate, documented standard, using
+Bring KlausNote's UI up to a deliberate, documented standard, using
 SynapsePro (`scripts/SynapsePro-main`) as the reference: a central token
 system, a settings shell, accent theming, seamless window chrome — then
 audit and revise the whole addon against it. Two live segfaults surfaced

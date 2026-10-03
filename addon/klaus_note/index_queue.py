@@ -226,8 +226,8 @@ def queued_message(name: str, ahead: int) -> str:
     this one — the part of a ten-PDF drop the user cannot see, and the
     difference between "this is happening" and "this will happen"."""
     if ahead <= 0:
-        return f"Klaus Note: indexing “{name}”"
-    return f"Klaus Note: “{name}” queued for indexing — {ahead} ahead of it"
+        return f"KlausNote: indexing “{name}”"
+    return f"KlausNote: “{name}” queued for indexing — {ahead} ahead of it"
 
 
 # ── aqt glue ─────────────────────────────────────────────────────────────

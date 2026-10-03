@@ -234,7 +234,7 @@ same reason.
   take `*_args`); image-crop plumbing;
   Tools menu
   (`install_menu`: ONE entry,
-  "Klaus Note Preferences…", inserted ahead of Anki's own items — the old
+  "KlausNote Preferences…", inserted ahead of Anki's own items — the old
   Klaus submenu's actions live inside the Preferences dialog now).
 - `heatmap.py` (aqt-free above its "aqt glue" divider): the **review
   heatmap** — a GitHub-style year grid under the deck list, past days
@@ -1433,7 +1433,7 @@ same reason.
     (a plain list return here crashed every profile open — `on_op_finished`
     reads `.changes` off a `CollectionOp`'s result).
   - `manage_models.py`: the "Manage models" dialog (`manage_models_dialog`,
-    also first-run setup; Tools menu label "Klaus Note Preferences…", and
+    also first-run setup; Tools menu label "KlausNote Preferences…", and
     the top bar's k opens it too; Appearance also carries Anki's
     own Follow-System/Light/Dark switch, applied on Save through
     `mw.set_theme` — the one row writing an Anki preference).

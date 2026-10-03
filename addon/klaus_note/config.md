@@ -1,4 +1,4 @@
-# Klaus Note Configuration
+# KlausNote Configuration
 
 ## Local models
 
@@ -8,7 +8,7 @@ Sources: [defaults](config.json), [Preferences](manage_models.py) and
 [Ollama runtime](ollama_runtime.py).
 
 Semantic search uses local Ollama embeddings, configured in
-**Klaus Note Preferences → Local models**. Provider credentials are removed
+**KlausNote Preferences → Local models**. Provider credentials are removed
 from existing profiles during migration.
 
 - **embedding_provider**: `"ollama"`, the only embedding provider.
@@ -82,7 +82,7 @@ records, transcribes or stores transcripts; old `transcription_*` settings
 are removed from profiles automatically.
 
 **Copying cards into a new deck**: select notes in Browse — the tag above
-is one good way to find them — then **Notes → Klaus Note: Create Curated
+is one good way to find them — then **Notes → KlausNote: Create Curated
 Deck from Selection…**. Originals are never moved and the whole copy is
 one undo step; copies get the `!Library::Curated` tag.
 
@@ -136,7 +136,7 @@ so; press ⟳ to re-embed.
 ### Card embeddings
 
 Semantic search indexes your cards once and then updates changed notes.
-Configure and build the index in **Klaus Note Preferences → Local models**.
+Configure and build the index in **KlausNote Preferences → Local models**.
 Vectors are stored in `user_files/card_index/`. Card and page text are sent
 only to the configured local Ollama endpoint.
 
@@ -211,9 +211,9 @@ removed. Use the external MCP client setup below.
   default-blue, `orchid`, `forest`, `deluge`, `horizon`, `dusty`),
   the community palettes (`nord`, `solarized`, `catppuccin`,
   `gruvbox`, `everforest`, `dracula`), `claude` (Anthropic's
-  terracotta), `zinc` (the Klaus Note app's near-black accent), or `custom` to use `color_theme_custom`.
+  terracotta), `zinc` (the KlausNote app's near-black accent), or `custom` to use `color_theme_custom`.
   Applied to buttons, pills, highlights and the star logo everywhere
-  Klaus draws. Pick it in **Klaus Note Preferences → Appearance →
+  Klaus draws. Pick it in **KlausNote Preferences → Appearance →
   Accent color** — the row of color squares, last one being your own
   — and press **Save**; applies immediately.
 - **color_theme_custom**: `#rrggbb` behind the `custom` preset.
@@ -305,7 +305,7 @@ removed. Use the external MCP client setup below.
   `!important`, which hid the wallpaper behind a hard edge at the
   card's bottom). Only the background: the card's text colours,
   borders and layout are untouched. Choose **Anki's Own** for the
-  study screen to hand the card its background back. Set it under **Klaus Note Preferences → Appearance → Study
+  study screen to hand the card its background back. Set it under **KlausNote Preferences → Appearance → Study
   screen background**.
 - **heatmap_enabled**: `true` (default) draws the review heatmap — a
   year of study activity, plus the next four weeks of scheduled cards —
@@ -351,19 +351,19 @@ removed. Use the external MCP client setup below.
   the status strips under Browse and the Add tab, in percent, `70` to `150`
   in steps of `5` (default `85`, a little smaller than Anki draws them).
   Like `dashboard_scale` it applies on top of Anki's own **User Interface
-  Size**; `100` means Anki's size. Set with **Bar size** in *Klaus Note
+  Size**; `100` means Anki's size. Set with **Bar size** in *KlausNote
   Preferences → Appearance*.
 
 Apart from `heatmap_enabled` and the four `dashboard_*` keys (written from the
 deck screen's own Edit Widgets mode) and the two `heatmap_*` display
-keys above (the heatmap's own corner menu), all of these live in **Klaus Note
+keys above (the heatmap's own corner menu), all of these live in **KlausNote
 Preferences → Appearance**; press **Save** and they apply immediately
 (no restart).
 
 
 ## External MCP clients
 
-In **Klaus Note Preferences → Local models → MCP**, copy the
+In **KlausNote Preferences → Local models → MCP**, copy the
 configuration. Install a separate Python 3.9 or newer first if Copy is disabled,
 then reopen Preferences. Keep Anki running with your profile open. Merge the
 `klaus` entry into `mcpServers` in Claude Desktop's configuration and restart

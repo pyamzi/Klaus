@@ -35,7 +35,7 @@ bridge command, and a second rendering of the square that named the
 file and offered a × to dismiss it. That existed to stage a PDF for the
 curate button; with the button gone there was nothing left to arm FOR,
 and a square naming a file with no action attached is a confirmation
-Anki already gives — ``import_pdf_file`` tooltips "Klaus: loaded '<name>'"
+Anki already gives — ``import_pdf_file`` tooltips "KlausNote: loaded '<name>'"
 on every import surface. K-151 removed the armed half whole rather than
 leaving a vestige: state, command, handler branch, HTML, the deck/overview
 re-render it needed, and ``pdf_drive``'s ``disarm_if`` call on delete.
@@ -93,7 +93,7 @@ def _import_pdfs(paths: list[str], skipped: int = 0, ask=None) -> None:
                 return
             _import_one(path, KEEP_BOTH)
         if skipped:
-            tooltip(f"Klaus imported the PDF and ignored {skipped} other file(s).")
+            tooltip(f"KlausNote imported the PDF and ignored {skipped} other file(s).")
 
     run()
 

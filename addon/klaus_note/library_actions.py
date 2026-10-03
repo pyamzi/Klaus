@@ -306,7 +306,7 @@ def remove_empty_folder(path: str) -> None:
     tag = tag_sync.folder_tag(path)
     if any(t.casefold() == tag.casefold() for t in tag_sync._stored_tags().values()):
         return  # #14: an old clash — a PDF stores this tag, so it stays that PDF's
-    tag_sync._run_sync_op(mw, f"Klaus: remove folder “{path}”", lambda col: {"removed": tag_sync.apply_removal(col, tag)})
+    tag_sync._run_sync_op(mw, f"KlausNote: remove folder “{path}”", lambda col: {"removed": tag_sync.apply_removal(col, tag)})
 
 
 # ------------------------------------------------------------ import

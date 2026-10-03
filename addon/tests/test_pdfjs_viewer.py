@@ -2031,7 +2031,7 @@ try:
     pv.PdfJsViewer._bridge_text_add(_fv, _b64(
         {"page": 0, "x": 5, "y": 5, "text": "hi", "w": 11, "h": 14}))
     check("a successful write still confirms both",
-          _toasts == ["Klaus: highlight added", "Klaus: text added"],
+          _toasts == ["KlausNote: highlight added", "KlausNote: text added"],
           repr(_toasts))
 finally:
     pv.tooltip = _tooltip_was

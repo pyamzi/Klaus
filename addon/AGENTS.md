@@ -1,4 +1,4 @@
-# Klaus Note — Agent Guide
+# KlausNote — Agent Guide
 
 ## Current architecture: local-model reversion
 
@@ -142,7 +142,7 @@ tag_sync.py :: sync_after_matches(): notes at/above this PDF's sensitivity
 ```
 
 Copying matches into a deck is a SEPARATE, manual action with no PDF and no
-deck scope: **Browse → Notes → "Klaus Note: Create Curated Deck from
+deck scope: **Browse → Notes → "KlausNote: Create Curated Deck from
 Selection…"** (`curation.prompt_and_create` / `create_curated_deck`), one
 undo step, tagged `!Library::Curated`, originals untouched. There is no
 free-text search box and no Curate Deck button — K-146 removed the button
@@ -225,7 +225,7 @@ mw.addonManager.setConfigAction(__name__, open_config)              # -> manage_
 gui_hooks.webview_will_set_content.append(on_webview_will_set_content)
 gui_hooks.webview_did_receive_js_message.append(on_js_message)      # pycmd routing ("klaus_note:" prefix)
 gui_hooks.editor_will_show_context_menu.append(on_editor_context_menu)  # right-click crop
-gui_hooks.main_window_did_init.append(install_menu)                 # Tools → Klaus Note Preferences…
+gui_hooks.main_window_did_init.append(install_menu)                 # Tools → KlausNote Preferences…
 gui_hooks.profile_did_open.append(settings.migrate)                 # registered dict->dict migrations, legacy key scrub
 gui_hooks.profile_did_open.append(tag_migrate.migrate_on_profile_open)  # one-time klaus:: -> !Library:: rename
 gui_hooks.profile_did_open.append(first_run_check)                  # first-run: library root + local-model setup
@@ -356,7 +356,7 @@ wrap's own guards since K-151: `_klaus_note_drop_wrapped` / `_drop_orig`.
 
 - Defaults: `klaus_note/config.json`
 - User overrides: stored in `meta.json` by Anki's add-on manager
-- UI: **Tools → Klaus Note Preferences…** (`manage_models_dialog`; the top bar's k opens it too, and raw JSON is still at **Tools → Add-ons → Klaus Note → Config**)
+- UI: **Tools → KlausNote Preferences…** (`manage_models_dialog`; the top bar's k opens it too, and raw JSON is still at **Tools → Add-ons → KlausNote → Config**)
 - Key docs: `klaus_note/config.md`
 
 The current [defaults](klaus_note/config.json), [configuration reference](klaus_note/config.md)

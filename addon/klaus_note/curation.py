@@ -193,7 +193,7 @@ def ensure_index(
     global _busy
     if not _reentrant:
         if _busy:
-            _fail(on_error, RuntimeError("Klaus is already indexing — try again in a moment."))
+            _fail(on_error, RuntimeError("KlausNote is already indexing — try again in a moment."))
             return
         _busy = True
 
@@ -246,11 +246,11 @@ def _fail(on_error, exc: Exception) -> None:
         on_error(exc)
         return
     if isinstance(exc, embeddings.EmbeddingError):
-        showWarning("Klaus semantic search failed.\n\n" + exc.user_message())
+        showWarning("KlausNote semantic search failed.\n\n" + exc.user_message())
     elif isinstance(exc, (RuntimeError, ValueError)):
         showWarning(str(exc))
     else:
-        showWarning(f"Klaus semantic search failed.\n\n{type(exc).__name__}: {exc}")
+        showWarning(f"KlausNote semantic search failed.\n\n{type(exc).__name__}: {exc}")
 
 
 # --------------------------------------------------- the deck copier
@@ -271,7 +271,7 @@ def create_curated_deck(
     """
 
     def op(col):
-        pos = col.add_custom_undo_entry(f"Klaus: create deck “{deck_name}”")
+        pos = col.add_custom_undo_entry(f"KlausNote: create deck “{deck_name}”")
         did = col.decks.id(deck_name)
         requests = []
         for nid in nids:
@@ -319,7 +319,7 @@ def prompt_and_create(parent, nids: list[int], on_done: Callable[[int], None] | 
 
     def ask_name(prefill: str) -> None:
         dlg = QInputDialog(parent)
-        dlg.setWindowTitle("Klaus: create curated deck")
+        dlg.setWindowTitle("KlausNote: create curated deck")
         dlg.setLabelText(f"Copy {len(nids)} notes into deck:")
         dlg.setTextValue(prefill)
         try:
@@ -344,7 +344,7 @@ def prompt_and_create(parent, nids: list[int], on_done: Callable[[int], None] | 
 
     def confirm_merge(name: str) -> None:
         msg = QMessageBox(parent)
-        msg.setWindowTitle("Klaus: create curated deck")
+        msg.setWindowTitle("KlausNote: create curated deck")
         msg.setIcon(QMessageBox.Icon.Question)
         msg.setText(
             f'Deck "{name}" already exists. Add the {len(nids)} copied '
@@ -405,7 +405,7 @@ def _create_from_browser(browser) -> None:
 
 
 def on_browser_menus_did_init(browser) -> None:
-    action = QAction("Klaus Note: Create Curated Deck from Selection…", browser)
+    action = QAction("KlausNote: Create Curated Deck from Selection…", browser)
     qconnect(action.triggered, lambda: _create_from_browser(browser))
     menu = getattr(browser.form, "menu_Notes", None) or browser.form.menuEdit
     menu.addSeparator()

@@ -389,7 +389,7 @@ section("no write without an explicit approval")
 check("default_ctx's confirm refuses: the only writer, anki_endpoint, "
       "passes its own approval, so a write reached without one must fail "
       "closed (the app-modal exec() dialog it replaced is gone, K-305)",
-      at.default_ctx()["confirm"]("Klaus wants to create a note", []) is False)
+      at.default_ctx()["confirm"]("KlausNote wants to create a note", []) is False)
 for _gone in ("execute_tool", "add_reviewed_cards", "_confirm_write_dialog"):
     check(f"dead {_gone} stays deleted", not hasattr(at, _gone))
 

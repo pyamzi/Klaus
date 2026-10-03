@@ -1,4 +1,4 @@
-/* Klaus Note — editor field-focus tracking + image-crop trigger.
+/* KlausNote — editor field-focus tracking + image-crop trigger.
  *
  * Ghost-text autocomplete, Cmd+K Ask, and Browse natural-language search
  * were removed — Klaus is embeddings-only now. This file just tracks which

@@ -1464,7 +1464,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._save_annotations()
         self._push_annotations()
         if tooltip is not None and not self._save_failed:  # see text-add
-            tooltip("Klaus: highlight added")
+            tooltip("KlausNote: highlight added")
 
     def _bridge_hl_remove(self, payload: str) -> None:
         self._sync_marks()
@@ -1541,7 +1541,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         # A failed write already toasted SAVE_FAILED_COPY; a second
         # "added" toast would contradict it.
         if tooltip is not None and not self._save_failed:
-            tooltip("Klaus: text added")
+            tooltip("KlausNote: text added")
 
     def _bridge_note_add(self, payload: str) -> None:
         """A sticky note placed with the Note tool and typed in place
@@ -1755,7 +1755,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
                     try:
                         from aqt.utils import tooltip
 
-                        tooltip("Klaus: page text copied")
+                        tooltip("KlausNote: page text copied")
                     except Exception:
                         pass
 
@@ -1772,19 +1772,19 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             if cb is not None:
                 cb.setImage(img)
                 if tooltip is not None:
-                    tooltip("Klaus: copied as image")
+                    tooltip("KlausNote: copied as image")
 
     def _bridge_occlude_image(self, payload: str) -> None:
         """A rendered page or region from "Occlude this page/region"."""
         hit = decode_occlude_payload(decode_b64_json(payload), self._page_count)
         if hit is None:
             if tooltip is not None:
-                tooltip("Klaus: couldn't read that image")
+                tooltip("KlausNote: couldn't read that image")
             return
         width, height = png_size(hit[0])
         if width > MAX_SIDE or height > MAX_SIDE:  # Ruling R2, as for a drawing
             if tooltip is not None:
-                tooltip("Klaus: the page is too large to occlude (%d × %d px, at most %d a side)"
+                tooltip("KlausNote: the page is too large to occlude (%d × %d px, at most %d a side)"
                         % (width, height, MAX_SIDE))
             return
         if self.on_occlude is None:
@@ -2133,7 +2133,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
                 self._sync_marks()  # strict: unsaved or unreadable marks stay
                 self._push_annotations()
                 if tooltip is not None:
-                    tooltip(f"Klaus: synced {changed} outside change(s)")
+                    tooltip(f"KlausNote: synced {changed} outside change(s)")
         except Exception as exc:
             print(f"[klaus_note] pdfjs mirror apply failed: {exc}")
 

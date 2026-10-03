@@ -104,7 +104,7 @@ check("no assignment to Reviewer._showAnswer", not violations["showAnswer"],
       str(violations["showAnswer"]))
 check("no mw.col.conf access (config goes through get_config/set_config)",
       not violations["col.conf"], str(violations["col.conf"]))
-check("no setWebExports call (Klaus has one, in klaus_note/__init__.py)",
+check("no setWebExports call (KlausNote has one, in klaus_note/__init__.py)",
       not violations["webexports"], str(violations["webexports"]))
 
 

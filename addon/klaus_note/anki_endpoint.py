@@ -332,10 +332,10 @@ def _resolve_page(ctx, pdf_id, page):
     if not isinstance(pdf_id, str) or not pdf_id or "/" in pdf_id or "\\" in pdf_id or pdf_id in (".", ".."):
         raise ActionError("Invalid PDF id. Use the pdf field returned by current_page or lecture search.")
     if pdf_id + ".txt" not in pdf_handler.list_contexts(user_files):
-        raise ActionError("PDF is not in the Klaus Library.")
+        raise ActionError("PDF is not in the KlausNote Library.")
     path = pdf_handler.pdf_path_for(user_files, pdf_id)
     if not path:
-        raise ActionError("PDF file is unavailable. Restore it in the Klaus Library.")
+        raise ActionError("PDF file is unavailable. Restore it in the KlausNote Library.")
     pages = pdf_handler.load_pages(user_files, pdf_id)
     if pages is None:
         pages = pdf_handler.extract_pages(path)
@@ -814,8 +814,8 @@ class Endpoint:
                         return out
                     similar = self._main(_sims, self._read_timeout)
                 sections = preview_sections(action, params, similar, agent, ctx.get("pdf_safe"))
-                title = {"addNote": "Klaus wants to add a card", "addNotes": "Klaus wants to add cards",
-                         "updateNoteFields": "Klaus wants to edit a note"}.get(action, f"Klaus wants to run {action}")
+                title = {"addNote": "KlausNote wants to add a card", "addNotes": "KlausNote wants to add cards",
+                         "updateNoteFields": "KlausNote wants to edit a note"}.get(action, f"KlausNote wants to run {action}")
                 answer = self._ask(title, sections)
                 if answer is None:
                     return {"result": None, "error": "approval timed out"}
@@ -823,7 +823,7 @@ class Endpoint:
                     return {"result": None, "error": "declined by user"}
             timeout = self._approval_timeout if a.write else self._read_timeout
             if self._run_op is not None and (a.write or a.background):
-                result = self._run_op(lambda c: a.run(c, params, ctx), timeout, a.write, f"Klaus: {action}")
+                result = self._run_op(lambda c: a.run(c, params, ctx), timeout, a.write, f"KlausNote: {action}")
             else:
                 result = self._main(lambda: a.run(col, params, ctx), timeout)
             return {"result": result, "error": None}

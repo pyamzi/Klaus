@@ -388,6 +388,89 @@ check("a history-cleanup failure never blocks the delete itself",
 check("...the stale entry just stays behind instead of crashing",
       "Stays" in rh.load_history(wdir))
 
+# ------------------------------------------------------ delete cleanup
+
+section("forget_history — one key, no-ops, corrupt/missing tolerance")
+
+ddir = os.path.join(tmp, "del")
+rh.record_rows(
+    ddir,
+    [{"name": "Doomed", "retention": 0.6},
+     {"name": "Keeper", "retention": 0.4}],
+    today="2026-08-30",
+)
+rh.forget_history(ddir, "Doomed")
+left = rh.load_history(ddir)
+check("forget drops exactly the named PDF's series", "Doomed" not in left)
+check("every other PDF's series survives untouched",
+      left == {"Keeper": [["2026-08-30", 0.4]]})
+
+calls = []
+_orig_write = rh._atomic_write_json
+rh._atomic_write_json = lambda p, o: calls.append(p) or _orig_write(p, o)
+rh.forget_history(ddir, "Doomed")   # already gone
+rh._atomic_write_json = _orig_write
+check("forgetting a key that isn't there skips the write entirely", calls == [])
+check("the surviving series is unchanged by that no-op",
+      rh.load_history(ddir) == {"Keeper": [["2026-08-30", 0.4]]})
+
+# A blank name is never a real PDF — record_rows refuses to create such a
+# key, so forget refuses to consume one, even against a hand-edited file
+# that does carry an empty key.
+rh._atomic_write_json(
+    rh._history_path(ddir),
+    {"": [["2026-08-30", 0.1]], "Keeper": [["2026-08-30", 0.4]]},
+)
+rh.forget_history(ddir, "   ")
+check("a blank/whitespace name is refused, never resolved to a real key",
+      "" in rh.load_history(ddir))
+
+missing = os.path.join(tmp, "nowhere")
+check("forget on a dir with no history file is a silent no-op that "
+      "creates nothing",
+      rh.forget_history(missing, "Doomed") is None
+      and not os.path.isdir(missing))
+
+_write(rh._history_path(ddir), "{ not json")
+rh.forget_history(ddir, "Doomed")  # must not raise
+check("a corrupt history file is tolerated, and left for record_rows to "
+      "recover rather than truncated here",
+      open(rh._history_path(ddir), encoding="utf-8").read() == "{ not json")
+check("no .tmp files left behind by forget's atomic write",
+      [f for f in os.listdir(ddir) if f.endswith(".tmp")] == [])
+
+section("delete wiring — pdf_handler.delete_context forgets the history")
+
+wdir = os.path.join(tmp, "wired")
+os.makedirs(os.path.join(wdir, "contexts"), exist_ok=True)
+_write(os.path.join(wdir, "contexts", "Gone.txt"), "text")
+rh.record_rows(
+    wdir,
+    [{"name": "Gone", "retention": 0.7}, {"name": "Stays", "retention": 0.3}],
+    today="2026-08-30",
+)
+# The REAL lazy hop, not a stub: aqt is stubbed by this point, so this
+# exercises the same import path production takes.
+pdf_handler.delete_context(wdir, "Gone")
+after = rh.load_history(wdir)
+check("deleting a PDF drops its retention history — a same-named "
+      "re-import can no longer inherit the old curve",
+      "Gone" not in after)
+check("the other PDFs' histories survive the delete",
+      after == {"Stays": [["2026-08-30", 0.3]]})
+check("the delete really ran (its context file is gone)",
+      not os.path.isfile(os.path.join(wdir, "contexts", "Gone.txt")))
+
+_orig_forget = rh.forget_history
+rh.forget_history = _boom
+_write(os.path.join(wdir, "contexts", "Stays.txt"), "text")
+pdf_handler.delete_context(wdir, "Stays")
+rh.forget_history = _orig_forget
+check("a history-cleanup failure never blocks the delete itself",
+      not os.path.isfile(os.path.join(wdir, "contexts", "Stays.txt")))
+check("...the stale entry just stays behind instead of crashing",
+      "Stays" in rh.load_history(wdir))
+
 # ------------------------------------------------- dialog pins + smoke test
 
 section("history dialog — exec ban, paint guard, signature (pins)")

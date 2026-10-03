@@ -82,7 +82,7 @@ class OllamaEmbeddings:
             )
         except OllamaError as exc:
             raise EmbeddingError(
-                f"{exc}. Check Ollama and the selected model in Klaus Note Preferences → Local models.",
+                f"{exc}. Check Ollama and the selected model in KlausNote Preferences → Local models.",
                 provider="Ollama",
             ) from exc
 

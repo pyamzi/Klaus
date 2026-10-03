@@ -1,4 +1,4 @@
-"""Managed Ollama runtime for Klaus Note.
+"""Managed Ollama runtime for KlausNote.
 
 Explicit setup downloads the standalone Ollama binary from the official
 GitHub release, verifies its checksum, and extracts it into

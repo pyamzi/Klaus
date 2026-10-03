@@ -358,7 +358,7 @@ COLOR_THEMES.update({
     "dracula": _community_preset("#7C53C3", None, "#BD93F9"),
     # Claude's terracotta ("Crail"), Anthropic's primary accent.
     "claude": _community_preset("#D97757"),
-    # Zinc: the Klaus Note app's own look (shadcn-svelte preset
+    # Zinc: the KlausNote app's own look (shadcn-svelte preset
     # b2GUtMueeu), a near-black accent that flips to zinc-200 in dark.
     # The only preset that also sets on_accent: its dark fill is light,
     # so the text on it is dark.

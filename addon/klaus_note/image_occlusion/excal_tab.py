@@ -52,7 +52,7 @@ def blank_png(tmpdir: str) -> str:
 def _error_text(error) -> str:
     if error == "empty":
         return EMPTY_TIP
-    return "Klaus: couldn't export the drawing (%s)" % error
+    return "KlausNote: couldn't export the drawing (%s)" % error
 
 
 def prepare_occlusion(result: dict, tmpdir: str, fill: str, stroke: str) -> tuple[str, str, str]:
@@ -73,17 +73,17 @@ def prepare_occlusion(result: dict, tmpdir: str, fill: str, stroke: str) -> tupl
     try:
         width, height = png_size(png)
     except ValueError:
-        raise ValueError("Klaus: the drawing didn't export as an image") from None
+        raise ValueError("KlausNote: the drawing didn't export as an image") from None
     if width > MAX_SIDE or height > MAX_SIDE:
         raise ValueError(
-            "Klaus: the drawing is too large to occlude (%d × %d px, at most %d a side). "
+            "KlausNote: the drawing is too large to occlude (%d × %d px, at most %d a side). "
             "Make it smaller and press Use drawing again." % (width, height, MAX_SIDE))
     try:
         ox, oy = float(result["originX"]), float(result["originY"])
     except (KeyError, TypeError, ValueError):
         ox = oy = math.nan
     if not (math.isfinite(ox) and math.isfinite(oy)):
-        raise ValueError("Klaus: the drawing came back without its position; "
+        raise ValueError("KlausNote: the drawing came back without its position; "
                          "press Use drawing again")
     folder = tempfile.mkdtemp(dir=tmpdir)
     stem = time.strftime("diagram-%Y%m%d-%H%M%S")

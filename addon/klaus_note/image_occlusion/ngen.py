@@ -127,7 +127,7 @@ class ImgOccNoteGenerator(object):
 
     def updateNotes(self, on_done=None):
         """Update existing notes. on_done(state) runs once they are written,
-        which is after the delete confirm when one is needed (Klaus: the
+        which is after the delete confirm when one is needed (KlausNote: the
         confirm is window-modal, so this returns before the answer)."""
         self.uniq_id = self.opref["uniq_id"]
         self.occl_id = "%s-%s" % (self.uniq_id, self.occl_tp)

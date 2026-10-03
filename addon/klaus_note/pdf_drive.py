@@ -195,7 +195,7 @@ def _dir_snapshot(root: str) -> dict:
 def _tick_needs_rescan(dirs) -> bool:
     """The watcher's pre-check: False only when every changed entry is
     hidden (a bake's ``.x.pdf.<uuid>.tmp``) or a mapped PDF whose stat is
-    the one recorded (Klaus's own bake). A directory whose visible names
+    the one recorded (KlausNote's own bake). A directory whose visible names
     differ from the last re-arm, an unmapped or edited PDF, or anything
     unreadable rescans."""
     try:

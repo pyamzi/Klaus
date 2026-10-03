@@ -1,4 +1,4 @@
-"""Ollama installation helpers for Klaus Note.
+"""Ollama installation helpers for KlausNote.
 
 Detects platform, lists optional package-manager install commands, and runs
 them via subprocess when the user confirms.

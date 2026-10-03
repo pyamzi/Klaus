@@ -184,7 +184,7 @@ def run_migration(
     plan = plan_renames(existing)
     cleanup = plan_retired_cleanup(existing)
 
-    pos = col.add_custom_undo_entry("Klaus: migrate tags to !Library")
+    pos = col.add_custom_undo_entry("KlausNote: migrate tags to !Library")
     for old, new in plan:
         try:
             col.tags.rename(old, new)

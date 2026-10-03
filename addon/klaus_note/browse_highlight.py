@@ -30,7 +30,7 @@
 #
 # Any modifications to this file must keep this entire header intact.
 #
-# Adapted for Klaus Note (K-113, 2026-08): ported search.py's
+# Adapted for KlausNote (K-113, 2026-08): ported search.py's
 # SearchTokenizer/get_searchable_tokens (ANKI2124 dialect only -- the
 # QueryLanguageVersion enum and the 2100-dialect branches from upstream
 # are dropped), webview.py's findText-based highlighting, and browser.py's

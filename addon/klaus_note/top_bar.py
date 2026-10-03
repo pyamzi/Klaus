@@ -94,7 +94,7 @@ def logo_html() -> str:
     return (
         f'<a id="klaus-logo" style="{seat}" '
         'href=# onclick="return pycmd(\'klaus_note:settings\')" '
-        'title="Klaus settings" aria-label="Klaus settings">'
+        'title="KlausNote settings" aria-label="KlausNote settings">'
         + logo_svg("var(--klaus-text, currentColor)") + "</a>"
     )
 
