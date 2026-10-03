@@ -148,7 +148,12 @@ class FakeTags:
         if old in self.membership:
             self.membership[new] = self.membership.pop(old)
 
-    def remove(self, tags):
+    def remove(self, space_separated_tags):
+        # Anki's TagManager.remove takes ONE space-separated string; a
+        # list reaches protobuf and raises TypeError there (#21).
+        if not isinstance(space_separated_tags, str):
+            raise TypeError("bad argument type for built-in operation")
+        tags = space_separated_tags.split()
         for t in tags:
             self._tags.discard(t)
             self.membership.pop(t, None)
@@ -286,6 +291,18 @@ check("tag itself removed from the registry", col3.tags.removed == ["!Library::M
 check("reported via removed_out", removed3 == ["!Library::Matching"])
 check("gone from tags.all() afterwards", "!Library::Matching" not in col3.tags.all())
 check("still one undo entry for the whole (rename+cleanup) batch", col3.undo_entries == 1)
+
+print("== run_migration: a ROOT FOLDER named like a retired tag keeps its PDFs' tags (#14 round 1) ==")
+colR = FakeCol(["!Library::Matching", "!Library::Matching::Lecture"],
+               membership={"!Library::Matching": {1}, "!Library::Matching::Lecture": {2}})
+removedR: list = []
+tm.run_migration(colR, removed_out=removedR)
+check("the retired name is NOT removed while it is a folder's tag (Anki would take the children)",
+      "!Library::Matching" not in colR.tags.removed)
+check("...no bulk_remove ever touches a child-tagged note",
+      all(2 not in nids for nids, _t in colR.tags.bulk_remove_calls))
+check("...the retired tag's own notes are still cleaned", colR.tags.bulk_remove_calls == [([1], "!Library::Matching")])
+check("...and the child tag survives", colR.tags.membership.get("!Library::Matching::Lecture") == {2})
 
 print("== run_migration: klaus::pdfmatch alone is cleaned (no notes carrying it) ==")
 col4 = FakeCol(["klaus::pdfmatch"])
@@ -546,7 +563,8 @@ check("only that pair actually hit col.tags.rename", col13.tags.renames == [("!L
 print("== tag_sync.apply_removal ==")
 col14 = FakeCol(tags=["!Library::Gone"], membership={"!Library::Gone": {1, 2, 3}})
 check("reports removal", ts.apply_removal(col14, "!Library::Gone") is True)
-check("calls tags.remove with a one-element list", col14.tags.removed == ["!Library::Gone"])
+check("calls tags.remove with the tag as a plain string", col14.tags.removed == ["!Library::Gone"])
+check("the tag is gone from the collection", "!Library::Gone" not in col14.tags.all())
 check("membership entry is gone", "!Library::Gone" not in col14.tags.membership)
 col15 = FakeCol()
 check("no-op on a falsy tag (nothing ever indexed)", ts.apply_removal(col15, None) is False)

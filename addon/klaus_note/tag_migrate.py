@@ -194,10 +194,19 @@ def run_migration(
             print(f"[klaus_note] tag_migrate: failed to rename {old!r} -> {new!r}: {exc}")
     for tag in cleanup:
         try:
-            carrying = col.find_notes(f'tag:"{tag}"')
+            # Anki's tag search, bulk_remove and remove all act on child
+            # tags too. A retired name with children is a user's folder
+            # (a root "Matching" folder): only its own notes are cleaned,
+            # and the tag stays, or every PDF tag under it would go (#14).
+            nested = set(col.find_notes(f'tag:"{tag}::*"'))
+            carrying = [n for n in col.find_notes(f'tag:"{tag}"') if n not in nested]
             if carrying:
                 col.tags.bulk_remove(list(carrying), tag)
-            col.tags.remove([tag])
+            prefix = tag.casefold() + "::"
+            if any(t.casefold().startswith(prefix) for t in col.tags.all()):
+                print(f"[klaus_note] tag_migrate: kept {tag!r}: a Library folder uses that name")
+                continue
+            col.tags.remove(tag)  # one space-separated string, never a list (#21)
             if removed_out is not None:
                 removed_out.append(tag)
         except Exception as exc:  # noqa: BLE001 - must not abort the batch

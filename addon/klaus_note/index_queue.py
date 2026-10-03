@@ -412,8 +412,18 @@ def refresh(parent: Any = None) -> int:
         except Exception as exc:
             print(f"[klaus_note] stale match scan failed: {exc}")
             stale = set()
+        # #14: a PDF whose name clashes is shown flagged and waits for a
+        # rename. Skipped only, never added to ``excluded``: that set's
+        # index data is deleted above.
+        try:
+            from . import tag_sync
+
+            clashing = set(tag_sync.library_clashes() or ())
+        except Exception as exc:  # noqa: BLE001 - the tag gate still holds
+            print(f"[klaus_note] clash check before refresh failed: {exc}")
+            clashing = set()
         jobs = refresh_jobs(
-            names, excluded, pending_names(), needs, stale, card_index_from_scratch(settings.read())
+            names, excluded | clashing, pending_names(), needs, stale, card_index_from_scratch(settings.read())
         )
     except Exception as exc:
         print(f"[klaus_note] refresh failed: {exc}")
