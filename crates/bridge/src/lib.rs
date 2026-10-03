@@ -646,9 +646,15 @@ impl Bridge {
     }
 
     /// Marks a sync as running (false if one already is), numbered for the page.
+    /// No sync but the quit sync starts once quitting (begin_quit) has begun.
     fn begin_sync(&self, background: bool) -> Option<u32> {
+        self.claim_sync(background, false)
+    }
+
+    fn claim_sync(&self, background: bool, for_quit: bool) -> Option<u32> {
         let mut outcome = self.sync_outcome.lock().unwrap();
-        if outcome.state() == klaus::sync_outcome::State::Running {
+        // Read under the lock begin_quit sets it under: no sync slips in after.
+        if outcome.state() == klaus::sync_outcome::State::Running || (self.is_quitting() && !for_quit) {
             return None;
         }
         let id = outcome.id + 1;
@@ -748,7 +754,7 @@ impl Bridge {
         use std::sync::atomic::{AtomicBool, Ordering};
         let deadline = std::time::Instant::now() + limit;
         let past_deadline = || std::time::Instant::now() >= deadline;
-        self.quitting.store(true, Ordering::SeqCst);
+        self.begin_quit();
         let done = Arc::new(AtomicBool::new(false));
         // Past the deadline, keeps aborting until this returns: an abort before
         // rslib registers a sync's abort handle does nothing.
@@ -770,7 +776,7 @@ impl Bridge {
             if past_deadline() {
                 break None;
             }
-            if let Some(id) = self.begin_sync(true) {
+            if let Some(id) = self.claim_sync(true, true) {
                 break Some(id);
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
@@ -784,6 +790,13 @@ impl Bridge {
         }
         done.store(true, Ordering::SeqCst);
         let _ = watchdog.join();
+    }
+
+    /// From here on, only sync_before_quit may start a sync. The shell calls it
+    /// from the quit event itself, before anything else can claim the slot.
+    pub fn begin_quit(&self) {
+        let _slot = self.sync_outcome.lock().unwrap();
+        self.quitting.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn is_quitting(&self) -> bool {

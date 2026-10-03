@@ -106,6 +106,7 @@ fn start_quit(app: &AppHandle, quit: &Arc<AtomicU8>) -> bool {
     if quit.compare_exchange(QUIT_IDLE, QUIT_SYNCING, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return true;
     }
+    bridge.begin_quit();
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_title("Klaus — Syncing…");
     }

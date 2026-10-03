@@ -1073,7 +1073,10 @@ fn syncs_automatically_when_quiet() {
     assert!(started.elapsed() < std::time::Duration::from_secs(30));
     let out: SyncOutcome = call(&a, "klausSyncOutcome", Empty {});
     assert_eq!(ok(&out), ChangesRequired::NoChanges);
-    assert!(!a.auto_sync_tick(), "nothing left to sync");
+    // Quitting has begun: with changes to sync, still no other sync may start.
+    add_tagged(&a, 1, ["after", "quit"], &[]);
+    let (status, _) = page.post("klausSync", Empty {}.encode_to_vec());
+    assert_ne!(status, 204, "sync started while quitting");
 
     // A full sync is found once and left for the user to choose.
     change_schema(&b, "Cloze");
