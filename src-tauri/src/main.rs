@@ -9,7 +9,7 @@ use klaus_bridge::frontend::{AskUserRequest, OpenFilePickerRequest, ShowMessageB
 use klaus_bridge::{new_token, serve, Bridge, Hook, Secrets, WebDirs};
 use prost::Message;
 use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, FileDialogBuilder, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind};
 
 fn main() {
     let app = tauri::Builder::default()
@@ -148,7 +148,7 @@ impl Secrets for Keychain {
 fn on_hook(app: &AppHandle, method: &str, input: &[u8]) -> Option<Vec<u8>> {
     match method {
         "klausImportPackage" => {
-            let picked = app.dialog().file().add_filter("Anki deck package", &["apkg"]).blocking_pick_file();
+            let picked = file_dialog(app).add_filter("Anki deck package", &["apkg"]).blocking_pick_file();
             if let Some(path) = picked.and_then(|p| p.into_path().ok()) {
                 // Same URL shape as Anki's import dialog: <page>/<quoted path>.
                 navigate(app, &format!("import-anki-package/{}", quote(&path.to_string_lossy())));
@@ -181,7 +181,7 @@ fn on_hook(app: &AppHandle, method: &str, input: &[u8]) -> Option<Vec<u8>> {
                 2 => MessageDialogKind::Error,
                 _ => MessageDialogKind::Info,
             };
-            let mut dialog = app.dialog().message(req.text).kind(kind);
+            let mut dialog = message_dialog(app, req.text).kind(kind);
             if let Some(title) = req.title {
                 dialog = dialog.title(title);
             }
@@ -191,13 +191,12 @@ fn on_hook(app: &AppHandle, method: &str, input: &[u8]) -> Option<Vec<u8>> {
         "openFilePicker" => {
             let req = OpenFilePickerRequest::decode(input).ok()?;
             let extensions: Vec<&str> = req.extensions.iter().map(String::as_str).collect();
-            let picked = app
-                .dialog()
-                .file()
-                .set_title(req.title)
-                .add_filter(req.filter_description, &extensions)
-                .blocking_pick_file()
-                .and_then(|p| p.into_path().ok());
+            let mut picker = file_dialog(app).set_title(req.title);
+            // An empty filter matches nothing on GTK/macOS.
+            if !extensions.is_empty() {
+                picker = picker.add_filter(req.filter_description, &extensions);
+            }
+            let picked = picker.blocking_pick_file().and_then(|p| p.into_path().ok());
             let val = picked.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
             Some(generic::String { val }.encode_to_vec())
         }
@@ -240,8 +239,26 @@ fn paste(app: &AppHandle) {
 #[cfg(not(target_os = "macos"))]
 fn paste(_app: &AppHandle) {}
 
+// Native dialogs are parented to the main window so they stay in front of it
+// while the page waits on its synchronous XHR (static/native-dialogs.js).
+fn file_dialog(app: &AppHandle) -> FileDialogBuilder<tauri::Wry> {
+    let dialog = app.dialog().file();
+    match app.get_webview_window("main") {
+        Some(window) => dialog.set_parent(&window),
+        None => dialog,
+    }
+}
+
+fn message_dialog(app: &AppHandle, text: impl Into<String>) -> MessageDialogBuilder<tauri::Wry> {
+    let dialog = app.dialog().message(text);
+    match app.get_webview_window("main") {
+        Some(window) => dialog.parent(&window),
+        None => dialog,
+    }
+}
+
 fn confirm(app: &AppHandle, text: &str, title: Option<&str>, kind: MessageDialogKind) -> bool {
-    let mut dialog = app.dialog().message(text).kind(kind).buttons(MessageDialogButtons::OkCancel);
+    let mut dialog = message_dialog(app, text).kind(kind).buttons(MessageDialogButtons::OkCancel);
     if let Some(title) = title {
         dialog = dialog.title(title);
     }
