@@ -14,7 +14,7 @@ use anki_proto::collection::{CloseCollectionRequest, OpenCollectionRequest};
 use anki_proto::generic;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, Request, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -961,7 +961,7 @@ async fn require_cookie(State(state): State<AppState>, req: Request, next: Next)
     next.run(req).await
 }
 
-async fn anki_method(State(state): State<AppState>, UrlPath(method): UrlPath<String>, body: Bytes) -> Response {
+async fn anki_method(State(state): State<AppState>, UrlPath(method): UrlPath<String>, headers: HeaderMap, body: Bytes) -> Response {
     if HOOKS.contains(&method.as_str()) {
         let hook = state.hook.clone();
         return match tokio::task::spawn_blocking(move || hook(&method, &body)).await {
