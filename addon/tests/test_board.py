@@ -71,7 +71,7 @@ SAMPLE = B.BOARD_HEADER + """
 ### K-001: A card with tricky body
 owner: -
 priority: P1
-files: klausmate/retention.py
+files: klaus_note/retention.py
 created: 2026-08-23
 
 Prose with a fenced block that contains headings:
@@ -101,7 +101,7 @@ check("fenced '###' not parsed as a card", b.find("K-999")[1] is None)
 _col, c1 = b.find("K-001")
 check("fenced '## Doing' did not switch column", _col == "Backlog", _col)
 check("fields parsed", c1.fields.get("priority") == "P1")
-check("files parsed", c1.file_list() == ["klausmate/retention.py"])
+check("files parsed", c1.file_list() == ["klaus_note/retention.py"])
 check("comment parsed", len(c1.comments) == 1)
 check("fence content preserved in body", "### K-999: not a real card" in c1.body)
 check("post-fence prose preserved", "Trailing prose after the fence." in c1.body)
@@ -164,9 +164,9 @@ check("release clears claimed stamp", "claimed" not in c4.fields)
 
 section("file disjointness")
 b5 = B.Board(columns={c: [] for c in B.COLUMNS})
-a5 = B.add(b5, "Ready", "a", {"files": "klausmate/pdf_viewer.py"})
+a5 = B.add(b5, "Ready", "a", {"files": "klaus_note/pdf_viewer.py"})
 B.claim(b5, a5.id, "w1")
-b5b = B.add(b5, "Ready", "b", {"files": "klausmate/pdf_viewer.py"})
+b5b = B.add(b5, "Ready", "b", {"files": "klaus_note/pdf_viewer.py"})
 try:
     B.claim(b5, b5b.id, "w2")
     check("claim rejected on exact file overlap", False, "was allowed")
@@ -174,9 +174,9 @@ except B.BoardError as e:
     check("claim rejected on exact file overlap", "in flight" in str(e))
 
 b6 = B.Board(columns={c: [] for c in B.COLUMNS})
-a6 = B.add(b6, "Ready", "dir", {"files": "klausmate"})
+a6 = B.add(b6, "Ready", "dir", {"files": "klaus_note"})
 B.claim(b6, a6.id, "w1")
-b6b = B.add(b6, "Ready", "file", {"files": "klausmate/retention.py"})
+b6b = B.add(b6, "Ready", "file", {"files": "klaus_note/retention.py"})
 try:
     B.claim(b6, b6b.id, "w2")
     check("dir-prefix overlap detected", False, "was allowed")
@@ -201,7 +201,7 @@ section("to_dict: the payload the dashboard actually reads")
 b9 = B.Board(columns={c: [] for c in B.COLUMNS})
 d9 = B.add(b9, "Ready", "payload card",
            {"priority": "P1", "tags": "design, needs-human",
-            "files": "klausmate/theme.py", "verify": "python3 tests/test_theme.py"},
+            "files": "klaus_note/theme.py", "verify": "python3 tests/test_theme.py"},
            body="Why this card exists.")
 B.comment(b9, d9.id, "reviewer", "one comment")
 B.claim(b9, d9.id, "w1")
@@ -235,9 +235,9 @@ check("unclaimed card exports empty claimed", bare["claimed"] == "")
 # Doing-vs-Doing pair is the case that matters: the map could always colour
 # Ready-blocked-by-Doing, and could never show two live workers colliding.
 b11 = B.Board(columns={c: [] for c in B.COLUMNS})
-p11 = B.add(b11, "Ready", "first", {"files": "klausmate/page_store.py"})
+p11 = B.add(b11, "Ready", "first", {"files": "klaus_note/page_store.py"})
 B.claim(b11, p11.id, "w1")
-q11 = B.add(b11, "Ready", "second", {"files": "klausmate/page_store.py"})
+q11 = B.add(b11, "Ready", "second", {"files": "klaus_note/page_store.py"})
 b11.columns["Ready"].remove(q11)          # force the collision past claim()
 b11.columns["Doing"].append(q11)          # so two Doing cards really overlap
 conf = B.to_dict(b11)["conflicts"]
@@ -245,7 +245,7 @@ check("conflicts reports a Doing-vs-Doing collision", len(conf) == 1,
       f"got {conf}")
 check("conflict names both cards and the path",
       conf and set(conf[0]) == {"a", "b", "path"}
-      and conf[0]["path"] == "klausmate/page_store.py")
+      and conf[0]["path"] == "klaus_note/page_store.py")
 check("conflicts mirrors check_disjoint exactly",
       [(c["a"], c["b"], c["path"]) for c in conf] == B.check_disjoint(b11))
 check("clean board reports no conflicts", B.to_dict(b7)["conflicts"] == [])

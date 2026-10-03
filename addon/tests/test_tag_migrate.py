@@ -98,16 +98,17 @@ stub("aqt.utils", tooltip=lambda *a, **k: None)
 # The harness's package stub, so every USER_FILES lands in scratch, never
 # the real Library.
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
-from anki_stubs import install_package_stub  # noqa: E402
+from anki_stubs import LiveStore, install_package_stub  # noqa: E402
 
 install_package_stub()
-pkg = sys.modules["klausmate"]
-pkg.get_config = lambda: {}
+
+import klaus_note.settings as _settings  # noqa: E402
+pkg = sys.modules["klaus_note"]
 
 import importlib  # noqa: E402
 
-tm = importlib.import_module("klausmate.tag_migrate")
-ts = importlib.import_module("klausmate.tag_sync")
+tm = importlib.import_module("klaus_note.tag_migrate")
+ts = importlib.import_module("klaus_note.tag_sync")
 
 
 # ---- fake collection double ------------------------------------------
@@ -313,9 +314,8 @@ class _FakeMw:
 
 
 _orig_mw = tm.mw
-_had_write_config = hasattr(pkg, "write_config")
-_orig_write_config = getattr(pkg, "write_config", None)
-pkg.write_config = lambda cfg: None
+_orig_store = _settings.store
+_settings.store = LiveStore({})
 tm.mw = _FakeMw(FakeCol(["unrelated"]))
 try:
     _before_profile_op = len(RecordingOp.instances)
@@ -326,10 +326,7 @@ try:
     )
 finally:
     tm.mw = _orig_mw
-    if _had_write_config:
-        pkg.write_config = _orig_write_config
-    else:
-        del pkg.write_config
+    _settings.store = _orig_store
 
 print(
     "== migrate_on_profile_open (K-055 rework): MIGRATED_FLAG already True "
@@ -346,13 +343,10 @@ print(
 # it succeeds.
 col6 = FakeCol(["!Library::Matching"], membership={"!Library::Matching": {9}})
 _written_cfgs: list = []
-_orig_get_config3 = pkg.get_config
-_had_write_config3 = hasattr(pkg, "write_config")
-_orig_write_config3 = getattr(pkg, "write_config", None)
+_orig_store3 = _settings.store
 # Only the rename flag is set — the exact state of an already-migrated
 # profile that has never run the Matching cleanup.
-pkg.get_config = lambda: {tm.MIGRATED_FLAG: True}
-pkg.write_config = lambda cfg: _written_cfgs.append(dict(cfg))
+_settings.store = LiveStore({tm.MIGRATED_FLAG: True}, _written_cfgs)
 tm.mw = _FakeMw(col6)
 try:
     _before_bug_op = len(RecordingOp.instances)
@@ -390,11 +384,7 @@ try:
         check("on completion, the rename flag and the cleaned-list both get recorded", False)
 finally:
     tm.mw = _orig_mw
-    pkg.get_config = _orig_get_config3
-    if _had_write_config3:
-        pkg.write_config = _orig_write_config3
-    else:
-        del pkg.write_config
+    _settings.store = _orig_store3
 
 
 # =========================================================================
@@ -594,8 +584,8 @@ check(
 print("== tag_sync: library_tags_enabled kill switch ==")
 check("default True when the key is absent", ts.library_tags_enabled({}) is True)
 check("respects an explicit False", ts.library_tags_enabled({"library_tags_enabled": False}) is False)
-_old_get_config = pkg.get_config
-pkg.get_config = lambda: {"library_tags_enabled": False}
+_old_store = _settings.store
+_settings.store = LiveStore({"library_tags_enabled": False})
 try:
     _before_kill = len(RecordingOp.instances)
     ts.sync_after_threshold(None, "Some.pdf", [(1, 0.9)], 0.5)
@@ -604,7 +594,7 @@ try:
         len(RecordingOp.instances) == _before_kill,
     )
 finally:
-    pkg.get_config = _old_get_config
+    _settings.store = _old_store
 
 
 # =========================================================================
@@ -669,15 +659,15 @@ check(
 # plan_reconcile) is tested in tests/test_library_sync.py.
 
 print("== tag_sync.reconcile_from_tags: kill switch short-circuits before any deferred import ==")
-_old_get_config2 = pkg.get_config
-pkg.get_config = lambda: {"library_tags_enabled": False}
+_old_store2 = _settings.store
+_settings.store = LiveStore({"library_tags_enabled": False})
 try:
     check(
         "kill switch off -> {} without ever needing retention/curation to import",
         ts.reconcile_from_tags(FakeCol()) == {},
     )
 finally:
-    pkg.get_config = _old_get_config2
+    _settings.store = _old_store2
 
 
 print(
@@ -693,11 +683,8 @@ print(
 # retirement either.
 col8 = FakeCol(["!Library::Curating"], membership={"!Library::Curating": {11}})
 _written8: list = []
-_orig_get8 = pkg.get_config
-_had_write8 = hasattr(pkg, "write_config")
-_orig_write8 = getattr(pkg, "write_config", None)
-pkg.get_config = lambda: {tm.MIGRATED_FLAG: True, "_matching_tag_removed": True}
-pkg.write_config = lambda cfg: _written8.append(dict(cfg))
+_orig_store8 = _settings.store
+_settings.store = LiveStore({tm.MIGRATED_FLAG: True, "_matching_tag_removed": True}, _written8)
 tm.mw = _FakeMw(col8)
 try:
     _b8 = len(RecordingOp.instances)
@@ -732,23 +719,16 @@ try:
                      "legacy key drop"):
             check(f"(unreached: op never launched) {_lbl}", False)
 finally:
-    pkg.get_config = _orig_get8
+    _settings.store = _orig_store8
     tm.mw = _orig_mw
-    if _had_write8:
-        pkg.write_config = _orig_write8
-    else:
-        del pkg.write_config
 
 print("== K-305: a second profile still migrates after the first set the flags ==")
 # The flags live in add-on config, which every profile shares. Profile A's
 # completed run used to short-circuit profile B, whose klaus:: tags then
 # never became !Library:: tags. The per-collection pre-flight decides now.
 col9 = FakeCol(["klaus::curated"], membership={"klaus::curated": {5}})
-_orig_get9 = pkg.get_config
-_had_write9 = hasattr(pkg, "write_config")
-_orig_write9 = getattr(pkg, "write_config", None)
-pkg.get_config = lambda: {tm.MIGRATED_FLAG: True, tm.CLEANED_KEY: list(tm.RETIRED_TAGS)}
-pkg.write_config = lambda cfg: None
+_orig_store9 = _settings.store
+_settings.store = LiveStore({tm.MIGRATED_FLAG: True, tm.CLEANED_KEY: list(tm.RETIRED_TAGS)})
 tm.mw = _FakeMw(col9)
 try:
     _b9 = len(RecordingOp.instances)
@@ -762,12 +742,8 @@ try:
     check("...and a collection with nothing to migrate launches no op",
           len(RecordingOp.instances) == _b10)
 finally:
-    pkg.get_config = _orig_get9
+    _settings.store = _orig_store9
     tm.mw = _orig_mw
-    if _had_write9:
-        pkg.write_config = _orig_write9
-    else:
-        del pkg.write_config
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

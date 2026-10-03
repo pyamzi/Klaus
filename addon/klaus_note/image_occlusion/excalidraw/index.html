@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draw a diagram</title>
+<script>window.EXCALIDRAW_ASSET_PATH = location.pathname.replace(/[^/]*$/, "");</script>
+<link rel="stylesheet" href="excalidraw.css">
+<style>
+  html, body, #root { height: 100%; margin: 0; }
+  /* The occlusion editor's Draw tab, not a web app: no menu, library or help. */
+  .main-menu-trigger, .sidebar-trigger, .help-icon { display: none !important; }
+  /* The tool bar runs down the right edge, centred (Pouya, 2026-10-01):
+     the tab is wider than it is tall, so a vertical bar leaves the drawing
+     its full height (desktop layout only; a narrow window keeps
+     Excalidraw's own mobile bar). No transform on the section: it would capture the
+     fixed hint below. */
+  .excalidraw:not(.excalidraw--mobile) .shapes-section {
+    position: fixed; top: 0; bottom: 0; right: 16px; z-index: 4;
+    display: flex; align-items: center;
+  }
+  .excalidraw:not(.excalidraw--mobile) .App-toolbar > .Stack_horizontal {
+    grid-auto-flow: row; grid-auto-rows: min-content; grid-template-columns: auto;
+  }
+  .excalidraw:not(.excalidraw--mobile) .App-toolbar__divider { width: 1.5rem; height: 1px; margin: .25rem 0; justify-self: center; }
+  /* The extra-tools menu (the shapes button, last on the bar) opens to the
+     bar's left, bottoms aligned; below it would leave the window. */
+  .excalidraw:not(.excalidraw--mobile) .App-toolbar__extra-tools-dropdown {
+    top: auto; bottom: 0; right: calc(100% + 12px); margin: 0;
+  }
+  /* The tool hint moves to the top centre, where the bar used to be. */
+  .excalidraw:not(.excalidraw--mobile) .App-toolbar .HintViewer {
+    position: fixed; top: 16px; left: 50%; right: auto; width: max-content; max-width: 60%;
+    margin: 0; transform: translateX(-50%);
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="excalidraw.js"></script>
+</body>
+</html>

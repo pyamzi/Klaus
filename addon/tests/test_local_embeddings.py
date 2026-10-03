@@ -9,8 +9,9 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '.claude', 'skills', 'klaus-test', 'scripts'))
 from anki_stubs import install, check, report
 install()
-e = importlib.import_module('klausmate.embeddings')
-c = importlib.import_module('klausmate.ollama_client')
+import klaus_note.settings as _settings  # noqa: E402
+e = importlib.import_module('klaus_note.embeddings')
+c = importlib.import_module('klaus_note.ollama_client')
 check('local provider ignores legacy provider', e.provider_name({'embedding_provider': 'openai'}) == 'ollama')
 check('default native signature', e.index_signature({}) == ('ollama', 'nomic-embed-text', 0))
 check('old cloud index invalidated', not e.signature_matches('openai', 'nomic-embed-text', 768, e.index_signature({})))
@@ -41,8 +42,8 @@ with patch.object(c.OllamaClient, 'embed', side_effect=c.OllamaError('model miss
         check('local actionable error', 'Local models' in exc.user_message() and 'model missing' in str(exc))
 # Drive the real readiness operation with deferred GUI callbacks.
 from types import SimpleNamespace
-setup = importlib.import_module('klausmate.setup_flow')
-runtime = importlib.import_module('klausmate.ollama_runtime')
+setup = importlib.import_module('klaus_note.setup_flow')
+runtime = importlib.import_module('klaus_note.ollama_runtime')
 operations, main, events, patches = [], [], [], []
 class Op:
     def __init__(self, parent, op, success):
@@ -55,13 +56,15 @@ config = {'endpoint': 'http://localhost:12345', 'runtime_auto_setup': True, 'col
 def write_config(value):
     patches.append({key: value[key] for key in value if value[key] != config.get(key)})
     config.update(value)
-pkg = SimpleNamespace(get_config=lambda: dict(config), write_config=write_config)
+class _Store:
+    def read(self): return dict(config)
+    def write(self, cfg): write_config(cfg)
 def ensure(cfg, save_config):
     events.append('ensure')
     cfg['endpoint'] = 'http://127.0.0.1:12346'
     save_config(cfg)
     return runtime.EnsureResult('started', cfg['endpoint'])
-with patch.object(setup, 'QueryOp', Op), patch.object(setup, '_pkg', lambda: pkg), patch.object(setup, 'mw', SimpleNamespace(taskman=SimpleNamespace(run_on_main=main.append))), patch.object(runtime, 'ensure_server', ensure), patch.object(runtime.server_manager, 'stop', lambda: events.append('stop')), patch.object(setup, '_offer_v2_index_sweep', lambda cfg: events.append('sweep')), patch.object(setup, '_readiness_check_body', lambda: events.append('nudge')):
+with patch.object(setup, 'QueryOp', Op), patch.object(_settings, 'store', _Store()), patch.object(setup, 'mw', SimpleNamespace(taskman=SimpleNamespace(run_on_main=main.append))), patch.object(runtime, 'ensure_server', ensure), patch.object(runtime.server_manager, 'stop', lambda: events.append('stop')), patch.object(setup, '_readiness_check_body', lambda: events.append('nudge')):
     setup._readiness_after_library_root()
     check('startup deferred and collection free', operations[-1].collection_free and events == [])
     setup._first_run_dialog_shown_this_session = True
@@ -74,7 +77,7 @@ with patch.object(setup, 'QueryOp', Op), patch.object(setup, '_pkg', lambda: pkg
     main.pop(0)()
     operations[-1].success(result)
     check('only endpoint is patched', patches == [{'endpoint': 'http://127.0.0.1:12346'}])
-    check('reachable startup offers stale sweep', events == ['ensure', 'sweep'])
+    check('a reachable startup indexes nothing on its own (manual indexing)', events == ['ensure'], str(events))
     setup._readiness_after_library_root()
     result = operations[-1].work(None)
     setup.stop_local_runtime()
@@ -86,7 +89,7 @@ with patch.object(setup, 'QueryOp', Op), patch.object(setup, '_pkg', lambda: pkg
     before = list(events)
     check('closed profile never begins pending startup', operations[-1].work(None) is None and events == before)
     config['runtime_auto_setup'] = False
-    with patch('klausmate.ollama_setup.ollama_reachable', return_value=False):
+    with patch('klaus_note.ollama_setup.ollama_reachable', return_value=False):
         setup._readiness_after_library_root()
         result = operations[-1].work(None)
         operations[-1].success(result)

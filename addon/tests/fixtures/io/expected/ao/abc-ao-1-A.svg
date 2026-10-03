@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" width="400" height="300">
+ <g>
+  <title>Labels</title>
+  <text id="lbl" x="40" y="30" font-size="24" fill="#000000">Aorta</text>
+ </g>
+ <g>
+  <title>Masks</title>
+  
+  <g id="abc-ao-2">
+   <rect x="200" y="150" width="80" height="50" stroke="#2D2D2D" stroke-width="3" fill="#FFEBA2"/>
+   <ellipse cx="330" cy="240" rx="40" ry="25" stroke="#2D2D2D" stroke-width="3" fill="#FFEBA2"/>
+  </g>
+ </g>
+</svg>

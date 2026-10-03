@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build klausmate.ankiaddon for manual distribution (Anki: File → Install add-on from file).
+# Build klaus_note.ankiaddon for manual distribution (Anki: File → Install add-on from file).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="$ROOT/klausmate"
+SRC="$ROOT/klaus_note"
 OUT_DIR="$ROOT/dist"
-OUT="$OUT_DIR/klausmate.ankiaddon"
+OUT="$OUT_DIR/klaus_note.ankiaddon"
 STAGE="$(mktemp -d)"
 
 cleanup() {

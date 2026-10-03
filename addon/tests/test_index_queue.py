@@ -14,7 +14,7 @@ is replaced with a queue the test drains, which is what makes "one job
 at a time" observable at all: real Qt would start the next job whenever
 it felt like it.
 
-PDFs are real files in a temp tree (never `klausmate/user_files/`), so
+PDFs are real files in a temp tree (never `klaus_note/user_files/`), so
 the deleted-before-its-turn path runs the real `pdf_index.source_signature`
 rather than a mock of it.
 """
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -36,33 +37,12 @@ sys.path.insert(
 from anki_stubs import ADDON, check, code_only, install, report, section  # noqa: E402
 
 install()
-iq = importlib.import_module("klausmate.index_queue")
+
+import klaus_note.settings as _settings  # noqa: E402
+iq = importlib.import_module("klaus_note.index_queue")
 
 
 # --------------------------------------------------------------- pure gates
-
-section("config gates")
-
-check("auto-index defaults ON when the key is absent", iq.auto_index_enabled({}))
-check("...and ON for the shipped default", iq.auto_index_enabled({"auto_index_on_add": True}))
-check("explicit False turns it off", not iq.auto_index_enabled({"auto_index_on_add": False}))
-check(
-    'a hand-edited "false" string turns it off too',
-    not iq.auto_index_enabled({"auto_index_on_add": "false"}),
-)
-check(
-    'and "off"/"0"/"no"',
-    not any(
-        iq.auto_index_enabled({"auto_index_on_add": v}) for v in ("off", "0", "no", "")
-    ),
-)
-check(
-    "a corrupt value reads ON, not OFF — the opposite of background."
-    "design_enabled's rule, because the failure here is a deleted "
-    "feature with no message rather than an unasked-for restyle",
-    iq.auto_index_enabled({"auto_index_on_add": {"bogus": 1}})
-    and iq.auto_index_enabled(None),
-)
 
 # -------------------------------------------------------------- the queue
 
@@ -83,15 +63,6 @@ check("requeue puts a job back at the FRONT", (lambda: (q.requeue((iq.JOB_PDF, "
 check("requeue never duplicates", (q.requeue((iq.JOB_PDF, "z")), q.pending())[1] == 3)
 check("clear reports what it dropped", q.clear() == 3 and q.pending() == 0)
 
-check(
-    "a sweep leads with the card index, then every PDF in order",
-    iq.sweep_jobs(["x", "y"])
-    == [(iq.JOB_CARDS, ""), (iq.JOB_PDF, "x"), (iq.JOB_PDF, "y")],
-)
-check(
-    "a collection with no PDFs still re-embeds its cards",
-    iq.sweep_jobs([]) == [(iq.JOB_CARDS, "")],
-)
 
 
 # ------------------------------------------------------- what the user reads
@@ -119,21 +90,46 @@ check(
     iq.status_line(iq.RunnerState(active=True, label="Embedding cards…"))
     == "Card index — Embedding cards…",
 )
-msg = iq.sweep_message(2, 30000, "nomic-embed-text")
-check("local sweep names model and amount of work", "nomic-embed-text" in msg and "30,000 notes" in msg and "2 PDFs" in msg)
-check("one note and PDF use singular labels", "1 note and 1 PDF will" in iq.sweep_message(1, 1, "m"))
-check("local sweep describes time and cancellation", "locally" in msg and "stop it" in msg and "$" not in msg)
-check("declining sweep explains later confirmation", "If you decline" in msg and "with confirmation" in msg)
 check(
     "the add tooltip distinguishes running from queued",
-    iq.queued_message("A", 0).startswith("KlausMate: indexing")
+    iq.queued_message("A", 0).startswith("KlausNote: indexing")
     and "3 ahead of it" in iq.queued_message("A", 3),
 )
-check(
-    "the bar's one button stops a run and clears a finished one",
-    iq.dock_button_label(iq.RunnerState(active=True)) == "Stop"
-    and iq.dock_button_label(iq.RunnerState(message="Indexed “X”.")) == "Dismiss",
-)
+section("the status bar's index task (status bar 4/6)")
+_tasks = importlib.import_module("klaus_note.tasks")
+_tasks.run_on_main = lambda fn: fn()
+_tasks.clear()
+iq._report_task(iq.RunnerState(active=True, name="Anemia", label="Embedding PDF…", done=3, total=10))
+_t = [t for t in _tasks.snapshot() if t.key == "index"]
+check("a running job is ONE cancellable index task with its progress",
+      len(_t) == 1 and _t[0].done == 3 and _t[0].total == 10 and _t[0].cancellable
+      and _t[0].label == iq.status_line(iq.RunnerState(active=True, name="Anemia", label="Embedding PDF…", done=3, total=10)),
+      str(_t))
+_stopped = []
+_real_cancel_all = iq.cancel_all
+iq.cancel_all = lambda: _stopped.append(1)
+_tasks.clear()
+iq._report_task(iq.RunnerState(active=True, name="Anemia", label="Embedding PDF…", done=4, total=10))
+_tasks.cancel("index")
+iq.cancel_all = _real_cancel_all
+check("its ✕ stops the runner", _stopped == [1], str(_stopped))
+iq._report_task(iq.RunnerState(message="Anemia indexed"))
+_t = [t for t in _tasks.snapshot() if t.key == "index"]
+check("a finished run leaves its message", len(_t) == 1 and _t[0].message == "Anemia indexed", str(_t))
+_tasks.clear()
+iq._fail(RuntimeError("Ollama is down"))
+check("a failed run stays in the bar as a failure",
+      [(t.error, "Ollama is down" in t.message) for t in _tasks.snapshot() if t.key == "index"] == [(True, True)],
+      str(_tasks.snapshot()))
+_tasks.clear()
+iq._job_stopped()
+check("so does a run stopped on partial work",
+      [t.error for t in _tasks.snapshot() if t.key == "index"] == [True], str(_tasks.snapshot()))
+_tasks.clear()
+iq._report_task(iq.RunnerState(message=iq.BUSY_WAIT_TEXT))
+check("a message with nothing running still reaches the bar",
+      [t.message for t in _tasks.snapshot() if t.key == "index"] == [iq.BUSY_WAIT_TEXT], str(_tasks.snapshot()))
+_tasks.clear()
 
 
 # ------------------------------------------------ signature change detection
@@ -185,18 +181,9 @@ class FakeCol:
         return 1234
 
 
-class FakeAddonManager:
-    def __init__(self, cfg):
-        self.cfg = cfg
-
-    def getConfig(self, _pkg):
-        return self.cfg
-
-
 class FakeMw:
-    def __init__(self, cfg):
+    def __init__(self):
         self.col = FakeCol()
-        self.addonManager = FakeAddonManager(cfg)
 
     def addDockWidget(self, *_a):
         pass
@@ -301,19 +288,20 @@ def new_world(cfg=None, names=("a", "b", "c")):
     for n in names:
         with open(os.path.join(tmp, "contexts", n + ".txt"), "w") as f:
             f.write("page text " + n)
-    pkg = sys.modules["klausmate"]
-    pkg.USER_FILES = tmp
+    pkg = sys.modules["klaus_note"]
+    _settings.user_files_dir = tmp
 
     pipe = Pipeline()
     for dotted, obj in (
-        ("klausmate.curation", pipe),
-        ("klausmate.retention", pipe),
-        ("klausmate.tag_sync", pipe),
+        ("klaus_note.curation", pipe),
+        ("klaus_note.retention", pipe),
+        ("klaus_note.tag_sync", pipe),
     ):
         sys.modules[dotted] = obj
         setattr(pkg, dotted.split(".")[1], obj)
 
-    iq.mw = FakeMw(cfg if cfg is not None else {"api_key_openai": "sk"})
+    _settings.store = _settings.DictStore(cfg if cfg is not None else {"api_key_openai": "sk"})
+    iq.mw = FakeMw()
     iq.QTimer = FakeTimer
     iq.QDockWidget = None  # headless: no dock, the pure status_line is the pin
     FakeTimer.pending = []
@@ -571,13 +559,6 @@ check("local indexing requires no API key", iq.request_pdf("a", announce=False) 
 FakeTimer.drain()
 check("keyless local job runs", bool(pipe.calls))
 
-tmp, pipe = new_world(cfg={"api_key_openai": "sk", "auto_index_on_add": False})
-check("auto-index off: an import does not queue", iq.on_pdf_imported("a") is False)
-check("...but the Library's own button still works", iq.request_pdf("a", announce=False) is True)
-
-tmp, pipe = new_world()
-check("auto-index on: an import queues", iq.on_pdf_imported("a") is True)
-check("an empty name never queues", iq.on_pdf_imported("") is False)
 
 
 # ------------------------------------------------- contention with Index Now
@@ -607,73 +588,10 @@ check("waiting is bounded — it never spins forever", FakeTimer.pending == [])
 check("...and the work is kept, not thrown away", iq._queue.pending() == 1)
 
 
-# -------------------------------------------------------------- the sweep set
+pdf_index = importlib.import_module("klaus_note.pdf_index")
+embeddings = importlib.import_module("klaus_note.embeddings")
 
-section("the sweep set")
 
-tmp, pipe = new_world(names=("a", "b"))
-pdf_index = importlib.import_module("klausmate.pdf_index")
-embeddings = importlib.import_module("klausmate.embeddings")
-os.makedirs(pdf_index.index_dir(tmp, "a"))
-with open(os.path.join(pdf_index.index_dir(tmp, "a"), "manifest.json"), "w") as f:
-    f.write('{"version": %d, "pages": [[0,"h0"]], "embedded_rows": 1, '
-            '"provider": "ollama", "model": "nomic-embed-text", "dims": 1024}'
-            % pdf_index.INDEX_VERSION)
-names = iq.indexed_pdf_names()
-check("a PDF with an index on disk is swept", "a" in names)
-check(
-    "a PDF that was never indexed is not — there is nothing stale to "
-    "rebuild, and indexing it is a decision the user has not made",
-    "b" not in names,
-)
-check(
-    "an unchanged signature offers nothing — saving Preferences without "
-    "touching the model must not propose a whole-collection re-embed",
-    iq.offer_model_sweep(None, embeddings.index_signature({})) is False,
-)
-check(
-    "...and with every manifest at the current version nothing is stale, "
-    "so the upgrade trigger cannot fire on a profile with nothing to "
-    "upgrade",
-    iq.stale_index_names() == [],
-    str(iq.stale_index_names()),
-)
-
-# A PRE-UPGRADE index: the shape an existing profile actually carries on
-# the morning it installs this plan.
-os.makedirs(pdf_index.index_dir(tmp, "b"))
-with open(os.path.join(pdf_index.index_dir(tmp, "b"), "manifest.json"), "w") as f:
-    f.write('{"version": 1, "chunks": [[0,"h0"]], "embedded_rows": 1, '
-            '"provider": "voyage", "model": "voyage-3-lite", "dims": 1024}')
-check(
-    "a pre-upgrade (v1) manifest is swept too — membership is \"has a "
-    "manifest file\", ANY version. stats_from_disk reads through "
-    "card_index.read_manifest, which answers None for every version but "
-    "the current one, so a version gate here silently excludes the exact "
-    "population the sweep exists for: every index built before this plan",
-    sorted(iq.indexed_pdf_names()) == ["a", "b"],
-    str(iq.indexed_pdf_names()),
-)
-check(
-    "...and stale_index_names names ONLY the out-of-date one",
-    iq.stale_index_names() == ["b"],
-    str(iq.stale_index_names()),
-)
-check(
-    "a stale-version manifest is the THIRD sweep trigger: it offers the "
-    "re-index even though the signature never moved and the key is not "
-    "new — an upgrade moves no signature, so without this an upgrader is "
-    "never asked, while every PDF reads as absent in the Library",
-    iq.offer_model_sweep(None, embeddings.index_signature({})) is True,
-)
-# --- :943 — the sweep confirm's Yes branch passes announce=False ------------
-# K-166 review: this site is NOT Qt-widget-only, which is why it survived on
-# a false premise. The user has just answered a PRICED dialog; announcing the
-# same queue again talks over the answer they just gave. iq.QMessageBox is a
-# constructible stub and offer_model_sweep already reaches
-# `box.finished.connect(answered)`, so a fake box that reports a Yes click is
-# the whole seam: pristine the accepted sweep tooltips nothing, flipped to
-# announce=True it tooltips once.
 class _FakeSignal:
     def __init__(self):
         self.cbs = []
@@ -682,90 +600,12 @@ class _FakeSignal:
         self.cbs.append(cb)
 
 
-_RealBox = iq.QMessageBox
-
-
-class _YesBox:
-    """Just enough QMessageBox for offer_model_sweep, answering Yes."""
-
-    last = None
-    Icon = _RealBox.Icon
-    StandardButton = _RealBox.StandardButton
-
-    def __init__(self, _parent=None):
-        self.finished = _FakeSignal()
-        _YesBox.last = self
-
-    def clickedButton(self):
-        return "the-yes-button"
-
-    def standardButton(self, _b):
-        return _YesBox.StandardButton.Yes
-
-    def button(self, _b):
-        return None
-
-    def __getattr__(self, _name):          # setText/setIcon/open/deleteLater…
-        return lambda *_a, **_k: None
-
-
-iq.QMessageBox = _YesBox
-_sweep_tips: list = []                      # self-contained: _tips() is defined further down
-_sweep_orig_tooltip = iq.tooltip
-iq.tooltip = lambda text="", **_k: _sweep_tips.append(text)
-_sweep_asked = iq.offer_model_sweep(None, embeddings.index_signature({}))
-_pending_before = iq._queue.pending()
-for _cb in (_YesBox.last.finished.cbs if _YesBox.last else []):
-    _cb(0)
-_pending_after = iq._queue.pending()
-iq.QMessageBox = _RealBox
-iq.tooltip = _sweep_orig_tooltip
-check(
-    "accepting the priced sweep queues the jobs but tooltips NOTHING — the "
-    "user just answered the dialog, so announce=False is the whole point of "
-    "that call, and announcing over their answer is the regression",
-    _sweep_asked is True and _pending_after > _pending_before and _sweep_tips == [],
-    f"asked={_sweep_asked} pending {_pending_before}->{_pending_after} tips={_sweep_tips!r}",
-)
-
-check(
-    "...and a closed profile offers nothing either",
-    (setattr(iq.mw, "col", None), iq.offer_model_sweep(None, ("openai", "x", 0)))[1]
-    is False,
-)
-
-# A null (non-dict) manifest, sorting BEFORE "b" in the walk
-# (_manifest_paths follows list_contexts' sort order): a corrupt
-# manifest must be skipped, not a scan-stopper — "b"'s real v1
-# manifest, later in the walk, still has to be reported stale.
-with open(os.path.join(tmp, "contexts", "aaa.txt"), "w") as f:
-    f.write("page text aaa")
-os.makedirs(pdf_index.index_dir(tmp, "aaa"))
-with open(os.path.join(pdf_index.index_dir(tmp, "aaa"), "manifest.json"), "w") as f:
-    f.write("null")
-check(
-    "a null manifest doesn't truncate the scan — the real v1 manifest "
-    "past it is still reported stale",
-    iq.stale_index_names() == ["b"],
-    str(iq.stale_index_names()),
-)
-
-
-section("local sweep avoids paid estimates")
-tmp, pipe = new_world(names=("a",))
-check("unchanged model offers no sweep", iq.offer_model_sweep(None, embeddings.index_signature(iq._cfg())) is False)
-check("changed local model offers sweep", iq.offer_model_sweep(None, ("ollama", "previous", 0)) is True)
-
 # ----------------------------------------------------- K-237: the card-index
 # ------------------------------------------------------------ confirm gate
 #
-# offer_model_sweep's own confirm has no teeth: declining it leaves the card
-# index stale, and the VERY NEXT PDF add runs curation.ensure_index as phase
-# one of this same chain — which has no price gate of its own, so a stale
-# or missing index makes that a from-scratch re-embed of the whole
-# collection, silently. These pins drive that phase-one call site with a
-# fake QMessageBox (the sweep tests' own pattern) so the confirm can be
-# answered without real Qt.
+# A stale or missing card index makes a PDF job's phase one a from-scratch
+# re-embed of the whole collection. These pins drive that phase-one call
+# site with a fake QMessageBox so the confirm can be answered without real Qt.
 
 section("K-237: the card-index confirm")
 
@@ -820,19 +660,19 @@ def _restore_confirm_box():
 tmp, pipe = new_world()
 check(
     "a fresh, signature-matching manifest is not a from-scratch embed",
-    iq.card_index_from_scratch(iq._cfg()) is False,
+    iq.card_index_from_scratch(_settings.read()) is False,
 )
 pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
 check(
     "no manifest on disk at all IS one",
-    iq.card_index_from_scratch(iq._cfg()) is True,
+    iq.card_index_from_scratch(_settings.read()) is True,
 )
 pipe._index_stats = {"exists": True, "provider": "voyage", "model": "voyage-3-lite", "dims": 0}
 check(
     "a manifest under the OLD provider/model is one too — the same "
-    "signature comparison offer_model_sweep's own trigger uses, not a "
+    "signature comparison (embeddings.signature_matches), not a "
     "hand-spelled tuple check",
-    iq.card_index_from_scratch(iq._cfg()) is True,
+    iq.card_index_from_scratch(_settings.read()) is True,
 )
 
 # -- wired into phase one: the RED case this card exists to fix -------------
@@ -890,21 +730,32 @@ run_one(pipe, "a")
 check("...and the chain completes normally", pipe.calls[-1] == ("tag_sync", "a"))
 _restore_confirm_box()
 
-# -- a plain card-index sweep job never double-confirms ----------------------
+# -- ⟳'s card-index job is guarded too (spec Rulings: the K-237 confirm stays)
 
 tmp, pipe = new_world()
 pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
 _install_confirm_box()
 iq.request([(iq.JOB_CARDS, "")], announce=False)
 FakeTimer.drain()
-check(
-    "a bare JOB_CARDS entry (offer_model_sweep's OWN priced confirm "
-    "already asked, in Preferences, before this ever reaches the queue) "
-    "is never asked a SECOND time here — only a PDF's own silent phase "
-    "one is gated",
-    pipe.calls == [("ensure_index", "")] and _ConfirmBox.last is None,
-    f"calls={pipe.calls!r} box={_ConfirmBox.last!r}",
-)
+check("a from-scratch JOB_CARDS asks before ensure_index runs",
+      pipe.calls == [] and _ConfirmBox.last is not None,
+      f"calls={pipe.calls!r} box={_ConfirmBox.last!r}")
+_ConfirmBox.last.click("Skip")
+check("Skip ends the job without embedding", pipe.calls == [] and not iq.state().active, repr(pipe.calls))
+_restore_confirm_box()
+tmp, pipe = new_world()
+pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
+_install_confirm_box()
+iq.request([(iq.JOB_CARDS, "")], announce=False)
+FakeTimer.drain()
+_ConfirmBox.last.click("Embed")
+check("Embed runs it", pipe.calls == [("ensure_index", "")], repr(pipe.calls))
+_restore_confirm_box()
+tmp, pipe = new_world()
+_install_confirm_box()
+iq.request([(iq.JOB_CARDS, "")], announce=False)
+FakeTimer.drain()
+check("a JOB_CARDS with a current card index asks nothing", pipe.calls == [("ensure_index", "")] and _ConfirmBox.last is None)
 _restore_confirm_box()
 
 check(
@@ -973,11 +824,6 @@ check(
     repr(tips.seen),
 )
 
-tmp, pipe = new_world()
-tips = _tips()
-check("on_pdf_imported — the funnel EVERY import surface returns through — "
-      "calls request_pdf bare, so a silent import is a silent index",
-      iq.on_pdf_imported("a") is True and len(tips.seen) == 1, repr(tips.seen))
 
 tmp, pipe = new_world()
 tips = _tips()
@@ -1012,7 +858,7 @@ class _Proxy:
 
 
 def _swap(dotted, obj):
-    pkg = sys.modules["klausmate"]
+    pkg = sys.modules["klaus_note"]
     short = dotted.split(".")[1]
     prev = sys.modules.get(dotted), getattr(pkg, short, None)
     sys.modules[dotted] = obj
@@ -1022,14 +868,14 @@ def _swap(dotted, obj):
 
 def _unswap(saved):
     dotted, short, (mod, attr) = saved
-    pkg = sys.modules["klausmate"]
+    pkg = sys.modules["klaus_note"]
     if mod is not None:
         sys.modules[dotted] = mod
     setattr(pkg, short, attr)
 
 
 tmp, pipe = new_world()
-_saved = _swap("klausmate.curation", _Proxy(pipe, "_busy", RuntimeError("token unreadable")))
+_saved = _swap("klaus_note.curation", _Proxy(pipe, "_busy", RuntimeError("token unreadable")))
 iq.request_pdf("a", announce=False)
 FakeTimer.drain(limit=1)
 _unswap(_saved)
@@ -1044,8 +890,8 @@ check(
 
 # --- :513 — `_pdf_present`'s except arm returns True ------------------------
 tmp, pipe = new_world()
-pdf_index_mod = importlib.import_module("klausmate.pdf_index")
-_saved = _swap("klausmate.pdf_index",
+pdf_index_mod = importlib.import_module("klaus_note.pdf_index")
+_saved = _swap("klaus_note.pdf_index",
                _Proxy(pdf_index_mod, "source_signature", OSError("disk hiccup")))
 iq.request_pdf("a", announce=False)
 FakeTimer.drain(limit=1)
@@ -1099,8 +945,8 @@ check(
     "running; active=True would render a progress head ('Card index') and a "
     "Stop button for a job that has not started",
     iq.status_line(iq.state()) == iq.BUSY_WAIT_TEXT
-    and iq.dock_button_label(iq.state()) == "Dismiss",
-    f"{iq.status_line(iq.state())!r} / {iq.dock_button_label(iq.state())!r}",
+    and not iq.state().active,
+    f"{iq.status_line(iq.state())!r} / {iq.state().active!r}",
 )
 
 for _ in range(iq.BUSY_WAIT_POLLS + 2):
@@ -1111,8 +957,8 @@ check(
     "a Dismiss button — the work is kept, but there is no run to Stop",
     "Another indexing run is still going" in _gave_up
     and "still waiting" in _gave_up
-    and iq.dock_button_label(iq.state()) == "Dismiss",
-    f"{_gave_up!r} / {iq.dock_button_label(iq.state())!r}",
+    and not iq.state().active,
+    f"{_gave_up!r} / {iq.state().active!r}",
 )
 pipe._busy = False
 
@@ -1140,12 +986,9 @@ _sidebar_src = code_only(open(os.path.join(ADDON, "library_sidebar.py")).read())
 _init_src = code_only(open(os.path.join(ADDON, "__init__.py")).read())
 
 check(
-    "the priced confirm defaults to No — Save's own button is already "
-    "Enter-default, so Enter in the key field reaches this window-modal "
-    "confirm next with keyboard focus; a stray Enter must not start a "
-    "paid whole-collection re-embed, the same rule "
-    "the Library confirmation follows",
-    "box.setDefaultButton(QMessageBox.StandardButton.No)" in _iq_src,
+    "the card-index confirm defaults to Skip: a stray Enter must not "
+    "start a whole-collection re-embed",
+    "box.setDefaultButton(skip_btn)" in _iq_src,
 )
 check(
     "index_queue holds the ONLY copy of the chain",
@@ -1161,19 +1004,9 @@ check(
     and "curation.ensure_index(" not in _drive_src,
 )
 check(
-    "...and the sidebar's Cancel drives the shared runner instead (K-308; "
-    "K-316 removed Re-embed: PDFs index themselves)",
-    "index_queue.cancel_all()" in _sidebar_src,
-)
-check(
-    "the sidebar footer renders the runner's own status_line, so the two "
-    "surfaces cannot describe one job differently",
-    "index_queue.status_line(" in _sidebar_src,
-)
-check(
-    "closing Browse does NOT cancel indexing: the footer only unsubscribes",
-    "index_queue.remove_listener" in _sidebar_src
-    and _sidebar_src.count("cancel_all") == 1,
+    "the sidebar no longer draws or stops indexing: the status bar does "
+    "(closing Browse can never cancel a run)",
+    "cancel_all" not in _sidebar_src and "status_line(" not in _sidebar_src,
 )
 
 
@@ -1225,9 +1058,8 @@ _import_calls = {
 } if _import_fn else set()
 check("import_pdf_file exists to pin", _import_fn is not None)
 check(
-    "the ONE import funnel starts the index — hooking here is what "
-    "makes every import surface behave the same",
-    "index_queue.on_pdf_imported" in _import_calls,
+    "the ONE import funnel starts no indexing (manual indexing: ⟳ does)",
+    not any("index_queue" in c for c in _import_calls),
 )
 
 _setup_fn = _fn(os.path.join(ADDON, "index_queue.py"), "setup")
@@ -1245,10 +1077,11 @@ check(
     "_index_queue.setup()" in _init_src,
 )
 check(
-    "the status bar and the Library render the SAME text through the "
-    "same function — the dock has no wording of its own",
-    _iq_src.count("status_line(snapshot)") >= 1
-    and "dock_button_label(snapshot)" in _iq_src,
+    "the status bar's index task reads the runner's own status_line, and "
+    "the old dock is gone",
+    "status_line(state)" in _iq_src
+    and "_StatusDock" not in _iq_src and "dock_button_label" not in _iq_src
+    and "_render_dock" not in _iq_src,
 )
 
 _after_matches_fn = _fn(os.path.join(ADDON, "index_queue.py"), "after_matches")
@@ -1260,5 +1093,127 @@ _after_matches_calls = {
 check("after_matches exists to pin", _after_matches_fn is not None)
 check("matching completion writes the lecture tag",
       "tag_sync.sync_after_matches" in _after_matches_calls)
+
+# ------------------------------------------------------------ manual indexing
+
+section("manual indexing: what needs indexing, and the refresh button")
+pdf_index = importlib.import_module("klaus_note.pdf_index")
+drive_store = importlib.import_module("klaus_note.drive_store")
+_sig = ("ollama", "nomic-embed-text", 0)
+_fresh = {"exists": True, "complete": True, "version": pdf_index.INDEX_VERSION, "provider": "ollama",
+          "model": "nomic-embed-text", "dims": 768, "source_sig": (5, 10)}
+check("a fresh index needs nothing", not iq.needs_indexing(_fresh, (5, 10), _sig))
+for _label, _patch in (("missing", {"exists": False}), ("partial", {"complete": False}),
+                       ("old version", {"version": 1}), ("other model", {"model": "bge-m3"}),
+                       ("other source", {"source_sig": (6, 10)})):
+    check(f"{_label} needs indexing", iq.needs_indexing({**_fresh, **_patch}, (5, 10), _sig))
+check("a vanished source needs indexing", iq.needs_indexing(_fresh, None, _sig))
+_needs = lambda n: n in {"a", "b", "c"}  # noqa: E731
+check("refresh_jobs drops excluded and pending, keeps stale matches, keeps order",
+      iq.refresh_jobs(["a", "b", "c", "d", "e"], {"b"}, {"c"}, _needs, {"d", "b"}, False)
+      == [("pdf", "a"), ("pdf", "d")],
+      str(iq.refresh_jobs(["a", "b", "c", "d", "e"], {"b"}, {"c"}, _needs, {"d", "b"}, False)))
+check("the card index only when no PDF job",
+      iq.refresh_jobs([], set(), set(), _needs, set(), True) == [("cards", "")]
+      and ("cards", "") not in iq.refresh_jobs(["a"], set(), set(), _needs, set(), True))
+check("refresh messages",
+      iq.refresh_message(0, False) == "Everything is indexed"
+      and iq.refresh_message(1, False) == "Indexing 1 PDF" and iq.refresh_message(5, False) == "Indexing 5 PDFs"
+      and iq.refresh_message(0, True) == "Rebuilding the card index")
+
+
+def _write_fresh(tmp, name):
+    d = pdf_index.index_dir(tmp, name)
+    os.makedirs(d, exist_ok=True)
+    src = pdf_index.source_signature(tmp, name)
+    with open(os.path.join(d, pdf_index.MANIFEST_FILE), "w") as f:
+        json.dump({"version": pdf_index.INDEX_VERSION, "pages": [[0, "h0"]], "embedded_rows": 1,
+                   "provider": "ollama", "model": "nomic-embed-text", "dims": 0,
+                   "source_sig": list(src)}, f)
+
+
+check("stats_from_disk reports the version and source signature",
+      {"version", "source_sig"} <= set(pdf_index.stats_from_disk(tempfile.mkdtemp())))
+tmp, pipe = new_world(names=("a", "b"))
+_write_fresh(tmp, "a")
+_st = pdf_index.stats_from_disk(pdf_index.index_dir(tmp, "a"))
+check("...read back from a real manifest",
+      _st["version"] == pdf_index.INDEX_VERSION and _st["source_sig"] == pdf_index.source_signature(tmp, "a"), str(_st))
+_tips = []
+iq.tooltip = lambda text="", **_k: _tips.append(text)
+check("refresh queues only the PDF that needs it", iq.refresh() == 1 and iq.pending_names() == {"b"}, str(iq.pending_names()))
+check("...and says how many", _tips[-1] == "Indexing 1 PDF", str(_tips))
+check("pressing it again mid-run adds nothing", iq.refresh() == 0 and iq.pending_names() == {"b"})
+iq.cancel_all()
+drive_store.set_excluded(tmp, "pdf", "b", True)
+check("an excluded PDF is skipped", iq.refresh() == 0 and _tips[-1] == "Everything is indexed", str(_tips[-1:]))
+_write_fresh(tmp, "b")
+iq.refresh()
+check("an excluded PDF that still has index data loses it on refresh", not os.path.isdir(pdf_index.index_dir(tmp, "b")))
+with open(drive_store._drive_path(tmp), "w") as f:
+    f.write("{corrupt")
+check("a corrupt drive.json excludes nothing; refresh still works", iq.refresh() == 1 and iq.pending_names() == {"b"})
+iq.cancel_all()
+_col = iq.mw.col
+iq.mw.col = None
+check("no profile: nothing queued, and it says so", iq.refresh() == 0 and _tips[-1] == "Open a profile first.")
+iq.mw.col = _col
+_mp = iq._manifest_paths
+iq._manifest_paths = lambda: (_ for _ in ()).throw(OSError("disk"))
+check("a failed scan says so and queues nothing",
+      iq.refresh() == 0 and _tips[-1] == "Couldn't check the Library for new PDFs.", str(_tips[-1:]))
+iq._manifest_paths = _mp
+
+tmp, pipe = new_world(names=("a", "b"))
+iq.request_pdf("b", announce=False)
+FakeTimer.drain()
+check("b is running", iq.state().name == "b")
+drive_store.set_excluded(tmp, "pdf", "b", True)
+pipe.finish_cards()
+os.makedirs(pdf_index.index_dir(tmp, "b"), exist_ok=True)  # what phase two writes
+pipe.finish_pdf()
+FakeTimer.drain()
+check("a PDF excluded while its job ran keeps no index", not os.path.isdir(pdf_index.index_dir(tmp, "b")))
+
+tmp, pipe = new_world(names=("a", "b"))
+iq.request_pdf("b", announce=False)
+FakeTimer.drain()
+drive_store.set_excluded(tmp, "pdf", "b", True)
+pipe.finish_cards()
+pipe.finish_pdf()
+check("a PDF excluded mid-run is not matched against an index that was just deleted",
+      ("ensure_matches", "b") not in pipe.calls and not iq.state().active, str(pipe.calls))
+# Final review I1: the guard must hold on the failure and cancel paths too.
+for _how in ("cancel", "fail"):
+    tmp, pipe = new_world(names=("a", "b"))
+    iq.request_pdf("b", announce=False)
+    FakeTimer.drain()
+    drive_store.set_excluded(tmp, "pdf", "b", True)
+    pipe.finish_cards()
+    os.makedirs(pdf_index.index_dir(tmp, "b"), exist_ok=True)  # phase two's save
+    if _how == "cancel":
+        iq.cancel_all()
+        pipe.finish_pdf(complete=False)
+    else:
+        pipe.raise_in("pdf", RuntimeError("Ollama is down"))
+    check(f"a PDF excluded mid-run keeps no index when the run is {_how}ed",
+          not os.path.isdir(pdf_index.index_dir(tmp, "b")))
+
+section("indexing is manual only")
+for _gone in ("on_pdf_imported", "resume_unindexed", "auto_index_enabled", "offer_model_sweep",
+              "sweep_message", "sweep_jobs", "CONFIG_KEY"):
+    check(f"index_queue.{_gone} is gone", not hasattr(iq, _gone))
+_sf = open("klaus_note/setup_flow.py", encoding="utf-8").read()
+check("profile open runs no sweep",
+      not any(n in _sf for n in ("_offer_v2_index_sweep", "_rematch_stale_matches", "_resume_unindexed")))
+check("imports do not index", "on_pdf_imported" not in open("klaus_note/__init__.py", encoding="utf-8").read())
+check("the rescan queues nothing",
+      "index_queue" not in open("klaus_note/pdf_drive.py", encoding="utf-8").read().split("def _tell_readers")[1].split("\ndef ")[0])
+check("config has no auto_index_on_add",
+      "auto_index_on_add" not in open("klaus_note/config.json", encoding="utf-8").read()
+      and "auto_index_on_add" not in open("klaus_note/config.md", encoding="utf-8").read())
+_mm = open("klaus_note/manage_models.py", encoding="utf-8").read()
+check("a model change tooltips instead of prompting",
+      "offer_model_sweep" not in _mm and "Press ⟳ in the Library to re-index for the new model." in _mm)
 
 raise SystemExit(report())

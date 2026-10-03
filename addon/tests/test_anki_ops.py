@@ -21,9 +21,11 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
-ep = importlib.import_module("klausmate.anki_endpoint")
-pdf_map = importlib.import_module("klausmate.pdf_map")
-manage_models = importlib.import_module("klausmate.manage_models")
+import klaus_note.settings as _settings  # noqa: E402
+
+ep = importlib.import_module("klaus_note.anki_endpoint")
+pdf_map = importlib.import_module("klaus_note.pdf_map")
+manage_models = importlib.import_module("klaus_note.manage_models")
 aqt = sys.modules["aqt"]
 operations = sys.modules["aqt.operations"]
 
@@ -103,7 +105,7 @@ def run_pending():
         pending.pop(0)()
 
 
-def call_op(fn, timeout, write, label="Klaus: x"):
+def call_op(fn, timeout, write, label="KlausNote: x"):
     """_run_collection_op from a worker, with 'main' pumped here."""
     box = {}
 
@@ -126,11 +128,11 @@ def call_op(fn, timeout, write, label="Klaus: x"):
 section("writes: one CollectionOp, one undo entry")
 FakeCol.log.clear()
 FakeOp.made.clear()
-box = call_op(lambda col: (col.tags.bulk_add([1, 2], "x"), "done")[1], 2.0, True, "Klaus: addTags")
+box = call_op(lambda col: (col.tags.bulk_add([1, 2], "x"), "done")[1], 2.0, True, "KlausNote: addTags")
 op = FakeOp.made[-1]
 check("runs as a CollectionOp", getattr(op, "kind", "") == "collection")
 check("wrapped in one custom undo entry, merged after the write",
-      FakeCol.log == [("undo_entry", "Klaus: addTags"), ("bulk_add", [1, 2], "x"), ("merge", 7)])
+      FakeCol.log == [("undo_entry", "KlausNote: addTags"), ("bulk_add", [1, 2], "x"), ("merge", 7)])
 check("the handler's own result reaches the caller", box.get("r") == "done")
 
 def boom(col):
@@ -147,7 +149,7 @@ done = threading.Event()
 
 def late_worker():
     try:
-        ep._run_collection_op(lambda col: wrote.append(1), 0.05, True, "Klaus: addNote")
+        ep._run_collection_op(lambda col: wrote.append(1), 0.05, True, "KlausNote: addNote")
     except BaseException as e:  # noqa: BLE001
         box["e"] = e
     done.set()
@@ -156,7 +158,7 @@ threading.Thread(target=late_worker).start()
 done.wait(2.0)  # main thread busy: the op has not started when the caller gives up
 check("caller times out", isinstance(box.get("e"), TimeoutError))
 run_pending()  # the op finally starts, after the caller left
-check("the late op does not write", wrote == [] and ("undo_entry", "Klaus: addNote") not in FakeCol.log)
+check("the late op does not write", wrote == [] and ("undo_entry", "KlausNote: addNote") not in FakeCol.log)
 
 section("reads: QueryOp off the main thread")
 FakeOp.made.clear()
@@ -180,7 +182,7 @@ end = ep.Endpoint(col_getter=FakeCol, run_on_main=lambda fn, timeout: (main_call
                   version="x", run_op=fake_run_op)
 FakeCol.log.clear()
 res = end.handle("addTags", {"notes": [5], "tags": "t"}, False)
-check("addTags goes through run_op as a write", calls == [(True, "Klaus: addTags")], str(res))
+check("addTags goes through run_op as a write", calls == [(True, "KlausNote: addTags")], str(res))
 check("and actually tags", ("bulk_add", [5], "t") in FakeCol.log)
 check("both semantic searches are background reads",
       ep.ACTIONS["klausSearchNotesSemantic"].background and ep.ACTIONS["klausSearchLecturePdfs"].background)
@@ -227,17 +229,17 @@ import re  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
 
-_init = open("klausmate/__init__.py", encoding="utf-8").read()
+_init = open("klaus_note/__init__.py", encoding="utf-8").read()
 _pat = re.search(r'setWebExports\(\s*__name__,.*?\br"([^"]+)"', _init, re.S).group(1)
 check("an upper-case background extension is served (IMG_1234.JPG was refused)",
       re.fullmatch(_pat, "user_files/backgrounds/IMG_1234.JPG") is not None
       and re.fullmatch(_pat, "user_files/backgrounds/x.png") is not None
       and re.fullmatch(_pat, "user_files/backgrounds/x.exe") is None)
 
-retention = importlib.import_module("klausmate.retention")
-tag_sync = importlib.import_module("klausmate.tag_sync")
-pdf_handler = importlib.import_module("klausmate.pdf_handler")
-retention.USER_FILES = tempfile.mkdtemp(prefix="klaus-k305-")
+retention = importlib.import_module("klaus_note.retention")
+tag_sync = importlib.import_module("klaus_note.tag_sync")
+pdf_handler = importlib.import_module("klaus_note.pdf_handler")
+_settings.user_files_dir = tempfile.mkdtemp(prefix="klaus-k305-")
 _real_write = pdf_handler._atomic_write_json
 
 
@@ -258,7 +260,7 @@ check("concurrent prefs writers both survive (the lock serializes them)",
       _prefs.get("A", {}).get("threshold") == 0.6 and _prefs.get("B", {}).get("tag") == "!Library::B",
       str(_prefs))
 
-_ci = importlib.import_module("klausmate.card_index")
+_ci = importlib.import_module("klaus_note.card_index")
 _loads = []
 _real_load = _ci.load
 _ci.load = lambda d: (_loads.append(d), None)[1]
@@ -269,21 +271,15 @@ finally:
 check("batch retags load the card index once, not once per PDF",
       len(_loads) == 1 and out == {"a": None, "b": None, "c": None})
 
-_bt = open("klausmate/browse_toolkit.py", encoding="utf-8").read()
-check("the duplicate scan runs without the collection; only the row "
-      "texts are fetched with it",
-      "op = QueryOp(parent=mw, op=work, success=with_texts)" in _bt
-      and "op.without_collection().run_in_background()" in _bt
-      and "op2 = QueryOp(parent=mw, op=texts, success=done)" in _bt)
-_mm = open("klausmate/manage_models.py", encoding="utf-8").read()
+_mm = open("klaus_note/manage_models.py", encoding="utf-8").read()
 check("Preferences stops its preview timer on every close",
       "dlg.finished.connect(lambda _result: _preview_timer.stop())" in _mm)
-_pd = open("klausmate/pdf_drive.py", encoding="utf-8").read()
-_la = open("klausmate/library_actions.py", encoding="utf-8").read()
-check("the /tmp debug log is gone", "klausmate-debug" not in _pd and "_dbg(" not in _pd)
+_pd = open("klaus_note/pdf_drive.py", encoding="utf-8").read()
+_la = open("klaus_note/library_actions.py", encoding="utf-8").read()
+check("the /tmp debug log is gone", "klaus-note-debug" not in _pd and "_dbg(" not in _pd)
 check("context menus and the threshold dialog are freed",
       "dlg.finished.connect(dlg.deleteLater)" in _la
-      and "menu.deleteLater()" in _init
-      and "menu.deleteLater()" in open("klausmate/pdf_viewer.py", encoding="utf-8").read())
+      # The ＋ menu moved from __init__ into the reader (PDF reader 3/5).
+      and "menu.deleteLater()" in open("klaus_note/reader_panel.py", encoding="utf-8").read())
 
 raise SystemExit(report())

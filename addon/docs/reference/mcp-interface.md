@@ -1,8 +1,8 @@
 # Klaus MCP interface
 
 K-300 and K-301, 2026-09-19. Implementation:
-[endpoint](../../klausmate/anki_endpoint.py),
-[bridge and diagnostic](../../klausmate/scripts/mcp_stdio_bridge.py).
+[endpoint](../../klaus_note/anki_endpoint.py),
+[bridge and diagnostic](../../klaus_note/scripts/mcp_stdio_bridge.py).
 
 ## Reference and design decisions
 

@@ -19,12 +19,12 @@ from mcp.client.stdio import StdioServerParameters
 sys.path.insert(0, '.claude/skills/klaus-test/scripts')
 from anki_stubs import install, check, report
 install()
-ep = importlib.import_module('klausmate.anki_endpoint')
-at = importlib.import_module('klausmate.anki_tools')
+ep = importlib.import_module('klaus_note.anki_endpoint')
+at = importlib.import_module('klaus_note.anki_tools')
 
 
 async def main():
-    with tempfile.TemporaryDirectory(prefix='Klaus SDK ') as scratch:
+    with tempfile.TemporaryDirectory(prefix='KlausNote SDK ') as scratch:
         root = Path(scratch)
         (root/'contexts').mkdir()
         (root/'pdfs').mkdir()
@@ -42,7 +42,7 @@ async def main():
                           discovery_path=str(root/'connection.json'))
         end.start()
         params = StdioServerParameters(command=sys.executable,
-            args=[str(Path('klausmate/scripts/mcp_stdio_bridge.py').resolve()), '--discovery', str(root/'connection.json')])
+            args=[str(Path('klaus_note/scripts/mcp_stdio_bridge.py').resolve()), '--discovery', str(root/'connection.json')])
         try:
             async with Client(params, read_timeout_seconds=10) as client:
                 check('official SDK negotiates the supported protocol', client.protocol_version=='2025-06-18')

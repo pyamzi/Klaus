@@ -18,22 +18,22 @@ import time
 from array import array
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
-from anki_stubs import check, install, report, section  # noqa: E402
+from anki_stubs import LiveStore, check, install, report, section  # noqa: E402
 
 install()
 
-card_index = importlib.import_module("klausmate.card_index")
-pdf_index = importlib.import_module("klausmate.pdf_index")
-curation = importlib.import_module("klausmate.curation")
-retention = importlib.import_module("klausmate.retention")
-tag_sync = importlib.import_module("klausmate.tag_sync")
-index_queue = importlib.import_module("klausmate.index_queue")
+import klaus_note.settings as _settings  # noqa: E402
+
+card_index = importlib.import_module("klaus_note.card_index")
+pdf_index = importlib.import_module("klaus_note.pdf_index")
+curation = importlib.import_module("klaus_note.curation")
+retention = importlib.import_module("klaus_note.retention")
+tag_sync = importlib.import_module("klaus_note.tag_sync")
+index_queue = importlib.import_module("klaus_note.index_queue")
 
 cfg: dict = {"embedding_model": "nomic-embed-text"}
-written: dict = {}
-curation._cfg = lambda: cfg
+_settings.store = LiveStore(cfg)
 retention.mw = type("MW", (), {"taskman": type("T", (), {"run_on_main": staticmethod(lambda fn: fn())})()})()
-curation._pkg = lambda: type("P", (), {"write_config": staticmethod(lambda c: written.update(c))})
 
 
 def unit(v):
@@ -100,13 +100,13 @@ for nid, row in zip([1, 2, 3], rows):
 check("a zero page never wins", 3 not in best_pages.values())
 
 section("threshold scale migration (once, user-set or not)")
-retention.USER_FILES = root
+_settings.user_files_dir = root
 retention.set_threshold("Heme", 0.75)
 out = retention._migrate_threshold_scale({"pdf_match_threshold": 0.75, "_threshold_user_set": True})
 check("global reset to the centered default", out["pdf_match_threshold"] == retention.DEFAULT_THRESHOLD == 0.45)
 check("user-set mark dropped", "_threshold_user_set" not in out)
 check("per-PDF override cleared", "Heme" not in retention.threshold_override_names())
-check("written back", written.get("_threshold_scale") == retention.SCORE_SCALE)
+check("written back", out.get("_threshold_scale") == retention.SCORE_SCALE)
 retention.set_threshold("Heme", 0.42)
 again = retention._migrate_threshold_scale({**out, "pdf_match_threshold": 0.61})
 check("second run is a no-op", again["pdf_match_threshold"] == 0.61
@@ -114,7 +114,7 @@ check("second run is a no-op", again["pdf_match_threshold"] == 0.61
 
 section("stale match caches are re-matched on profile open")
 index_queue._manifest_paths = lambda: [
-    (n, os.path.join(retention.USER_FILES, "pdf_index", n, "manifest.json")) for n in ("Old", "New", "Never")]
+    (n, os.path.join(_settings.user_files(), "pdf_index", n, "manifest.json")) for n in ("Old", "New", "Never")]
 sig = ("ollama", "nomic-embed-text")
 retention.save_matches("New", sig, 3, (1, 1), "d", [(1, 0.5)], {})
 retention.save_matches("Old", sig, 3, (1, 1), "d", [(1, 0.5)], {})
@@ -147,10 +147,10 @@ check("a different embedding space never sets the baseline",
       retention.best_scores(("ollama", "other-model"), 2, "d") == {})
 
 section("re-matching one PDF re-tags the others from cache")
-retention.INDEX_DIR = os.path.join(root, "card_index2")
+curation.index_dir = lambda: os.path.join(root, "card_index2")
 cidx2 = card_index.CardIndex(provider="ollama", model="nomic-embed-text", dims=2, nids=[1, 2, 3],
                              mods=[1, 1, 1], hashes=["a", "b", "c"], vectors=array("f", [1, 0] * 3))
-card_index.save(cidx2, retention.INDEX_DIR)
+card_index.save(cidx2, curation.index_dir())
 digest = retention.card_index_digest(cidx2)
 for name, rows_ in (("Anemia", [(1, 0.80), (2, 0.76), (3, 0.70)]),
                     ("B12", [(1, 0.70), (2, 0.80), (3, 0.69)]),

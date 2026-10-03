@@ -1,4 +1,4 @@
-"""Tests for klausmate.pdf_notes (K-134, slice A of K-079).
+"""Tests for klaus_note.pdf_notes (K-134, slice A of K-079).
 
 Covers: the markdown sidecar (absent/corrupt tolerance, atomic write,
 empty text DELETING the file), the Helvetica base-14 WinAnsi metrics, the
@@ -11,7 +11,7 @@ The synthesis function is asserted on the BYTES it emits, not by round-
 tripping through pypdf: pypdf cannot be imported by this machine's python3
 without the typing_extensions shim, so a pypdf-only test would silently
 stop running the moment that shim moved. The optional last section adds
-the shim (test_klausmate.py's precedent) and, when it takes, proves the
+the shim (test_klaus_note.py's precedent) and, when it takes, proves the
 regenerative-bake contract end to end — appending once, never
 accumulating across repeated bakes, and un-baking back to the pristine
 page count. It reports an honest SKIP when pypdf is genuinely absent.
@@ -34,9 +34,9 @@ from anki_stubs import check, code_only, install, report, section  # noqa: E402
 
 install()
 
-pn = importlib.import_module("klausmate.pdf_notes")
+pn = importlib.import_module("klaus_note.pdf_notes")
 
-_SRC = open("klausmate/pdf_notes.py").read()
+_SRC = open("klaus_note/pdf_notes.py").read()
 _CODE = code_only(_SRC)
 
 # NEVER the real user_files — every storage call below is rooted here.
@@ -387,8 +387,8 @@ check("its pypdf import sits inside a Try — a missing pypdf degrades to "
                   for b in [node.body] for s in ast.walk(ast.Module(
                       body=b, type_ignores=[])))
           for node in ast.walk(_glue[0])))
-check("every failure path logs with the house [klausmate] prefix",
-      _SRC.count('print(f"[klausmate]') == _SRC.count("print("))
+check("every failure path logs with the house [klaus_note] prefix",
+      _SRC.count('print(f"[klaus_note]') == _SRC.count("print("))
 
 check("the glue only APPENDS — add_blank_page and nothing that inserts "
       "into or rewrites the content pages",
@@ -420,7 +420,7 @@ section("regenerative bake, end to end (pypdf — SKIPPED when unavailable)")
 try:
     import typing_extensions  # noqa: F401
 except ImportError:
-    # test_klausmate.py's shim: the vendored pypdf needs typing_extensions,
+    # test_klaus_note.py's shim: the vendored pypdf needs typing_extensions,
     # which this machine's python3.9 does not ship.
     class _TESub:
         def __getitem__(self, _i):
@@ -435,7 +435,7 @@ except ImportError:
 
     sys.modules["typing_extensions"] = _TEModule("typing_extensions")
 
-sys.path.insert(0, os.path.join("klausmate", "vendor"))
+sys.path.insert(0, os.path.join("klaus_note", "vendor"))
 try:
     from pypdf import PdfReader, PdfWriter  # noqa: E402
 except Exception as _pypdf_exc:  # noqa: BLE001

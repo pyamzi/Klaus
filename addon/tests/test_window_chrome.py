@@ -1,4 +1,4 @@
-"""Headless tests for klausmate.window_chrome — the KlausBook layer on
+"""Headless tests for klaus_note.window_chrome — the KlausBook layer on
 Anki's other windows (Add Cards, Browse, Stats, reviewer bottom bar).
 
 Qt widgets are never constructed here; what CAN be proven headlessly:
@@ -12,9 +12,9 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, code_only, install, report, section  # noqa: E402
 
 install()
-wc = importlib.import_module("klausmate.window_chrome")
-theme = importlib.import_module("klausmate.theme")
-background = importlib.import_module("klausmate.background")
+wc = importlib.import_module("klaus_note.window_chrome")
+theme = importlib.import_module("klaus_note.theme")
+background = importlib.import_module("klaus_note.background")
 
 
 # ------------------------------------------------------------- builders
@@ -161,7 +161,7 @@ check("an unknown context falls through untouched — the deck screen "
 wc._config = _orig_config
 
 section("wiring shape (source pins)")
-_SRC = open("klausmate/window_chrome.py", encoding="utf8").read()
+_SRC = open("klaus_note/window_chrome.py", encoding="utf8").read()
 _CODE = code_only(_SRC)
 for fn in ("_on_add_cards_did_init", "_on_browser_will_show",
            "_on_stats_dialog_will_show"):
@@ -179,7 +179,7 @@ check("widgets are remembered UNGATED — a window opened native must "
 check("un-apply restores the STASHED original sheet, never a bare "
       "empty string — Anki's own widget-level sheets (sidebar tree, "
       "tag bar) must come back exactly",
-      "_klausmate_saved_qss" in _CODE)
+      "_klaus_note_saved_qss" in _CODE)
 check("the theme-change walk is ONE deferred tick — the sidebar tree "
       "re-applies its stock sheet from a handler registered at "
       "Browser construction, so only running after the WHOLE chain "
@@ -194,7 +194,7 @@ check("stats identification prefers the webview kind with a URL "
       "basename fallback",
       "AnkiWebViewKind" in _SRC and "basename" in _CODE)
 check("top_bar.py still never names the reviewer bar surface",
-      "ReviewerBottomBar" not in open("klausmate/top_bar.py").read())
+      "ReviewerBottomBar" not in open("klaus_note/top_bar.py").read())
 check("pure half is genuinely aqt-free: the divider exists and "
       "stats_inject_js sits above it (matched as the literal comment "
       "line — the module docstring NAMES the divider earlier, and a "

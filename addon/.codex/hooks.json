@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'/Users/pyamzi/Documents/Github/Klaus/Klaus Addon/.codex/hooks/klausmate-compile.sh'"
+            "command": "'/Users/pyamzi/Documents/Github/Klaus/klaus-note/addon/.codex/hooks/klaus-note-compile.sh'"
           }
         ]
       }

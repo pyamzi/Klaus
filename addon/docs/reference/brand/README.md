@@ -1,19 +1,22 @@
 # Klaus brand assets
 
-`klaus-logo.svg` — the canonical logo (pyamzi's "impossible star" mark,
-2026-09-18). This is the master; everywhere else it appears is derived
-from it, not a second original:
+`klaus-logo.svg` — the canonical logo: Pouya's hand-drawn k (2026-10-01,
+replacing the 2026-09-18 "impossible star"). The file is a 1254×1254 box
+holding a `#2393f4` square and ONE white `fill-rule="evenodd"` path made
+of M/L/Z polygon subpaths (the k's body and the dash at its left). It is
+Pouya's file verbatim; never edit it by hand. Everywhere else the mark
+appears is derived from it, not a second original:
 
-- **App icon** (`KlausBook-Code/resources/darwin/code.icns`, and its live
-  copy at `.build/electron/Klausbook.app/Contents/Resources/Klausbook.icns`):
-  rasterized via `rsvg-convert` at 16/32/64/128/256/512/1024px into an
-  iconset, packed with `iconutil -c icns`. Re-run that if the source SVG
-  changes — the .icns files are generated, not hand-edited.
-- **klaus-pdf activity-bar icon** (`extensions/klaus-pdf/media/klaus.svg`):
-  same path data, with the hardcoded `fill="#171717"` changed to
-  `fill="currentColor"` so it recolors with VS Code's active/inactive
-  theme states like every other native icon — a flat black fill would sit
-  invisible-to-barely-visible in a dark activity bar otherwise.
-- **`~/Applications/Klausbook.app`** (the double-click launcher,
-  `KlausBook-Code/scripts/open-klausbook.sh` wrapped via `osacompile`):
-  uses the same rasterized .icns as the app icon above.
+- **Inside Klaus (the Anki add-on)**: just the k, no square, filled in
+  the accent colour. `klaus_note/top_bar.py` holds the white path verbatim
+  as `_LOGO_PATH` (pinned equal to this file by `tests/test_top_bar.py`)
+  in `LOGO_VIEWBOX`, the 1254 box cropped to the k plus about 4% margin.
+  `top_bar.logo_svg(fill)` serves both the toolbar (filled
+  `var(--klaus-accent, currentColor)`) and the Preferences sidebar
+  pixmap (`manage_models._logo_pixmap`, the `blue_accent` hex).
+- **App icon** (`klaus-note/app/src-tauri/icons/`): the full
+  tile, a white k on `#2393f4`, as a macOS-style rounded square (body
+  824 of 1024 on the Apple icon grid, about 22% corner radius).
+  `icon.svg` is that master; the PNG, `.icns` and `.ico` files are
+  generated from a 1024 px render of it with `npx tauri icon`, not
+  hand-edited. Re-run that if this file changes.

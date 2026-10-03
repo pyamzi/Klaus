@@ -6,7 +6,7 @@ Pins the acceptance criteria from board/board.py show K-112:
   1. every QDialog these modules build applies theme.dialog_qss(...)
   2. secondary/cancel buttons carry the SecondaryButton objectName
   3. no literal hardcoded hex colour outside comments
-  4. window titles use "KlausMate" casing where the addon name appears in
+  4. window titles use "KlausNote" casing where the addon name appears in
      a title, while short "Klaus" prose (e.g. "Welcome to Klaus") is left
      alone
 """
@@ -19,13 +19,15 @@ from anki_stubs import check, install, report, section
 
 install()
 
+import klaus_note.settings as _settings  # noqa: E402
+
 # Importing under the headless stubs also proves neither module raises at
 # import time (syntax errors, bad relative imports, etc.) after the edit.
-setup_flow = importlib.import_module("klausmate.setup_flow")
-crop_dialog = importlib.import_module("klausmate.crop_dialog")
+setup_flow = importlib.import_module("klaus_note.setup_flow")
+crop_dialog = importlib.import_module("klaus_note.crop_dialog")
 
-_SETUP_SRC = open("klausmate/setup_flow.py").read()
-_CROP_SRC = open("klausmate/crop_dialog.py").read()
+_SETUP_SRC = open("klaus_note/setup_flow.py").read()
+_CROP_SRC = open("klaus_note/crop_dialog.py").read()
 
 _HEX_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 
@@ -76,9 +78,9 @@ check("a file it cannot tokenise reports a finding, never a pass",
 section("setup_flow.py: dialogs are themed")
 check("references theme.dialog_qss", "dialog_qss" in _SETUP_SRC)
 check("references theme.night_mode", "night_mode" in _SETUP_SRC)
-check("guarded with try/except + print('[klausmate] ...') fallback pattern",
+check("guarded with try/except + print('[klaus_note] ...') fallback pattern",
       "except Exception as exc:" in _SETUP_SRC
-      and 'print(f"[klausmate] setup dialog theme failed' in _SETUP_SRC)
+      and 'print(f"[klaus_note] setup dialog theme failed' in _SETUP_SRC)
 check("a shared themed-message-box helper backs every QMessageBox",
       "_themed_message_box" in _SETUP_SRC)
 check("no bare, unstyled QMessageBox(mw) construction left behind",
@@ -110,22 +112,22 @@ check("zero literal hex colours in code (comments are exempt)",
 section("setup_flow.py: window title casing")
 check('"Welcome to Klaus" prose title is left untouched (explicitly exempt)',
       '"Welcome to Klaus"' in _SETUP_SRC)
-check("addon-name window titles use KlausMate casing",
-      "KlausMate: local models" in _SETUP_SRC)
-check("bare 'Klaus:' titles were not left behind",
-      "Klaus: Ollama isn't running" not in _SETUP_SRC
-      and "Klaus: local embedding model isn't set up yet" not in _SETUP_SRC
-      and "Klaus: embedding model needed" not in _SETUP_SRC
-      and "Klaus: semantic search needs an API key" not in _SETUP_SRC)
+check("addon-name window titles use KlausNote casing",
+      "KlausNote: local models" in _SETUP_SRC)
+check("bare 'KlausNote:' titles were not left behind",
+      "KlausNote: Ollama isn't running" not in _SETUP_SRC
+      and "KlausNote: local embedding model isn't set up yet" not in _SETUP_SRC
+      and "KlausNote: embedding model needed" not in _SETUP_SRC
+      and "KlausNote: semantic search needs an API key" not in _SETUP_SRC)
 
 
 section("crop_dialog.py: dialog is themed")
 check("references theme.dialog_qss", "dialog_qss" in _CROP_SRC)
 check("references theme.muted_label_qss for the hint label",
       "muted_label_qss" in _CROP_SRC)
-check("guarded with try/except + print('[klausmate] ...') fallback pattern",
+check("guarded with try/except + print('[klaus_note] ...') fallback pattern",
       "except Exception as exc:" in _CROP_SRC
-      and 'print(f"[klausmate] crop dialog theme failed' in _CROP_SRC)
+      and 'print(f"[klaus_note] crop dialog theme failed' in _CROP_SRC)
 
 section("crop_dialog.py: button roles")
 check("Cancel button carries SecondaryButton",
@@ -147,12 +149,10 @@ section("K-115: paintEvent guards its QPainter (md3_switch's rule)")
 # A QPainter constructed and .end()ed with no try/finally between them
 # is the proven-fatal md3_switch pattern: any exception in the body
 # leaves a live painter on the widget, corrupts the backing store, and
-# segfaults Qt on the next flush (nine crashes, 2026-08-26). Pin BOTH
-# custom-painted widgets: crop_dialog's canvas and pdf_viewer's
-# selection overlay.
+# segfaults Qt on the next flush (nine crashes, 2026-08-26). Pin the
+# custom-painted crop_dialog canvas (pdf_viewer's selection overlay, the
+# other one, went with the native renderer in PDF reader 5/5).
 import ast as _ast
-
-_PDFV_SRC = open("klausmate/pdf_viewer.py").read()
 
 
 def _paint_event_guarded(src: str) -> tuple:
@@ -171,16 +171,15 @@ def _paint_event_guarded(src: str) -> tuple:
                     return (
                         True,
                         "painter.end()" in fin,
-                        "[klausmate]" in exc,
+                        "[klaus_note]" in exc,
                     )
     return (False, False, False)
 
 
-for _label, _s in (("crop_dialog", _CROP_SRC), ("pdf_viewer", _PDFV_SRC)):
-    _tf, _fe, _el = _paint_event_guarded(_s)
-    check(f"{_label}.paintEvent wraps its body in try/finally", _tf)
-    check(f"{_label}.paintEvent's finally closes the painter", _fe)
-    check(f"{_label}.paintEvent's except logs, never re-raises", _el)
+_tf, _fe, _el = _paint_event_guarded(_CROP_SRC)
+check("crop_dialog.paintEvent wraps its body in try/finally", _tf)
+check("crop_dialog.paintEvent's finally closes the painter", _fe)
+check("crop_dialog.paintEvent's except logs, never re-raises", _el)
 
 section("crop_dialog.py: crop behaviour untouched (style only)")
 check("rubber-band selection state machine intact",
@@ -189,8 +188,8 @@ check("rubber-band selection state machine intact",
       and 'self._mode = "resize"' in _CROP_SRC)
 check("save-as-new-file encode path intact",
       "def encode_cropped" in _CROP_SRC and "_KEEP_FORMATS" in _CROP_SRC)
-check("crop dialog title still names the file, not renamed to KlausMate",
-      'f"Crop Image — {fname}"' in _CROP_SRC)
+check("crop dialog title still names the file, not renamed to KlausNote",
+      'f"Crop Image: {fname}"' in _CROP_SRC)
 
 class _FakeBtn:
     def __init__(self):
@@ -237,8 +236,7 @@ def _nudge_for(cfg):
     """(title, text, informative) the readiness nudge would show, or None
     when it shows nothing at all."""
     shown = []
-    saved = (setup_flow._themed_message_box, setup_flow._pkg,
-             setup_flow._offer_v2_index_sweep)
+    saved = (setup_flow._themed_message_box, _settings.store)
 
     def _fake_box(_parent, title, _icon):
         msg = _FakeMsg(title)
@@ -246,17 +244,11 @@ def _nudge_for(cfg):
         return msg
 
     setup_flow._themed_message_box = _fake_box
-    setup_flow._pkg = lambda: type(
-        "P", (), {"get_config": staticmethod(lambda: dict(cfg)),
-                  "write_config": staticmethod(lambda _c: None)})
-    # The v2 sweep is K-236's own gate and is exercised by its own pins;
-    # neutralised here so this reads the nudge alone.
-    setup_flow._offer_v2_index_sweep = lambda _cfg: False
+    _settings.store = _settings.DictStore(cfg)
     try:
         setup_flow._readiness_check_body()
     finally:
-        (setup_flow._themed_message_box, setup_flow._pkg,
-         setup_flow._offer_v2_index_sweep) = saved
+        (setup_flow._themed_message_box, _settings.store) = saved
     if not shown:
         return None
     return (shown[0].title, shown[0].text, shown[0].info)

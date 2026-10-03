@@ -6,9 +6,9 @@
 
 desktop
 
-KlausMate is a PyQt6 addon running inside Anki (macOS today; Anki also
+KlausNote is a PyQt6 addon running inside Anki (macOS today; Anki also
 ships on Windows/Linux). Not web/ios/android: the UI is Qt widgets
-styled with QSS from `klausmate/theme.py`, plus three embedded webview
+styled with QSS from `klaus_note/theme.py`, plus three embedded webview
 surfaces (the restyled top toolbar, the bottom toolbar, and
 `web/pdfjs_viewer.html`) where HTML/CSS tooling genuinely applies.
 Impeccable's browser-side tooling is valid only on those webview
@@ -25,7 +25,7 @@ machines that aren't this one are product concerns, not nice-to-haves.
 
 ## Product Purpose
 
-KlausMate ("Klaus") turns Anki into a lecture-PDF study cockpit. All
+KlausNote for Anki turns Anki into a lecture-PDF study cockpit. All
 four jobs are confirmed as genuinely central, not ranked:
 
 1. **Exam prep from lectures** — find the cards a lecture covers fast
@@ -50,7 +50,7 @@ whisper.cpp for lecture transcription. Cosine thresholds drive card matching,
 duplicates and retention. An external MCP client can request active-page context
 through the authenticated local endpoint, with Anki approval for collection
 writes. The subscription service, reasoning judge and embedded assistant have
-been removed. See [architecture](AGENTS.md) and [configuration](klausmate/config.md).
+been removed. See [architecture](AGENTS.md) and [configuration](klaus_note/config.md).
 
 ## Operating Context
 
@@ -72,12 +72,12 @@ been removed. See [architecture](AGENTS.md) and [configuration](klausmate/config
   run as separate native executables. Vendored pure-Python only (pypdf 6.11.0 is vendored).
 - Headless testing = stubbed `aqt`/`anki` (see `.claude/skills/
   klaus-test`); selected suites also exercise real Qt widgets offscreen.
-- The addon package name `klausmate` (lowercase) is load-bearing
-  (symlink, URLs, config); user-facing name is "KlausMate".
+- The addon package name `klaus_note` (lowercase) is load-bearing
+  (symlink, URLs, config); user-facing name is "KlausNote for Anki" ("KlausNote" for short).
 - Personal data boundaries: `user_files/` (PDFs, annotations, card
   index) and `meta.json` (private profile configuration) are never staged, read, or shipped.
 - **Licensing (material because of "public later"):**
-  `klausmate/browse_highlight.py` is adapted from Glutanimate's
+  `klaus_note/browse_highlight.py` is adapted from Glutanimate's
   highlight-search-results under AGPLv3 with header-retention terms —
   a public release must be AGPL-compatible or that module must be
   removed/relicensed. Vendored pypdf is BSD. The SynapsePro-derived
@@ -92,16 +92,20 @@ been removed. See [architecture](AGENTS.md) and [configuration](klausmate/config
 
 Volunteered and binding from the owner:
 
-- Names: **"KlausMate"** (the addon, titles/menus) and **"Klaus"** (the
-  short product name in prose and tooltips). The mixed usage is
-  deliberate.
-- Mark: the hand-drawn point-down pentagram star (traced from Pouya's
-  sketch, `top_bar._STAR_PATH` is the single source of truth), drawn as
-  an open accent-coloured stroke — never inside an icon square.
-- Wordmark: "KlausMate" in Garamond, light weight (like Claude's serif
-  wordmark).
+- Names: **"KlausNote for Anki"** is the add-on's full name (AnkiWeb,
+  the add-on list) and **"KlausNote"** is its short name in titles,
+  menus, tooltips and the wordmark. "Klaus" alone is the brand behind
+  the Klaus account, not a product name. (Was "Klaus Note" and "Klaus"
+  until 2026-10-02.)
+- Mark: Pouya's hand-drawn k (2026-10-01; `top_bar._LOGO_PATH` is the
+  single source of truth, verbatim from
+  `docs/reference/brand/klaus-logo.svg`). Inside Klaus it is just the k,
+  filled in the accent colour, never inside an icon square; the app
+  icon is the full #2393f4 tile with a white k.
+- Wordmark: "KlausNote" in Excalifont, the hand-drawn Excalidraw font,
+  matching the hand-drawn k (was light Garamond until 2026-10-01).
 - Visual language: the SynapsePro-derived Apple-system-palette token
-  discipline in `klausmate/theme.py` — semantic tokens, identical
+  discipline in `klaus_note/theme.py` — semantic tokens, identical
   light/dark key sets, user-selectable accent themes (six presets +
   custom colour), translucent Apple-material state veils, a documented
   radius/type scale enforced by tests. Seamless window chrome (top and

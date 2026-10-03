@@ -57,7 +57,7 @@ _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 LOCK_TIMEOUT_S = 10.0
 LOCK_STALE_S = 120.0
 
-BOARD_HEADER = """# klausmate board
+BOARD_HEADER = """# klaus_note board
 
 <!-- Source of truth for all agent work. State changes (claim/move/comment)
      MUST go through board/board.py so they are serialized by its lockfile.
@@ -65,7 +65,7 @@ BOARD_HEADER = """# klausmate board
      or designer. See context/ROLES.md. -->
 """
 
-ARCHIVE_HEADER = """# klausmate archive
+ARCHIVE_HEADER = """# klaus_note archive
 
 <!-- Durable record of Done cards removed from BOARD.md by `board.py archive`.
      Append-only: each entry is a card's full text (fields, body, comments)
@@ -460,7 +460,7 @@ def _norm(path: str) -> str:
 def _paths_conflict(a: str, b: str) -> bool:
     """True when two declared paths could touch the same file.
 
-    Directory-aware: 'klausmate/' conflicts with 'klausmate/pdf_viewer.py'.
+    Directory-aware: 'klaus_note/' conflicts with 'klaus_note/pdf_viewer.py'.
     """
     a, b = _norm(a), _norm(b)
     return a == b or a.startswith(b + "/") or b.startswith(a + "/")

@@ -13,6 +13,8 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section
 
 install()
+
+import klaus_note.settings as _settings  # noqa: E402
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6 import QtCore, QtGui, QtWidgets
 
@@ -30,24 +32,31 @@ sys.modules["aqt.qt"] = shim
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["klaus-test"])
 sys.modules["aqt"].mw.taskman = types.SimpleNamespace(
     run_on_main=lambda callback: QtCore.QTimer.singleShot(0, callback))
-pv = importlib.import_module("klausmate.pdf_viewer")
-vc = importlib.import_module("klausmate.viewer_context")
-ps = importlib.import_module("klausmate.page_store")
-ep = importlib.import_module("klausmate.anki_endpoint")
+rp = importlib.import_module("klaus_note.reader_panel")
+vc = importlib.import_module("klaus_note.viewer_context")
+ps = importlib.import_module("klaus_note.page_store")
+ep = importlib.import_module("klaus_note.anki_endpoint")
+pj = importlib.import_module("klaus_note.pdfjs_viewer")
 
-class UnloadableDoc:
-    """Exercise both native load overload failures after a successful load."""
-    def __init__(self):
-        self.calls = []
-    def load(self, path):
-        self.calls.append(path)
-        raise RuntimeError("pdfium said no")
+
+class FakeJsViewer(QtWidgets.QWidget):
+    """Stands in for PdfJsViewer (no QtWebEngine headless)."""
+    def __init__(self, on_page_changed=None, parent=None):
+        super().__init__(parent)
+    def set_page_texts(self, pages): pass
+    def load_path(self, path, name, keep_view=False): pass
+    def load_annotations(self, name): pass
+    def clear_document(self): pass
+    def cleanup(self): pass
+
+
+pj.PdfJsViewer, pj.PDFJS_AVAILABLE = FakeJsViewer, True
 
 with tempfile.TemporaryDirectory(prefix="klaus_page_failure_") as root:
-    sys.modules["klausmate"].USER_FILES = root
+    _settings.user_files_dir = root
     for folder in ("pdfs", "contexts"):
         Path(root, folder).mkdir()
-    for name in ("Sample", "Healthy", "Unloadable"):
+    for name in ("Sample", "Healthy"):
         path = str(Path(root, "pdfs", name + ".pdf"))
         writer = QtGui.QPdfWriter(path)
         painter = QtGui.QPainter(writer)
@@ -68,49 +77,40 @@ with tempfile.TemporaryDirectory(prefix="klaus_page_failure_") as root:
             "method": "tools/call", "params": {"name": "current_page",
             "arguments": {}}}, None)[1]["result"]
 
-    for failure in ("missing", "native"):
-        for other in (False, True):
-            section(f"{failure} load, healthy second viewer={other}")
-            vc.reset()
-            healthy = pv.PdfSidebar(None) if other else None
-            if healthy is not None:
-                healthy.load_pdf("Healthy")
-            sidebar = pv.PdfSidebar(None)
-            sidebar.load_pdf("Sample")
-            app.processEvents()
-            before = current_page()
-            sample_images = [b["data"] for b in before["content"] if b["type"] == "image"]
-            check("successful actual load supplies Sample text and image",
-                  not before["isError"] and "Sample slide text" in before["content"][0]["text"]
-                  and bool(sample_images) and sidebar._doc.pageCount() == 1)
-            original_doc = sidebar._doc
-            if failure == "native":
-                broken = UnloadableDoc()
-                sidebar._doc = broken
-            sidebar.load_pdf("Missing" if failure == "missing" else "Unloadable")
-            app.processEvents()
-            if failure == "native":
-                check("both native overloads failed", len(broken.calls) == 2
-                      and isinstance(broken.calls[0], str)
-                      and isinstance(broken.calls[1], QtCore.QUrl))
-            after = current_page()
-            check("failed sidebar does not expose previous text",
-                  "Sample" not in json.dumps(after))
-            check("failed sidebar does not expose previous image",
-                  all(b.get("data") not in sample_images for b in after["content"]))
-            if healthy is None:
-                check("no remaining viewer gives explicit No active page",
-                      len(after["content"]) == 1
-                      and "No active page" in after["content"][0]["text"])
-            else:
-                check("other healthy viewer remains readable",
-                      not after["isError"]
-                      and "Healthy slide text" in after["content"][0]["text"]
-                      and any(b["type"] == "image" for b in after["content"]))
-                healthy.cleanup()
-                healthy.close()
-            sidebar._doc = original_doc
-            sidebar.cleanup()
-            sidebar.close()
+    for other in (False, True):
+        section(f"missing load, healthy second viewer={other}")
+        vc.reset()
+        healthy = rp.PdfSidebar(None) if other else None
+        if healthy is not None:
+            healthy.load_pdf("Healthy")
+        sidebar = rp.PdfSidebar(None)
+        sidebar.load_pdf("Sample")
+        app.processEvents()
+        before = current_page()
+        sample_images = [b["data"] for b in before["content"] if b["type"] == "image"]
+        check("successful actual load supplies Sample text and image",
+              not before["isError"] and "Sample slide text" in before["content"][0]["text"]
+              and bool(sample_images) and sidebar.is_loaded("Sample")
+              and sidebar._page_count == 1)
+        sidebar.load_pdf("Missing")
+        app.processEvents()
+        after = current_page()
+        check("failed sidebar does not expose previous text",
+              "Sample" not in json.dumps(after))
+        check("failed sidebar does not expose previous image",
+              all(b.get("data") not in sample_images for b in after["content"]))
+        if healthy is None:
+            check("no remaining viewer gives explicit No active page",
+                  len(after["content"]) == 1
+                  and "No active page" in after["content"][0]["text"])
+        else:
+            check("other healthy viewer remains readable",
+                  not after["isError"]
+                  and "Healthy slide text" in after["content"][0]["text"]
+                  and any(b["type"] == "image" for b in after["content"]))
+            healthy.cleanup()
+            healthy.close()
+        sidebar.cleanup()
+        sidebar.close()
     vc.reset()
 raise SystemExit(report())

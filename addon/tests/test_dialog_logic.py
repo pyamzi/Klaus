@@ -43,127 +43,6 @@ class LineEdit:
 _DEFAULT_EMBED_MODEL = "nomic-embed-text"
 
 
-class World:
-    """manage_models_dialog's "Local models" closure, transcribed:
-    endpoint_edit / embed_model_edit, the ui_state['syncing'] and
-    ['dirty'] guards, sync_embed_widgets and save_embed. There is ONE
-    embedding provider now (OpenAI), so the provider combo, the
-    per-provider key fan-out and the Ollama resolver are gone — what is
-    left to get wrong is the deferred-save contract, which is what these
-    pins are for.
-
-    """
-
-    def __init__(self, cfg):
-        self.cfg = dict(cfg)
-        self.ui_state = {"syncing": False, "dirty": False}
-        self.saves = 0
-        self.sweeps = []
-        self.endpoint_edit = LineEdit()
-        self.embed_model_edit = LineEdit()
-        self.sync_embed_widgets()
-
-    # --- transcribed from embeddings.py (embedding_model/index_signature) ---
-
-    def _embedding_model(self):
-        return str(self.cfg.get("embedding_model") or "").strip() or _DEFAULT_EMBED_MODEL
-
-    def _index_signature(self):
-        return "ollama", self._embedding_model(), 0
-
-    # --- transcribed from manage_models_dialog ---
-
-    def mark_dirty(self):
-        if self.ui_state["syncing"]:
-            return
-        self.ui_state["dirty"] = True
-
-    def sync_embed_widgets(self):
-        if self.ui_state["dirty"]:
-            return
-        self.ui_state["syncing"] = True
-        try:
-            self.endpoint_edit.setText(str(self.cfg.get("endpoint") or ""))
-            self.embed_model_edit.setText(str(self.cfg.get("embedding_model") or ""))
-        finally:
-            self.ui_state["syncing"] = False
-
-    def type_key(self, text):
-        self.endpoint_edit.setText(text)
-        self.mark_dirty()
-
-    def type_model(self, text):
-        self.embed_model_edit.setText(text)
-        self.mark_dirty()
-
-    def save_embed(self):
-        if self.ui_state["syncing"]:
-            return
-        prev_sig = self._index_signature()
-        self.cfg["endpoint"] = self.endpoint_edit.text().strip()
-        self.cfg["embedding_model"] = self.embed_model_edit.text().strip()
-        self.saves += 1
-        self.sweeps.append(
-            (prev_sig, self._index_signature())
-        )
-
-    def save_all(self):
-        self.ui_state["dirty"] = False
-        self.save_embed()
-
-BASE = {"endpoint": "", "embedding_model": ""}
-
-print("== opening the page writes nothing ==")
-w = World(BASE)
-check("the key field seeds from config", w.endpoint_edit.text() == "")
-check("opening the dialog saves nothing", w.saves == 0)
-before = w.saves
-w.sync_embed_widgets()
-check("repopulating the fields writes no config", w.saves == before)
-
-print("== deferred save: edits do not reach config until Save ==")
-w = World(BASE)
-w.type_key("sk-new-key")
-check("typing a key marks dirty but writes nothing",
-      w.ui_state["dirty"] is True and w.cfg["endpoint"] == "")
-w.save_all()
-check("Save persists the key", w.cfg["endpoint"] == "sk-new-key")
-check("Save clears dirty", w.ui_state["dirty"] is False)
-
-w = World({"endpoint": "sk", "embedding_model": ""})
-w.type_model("custom-local")
-check("typing a model writes nothing yet", w.cfg["embedding_model"] == "")
-w.save_all()
-check("Save persists the model", w.cfg["embedding_model"] == "custom-local")
-
-print("== a refresh while dirty must not clobber unsaved edits ==")
-w = World({"endpoint": "sk", "embedding_model": "nomic-embed-text"})
-w.type_model("custom-local")
-w.sync_embed_widgets()          # what refresh() does
-check("unsaved edit survives a refresh",
-      w.embed_model_edit.text() == "custom-local")
-w.save_all()
-check("and still saves correctly afterwards",
-      w.cfg["embedding_model"] == "custom-local")
-
-print("== the sweep offer: a model change, or a first key ==")
-w = World({"endpoint": "sk", "embedding_model": "nomic-embed-text"})
-w.type_model("custom-local")
-w.save_all()
-_prev, _cur = w.sweeps[-1]
-check("the PREVIOUS signature is the one the stored vectors were made "
-      "with, captured before the widgets overwrite config",
-      _prev == ("ollama", "nomic-embed-text", 0))
-check("...and the current one is what was just saved",
-      _cur == ("ollama", "custom-local", 0))
-
-w = World(BASE)
-w.type_key("http://localhost:12345")
-w.save_all()
-_prev, _cur = w.sweeps[-1]
-check("changing endpoint preserves model signature", _prev == _cur)
-
-
 print("== default-sensitivity slider: migration-side bail (K-052) ==")
 
 _SHIPPED_DEFAULTS = (0.35, 0.55, 0.75)
@@ -220,224 +99,12 @@ check(
 )
 
 
-print("== default-sensitivity slider: dialog-side flag wiring (K-052) ==")
-
-
-class Slider:
-    """QSlider semantics needed here: setValue fires valueChanged only when
-    the value actually changes (real Qt behaviour, mirrored by Combo
-    above); sliderReleased is a distinct signal that ONLY a genuine user
-    mouse/touch release ever triggers — a programmatic setValue() never
-    emits it. That distinction is what makes sliderReleased (not
-    valueChanged) the safe place to persist a change and set the
-    user-set flag from."""
-
-    def __init__(self, on_change=None, on_release=None):
-        self._value = 0
-        self.on_change = on_change
-        self.on_release = on_release
-
-    def value(self):
-        return self._value
-
-    def setValue(self, v):
-        changed = v != self._value
-        self._value = v
-        if changed and self.on_change:
-            self.on_change(v)
-
-    def user_drag_and_release(self, v):
-        """A real user dragging the handle to v and releasing the mouse —
-        the only path that should ever persist a change."""
-        self.setValue(v)
-        if self.on_release:
-            self.on_release()
-
-    def user_click_release_no_move(self):
-        """A plain click-and-release that changes nothing — must still not
-        write anything."""
-        if self.on_release:
-            self.on_release()
-
-
-class ThresholdWorld:
-    """manage_models_dialog's default-sensitivity control, transcribed:
-    sync_threshold_widget / save_threshold and the ui_state['syncing']
-    guard shared with the rest of the dialog (see World above for the
-    embed-widget half of the same guard)."""
-
-    DEFAULT_THRESHOLD = 0.75
-
-    def __init__(self, cfg):
-        self.cfg = dict(cfg)
-        self.ui_state = {"syncing": False, "dirty": False}
-        self.writes = 0
-        # Deferred save: a release marks dirty; save_all() (the Save
-        # button) is what calls save_threshold.
-        self.slider = Slider(on_release=self.mark_dirty)
-        self.sync_threshold_widget()
-
-    def mark_dirty(self):
-        if self.ui_state["syncing"]:
-            return
-        self.ui_state["dirty"] = True
-
-    def save_all(self):
-        self.ui_state["dirty"] = False
-        self.save_threshold()
-
-    def sync_threshold_widget(self):
-        if self.ui_state["dirty"]:
-            return  # never clobber an unsaved slider position
-        self.ui_state["syncing"] = True
-        try:
-            try:
-                value = float(
-                    self.cfg.get("pdf_match_threshold") or self.DEFAULT_THRESHOLD
-                )
-            except (TypeError, ValueError):
-                value = self.DEFAULT_THRESHOLD
-            self.slider.setValue(int(round(value * 100)))
-        finally:
-            self.ui_state["syncing"] = False
-
-    def save_threshold(self):
-        if self.ui_state["syncing"]:
-            return
-        value = round(self.slider.value() / 100.0, 3)
-        try:
-            current = round(
-                float(self.cfg.get("pdf_match_threshold") or self.DEFAULT_THRESHOLD),
-                3,
-            )
-        except (TypeError, ValueError):
-            current = None
-        if value == current:
-            return
-        self.cfg["pdf_match_threshold"] = value
-        self.cfg["_threshold_user_set"] = True
-        self.writes += 1
-
-
-w = ThresholdWorld({"pdf_match_threshold": 0.55})
-check("opens showing the stored value", w.slider.value() == 55)
-check("populating the widget on open writes nothing", w.writes == 0)
-check(
-    "populating the widget on open does not stamp the user-set flag",
-    "_threshold_user_set" not in w.cfg,
-)
-
-before = w.writes
-w.sync_threshold_widget()  # e.g. Refresh / Check connection re-populating
-check("re-syncing without touching the slider still writes nothing",
-      w.writes == before)
-check(
-    "repeated programmatic repopulation still never stamps the flag",
-    "_threshold_user_set" not in w.cfg,
-)
-
-w = ThresholdWorld({"pdf_match_threshold": 0.55})
-w.slider.user_click_release_no_move()
-w.save_all()
-check("a click-release that changes nothing writes nothing", w.writes == 0)
-check("no user-set flag from a no-op release", "_threshold_user_set" not in w.cfg)
-
-w = ThresholdWorld({"pdf_match_threshold": 0.75})
-w.slider.user_drag_and_release(55)
-check("dragging alone writes nothing until Save",
-      "pdf_match_threshold" in w.cfg and w.cfg["pdf_match_threshold"] == 0.75
-      and w.writes == 0)
-check("dragging marks dirty", w.ui_state["dirty"] is True)
-w.sync_threshold_widget()   # a refresh landing mid-edit
-check("an unsaved slider position survives a refresh", w.slider.value() == 55)
-w.save_all()
-check("dragging and releasing then saving persists the new value",
-      w.cfg["pdf_match_threshold"] == 0.55)
-check("dragging and releasing then saving stamps the user-set flag",
-      w.cfg.get("_threshold_user_set") is True)
-check("exactly one write for one drag-and-release-and-save", w.writes == 1)
-
-w = ThresholdWorld({"pdf_match_threshold": 0.55})
-w.slider.user_drag_and_release(55)  # releases at the value already stored
-w.save_all()
-check("releasing at the already-stored value writes nothing", w.writes == 0)
-check(
-    "no user-set flag when the value didn't actually change",
-    "_threshold_user_set" not in w.cfg,
-)
-
-print("== the syncing guard is load-bearing on its own (orchestrator review) ==")
-
-# Every check above is satisfied by the value-differs guard ALONE, because
-# sync always sets the slider to the stored value, so the two agree and the
-# save returns early either way. Deleting ui_state['syncing'] from
-# save_threshold left the whole suite green — which means nothing pinned it,
-# and a future refactor could drop it silently.
-#
-# It is not redundant. The slider is integer 1/100 steps, so a stored value
-# it cannot represent (hand-edited config, or any future writer with more
-# precision) makes widget and stored value genuinely DIFFER during a
-# programmatic sync. Then only the syncing guard stands between opening the
-# dialog and having your value rewritten and stamped user-set — which
-# permanently opts that profile out of every later default bump.
-w = ThresholdWorld({"pdf_match_threshold": 0.753})
-check("a non-representable stored value shows as the nearest step", w.slider.value() == 75)
-check("merely opening does not rewrite it", w.writes == 0)
-
-w.ui_state["syncing"] = True
-w.save_threshold()  # what a naive valueChanged wiring would do mid-sync
-w.ui_state["syncing"] = False
-check(
-    "syncing guard blocks a save even when widget and stored value DIFFER",
-    w.writes == 0,
-)
-check(
-    "...and no user-set flag is stamped by that blocked save",
-    "_threshold_user_set" not in w.cfg,
-)
-check("the stored value is left exactly as it was", w.cfg["pdf_match_threshold"] == 0.753)
-
-# And the mirror: with syncing clear, that same difference SHOULD persist —
-# proving the guard is what blocked it, not the value-diff check.
-w.save_threshold()
-check("with syncing clear, a real difference does persist", w.writes == 1)
-check("which is the path that legitimately stamps the flag", w.cfg["_threshold_user_set"] is True)
-
-print("== end to end: a slider-set value survives a later default bump ==")
-w = ThresholdWorld({"pdf_match_threshold": 0.75})
-w.slider.user_drag_and_release(55)  # user deliberately picks 0.55
-w.save_all()                        # ...and commits it with Save
-bumped = _migrate_default_threshold(w.cfg, 0.85)
-check(
-    "the dialog's own output config is untouched by a later migration",
-    bumped["pdf_match_threshold"] == 0.55,
-)
-
-
-print("== appearance block scoping (live NameError regression) ==")
-# sync_background_widgets() runs at dialog-build time, BEFORE the
-# ui_state assignment further down manage_models_dialog. A closure's
-# free variables bind at call time, so referencing ui_state there
-# crashed Preferences on open with NameError. The appearance block must
-# stay self-contained on _bg_state.
-_src = open("klausmate/manage_models.py").read()
-_dlg = _src.split("def manage_models_dialog", 1)[1]
-_call_at = _dlg.index("\n    sync_background_widgets()\n")  # the CALL, not the def
-_ui_state_at = _dlg.index('ui_state: dict')
-check("the immediate sync call still precedes ui_state's assignment "
-      "(the ordering that makes this dangerous)", _call_at < _ui_state_at)
-_bg_block = _dlg[_dlg.index("_bg_state = {"):_call_at]
-check("appearance block never touches ui_state", "ui_state" not in _bg_block)
-check("appearance block guards with its own flag",
-      '_bg_state["syncing"]' in _bg_block)
-
-
 print("== SynapsePro settings shell (K-106) ==")
 # The CURRENT SynapsePro settings window (their 1.5.x, from Pouya's
 # screenshot): sidebar of nav pills + a QStackedWidget of pages, each
 # page a PageTitle/PageSubtitle over ONE rounded group of _row()s.
 # Replaced the K-105 card grid outright.
-_src2 = open("klausmate/manage_models.py").read()
+_src2 = open("klaus_note/manage_models.py").read()
 check("no tabs and no card grid left — sidebar + stacked pages",
       "QTabWidget" not in _src2
       and "_install_grid_layout" not in _src2
@@ -445,13 +112,13 @@ check("no tabs and no card grid left — sidebar + stacked pages",
 check("sidebar carries the app identity",
       'setObjectName("SettingsSidebar")' in _src2
       and 'setObjectName("SidebarAppName")' in _src2
-      and 'QLabel("KlausMate")' in _src2)
-check("sidebar identity: star logo beside the Garamond wordmark",
+      and 'QLabel("KlausNote")' in _src2)
+check("sidebar identity: the k logo beside the Excalifont wordmark",
       "_logo_pixmap" in _src2
-      and 'QLabel("KlausMate")' in _src2
+      and 'QLabel("KlausNote")' in _src2
       and "_top_bar.logo_svg(colour)" in _src2)
-check("the logo fills blue_accent and repaints on an accent save",
-      'QColor(c["blue_accent"])' in _src2
+check("the logo fills the text colour (matches the wordmark) and repaints on a theme save",
+      'QColor(c["text"])' in _src2
       and "logo_lbl.setPixmap(_new_logo)" in _src2)
 check("settings search: a filter field sits in the sidebar",
       'setObjectName("SettingsSearch")' in _src2
@@ -500,7 +167,7 @@ check("accent swatches render from theme.COLOR_THEMES — the UI "
 _pick_accent_body = _src2.split("def _pick_accent", 1)[1].split("def ", 1)[0]
 check("accent choice is deferred-save like every other preference — it "
       "previews live (appearance_changed marks dirty) but writes nothing",
-      'cfg["color_theme"] = _accent_state["name"]' in _src2
+      'state.set("color_theme", name)' in _pick_accent_body
       and "appearance_changed()" in _pick_accent_body
       and "write_config" not in _pick_accent_body)
 # CODE only: this function's docstring names set_active_theme("custom")
@@ -523,13 +190,13 @@ check("clickable pills show the pointing-hand cursor",
       _src2.count("PointingHandCursor") >= 2)
 check("footer says Cancel, like SynapsePro's",
       'QPushButton("Cancel")' in _src2)
-_init_src = open("klausmate/__init__.py").read()
+_init_src = open("klaus_note/__init__.py").read()
 check("the accent preset is applied at profile open, before any "
-      "Klaus surface draws",
+      "KlausNote surface draws",
       "profile_did_open.append(_apply_color_theme)" in _init_src
       and _init_src.index("append(_apply_color_theme)")
-      < _init_src.index("append(_migrate_config)"))
-_cfgj = open("klausmate/config.json").read()
+      < _init_src.index("append(settings.migrate)"))
+_cfgj = open("klaus_note/config.json").read()
 check("color_theme ships in config.json with the ocean default",
       '"color_theme": "ocean"' in _cfgj
       and '"color_theme_custom": "#0071D3"' in _cfgj)
@@ -548,9 +215,9 @@ check("the custom swatch opens a colour picker; cancelling still "
       "QColorDialog.getColor(" in _src2.split("def _pick_custom_accent",
                                               1)[1].split("def ", 1)[0])
 check("custom colour is saved, and applied before the theme name",
-      'cfg["color_theme_custom"] = _accent_state["custom"]' in _src2
-      and _apply_live.index("set_custom_colour(str(_accent_state")
-      < _apply_live.index("set_active_theme(str(_accent_state"))
+      'state.set("color_theme_custom", chosen.name())' in _src2
+      and _apply_live.index("set_custom_colour(str(state.get(")
+      < _apply_live.index("set_active_theme(str(state.get("))
 check("profile open loads the custom colour before the theme name",
       _init_src.index("set_custom_colour(")
       < _init_src.index('set_active_theme(str(cfg.get("color_theme")'))
@@ -622,7 +289,11 @@ check("save_general no longer writes heatmap_enabled (Edit Widgets "
       'cfg["heatmap_enabled"]' not in _src2)
 check("the preview dict still carries heatmap_enabled, from STORED "
       "config read live per tick (dashboard_order's pattern)",
-      "bool(_heatmap.enabled(_pkg().get_config()))" in code_only(_src2))
+      "bool(_heatmap.enabled(settings.read()))" in code_only(_src2))
+check("the preview dict carries the removed add-on widgets too — it "
+      "replaces config, so without them a removed AMBOSS card returns on "
+      "the first preview tick",
+      "_dashboard.hidden_foreign(settings.read())" in code_only(_src2))
 check("...and the heatmap's two DISPLAY keys with it — the corner "
       "menu can be used while Preferences is open, and a key missing "
       "from the preview dict falls back to its default, not to the "
@@ -645,61 +316,18 @@ check("nav geometry is pure view geometry: setSizeHint rows + list "
 # that only marks dirty (no preview), a Save that leaves the override
 # armed (a stale preview would shadow later config), and a close that
 # forgets to revert (a discarded accent lingering all session).
-_mm_src = open("klausmate/manage_models.py").read()
-_init_src = open("klausmate/__init__.py").read()
-_tb_src = open("klausmate/top_bar.py").read()
+_mm_src = open("klaus_note/manage_models.py").read()
+_init_src = open("klaus_note/__init__.py").read()
+_tb_src = open("klaus_note/top_bar.py").read()
 
-check("every appearance widget previews live, not just marks dirty — "
-      "thirteen handlers: design toggle, mode, fit, blur, wash, "
-      "image chosen, image removed, accent swatch, and the study "
-      "screen's own mode/fit/wash/image-chosen/image-removed (sphere "
-      "colours live on the on-screen dots now — the four colour-"
-      "picker buttons left with the edge-colour option, 2026-08-30)",
-      _mm_src.count("        appearance_changed()") == 13)
-check("save and preview carry the design key as the IDENTICAL "
-      "expression — the preview dict replaces config and the gates "
-      "default OFF, so a preview missing the key strips the whole "
-      "look mid-drag, while a save missing it leaves a zombie screen "
-      "that snaps back on the next redraw",
-      _mm_src.split("def save_general")[1].split("def mark_dirty")[0]
-      .count('cfg["klausbook_design"] = bool(klausbook_cb.isChecked())')
-      == 1
-      and '"klausbook_design": bool(klausbook_cb.isChecked()),'
-      in _mm_src.split("def _bg_preview_cfg")[1].split(
-          "def apply_appearance_live")[0])
-_save_slice = _mm_src.split("def save_general")[1].split("def mark_dirty")[0]
-_preview_slice = _mm_src.split("def _bg_preview_cfg")[1].split(
-    "def apply_appearance_live")[0]
-check("the study screen's four keys are written from r_spec in "
-      "save_general AND read from the identical _bg_state expression "
-      "in _bg_preview_cfg — same lesson as klausbook_design, applied "
-      "to the background this session just added",
-      all(f'cfg["reviewer_background_{field}"]' in _save_slice
-          for field in ("mode", "color", "image", "fit"))
-      and all(
-          f'"reviewer_background_{field}": _bg_state["reviewer_spec"]'
-          f'["{field}"],' in _preview_slice
-          for field in ("mode", "color", "image", "fit",
-                        "grad_x", "grad_y")))
-check("the gradient keys ride save AND preview for both screens — "
-      "and color2 rides NEITHER: the backdrop stopped being a "
-      "setting (a write would resurrect the option in config)",
-      all(f'cfg["background_{f}"]' in _save_slice
-          and f'cfg["reviewer_background_{f}"]' in _save_slice
-          for f in ("grad_x", "grad_y", "grad_size"))
-      and "color2" not in _save_slice
-      and "color2" not in _preview_slice
-      and '"background_grad_size": int(spec["grad_size"]),'
-      in _preview_slice
-      and '"reviewer_background_grad_size": _bg_state["reviewer_spec"]['
-      in _preview_slice)
-check("the wash keys ride save AND preview for both screens — the "
-      "same parity lesson, fifth field",
-      'cfg["background_wash"] = int(spec["wash"])' in _save_slice
-      and 'cfg["reviewer_background_wash"] = int(r_spec["wash"])'
-      in _save_slice
-      and '"background_wash": int(spec["wash"]),' in _preview_slice
-      and '"reviewer_background_wash": int(' in _preview_slice)
+check("save and preview read the SAME flattening of the state's view — "
+      "prefs_state.flatten_appearance — so a key can no longer ride one "
+      "and not the other (the klausbook_design / reviewer / wash / "
+      "gradient parity lessons, pinned once in tests/test_prefs_state.py)",
+      "_prefs_state.flatten_appearance(state.view())"
+      in _mm_src.split("def _bg_preview_cfg")[1].split("def apply_appearance_live")[0]
+      and "flatten_appearance(after)" in open("klaus_note/prefs_state.py").read()
+      and "def save_general" not in _mm_src)
 check("both image captions render a rounded thumbnail from the STORED "
       "copy under user_files/backgrounds — what the wallpaper will "
       "actually load, never the original path",
@@ -718,9 +346,10 @@ _geom_body = (
 check("the geometry sink updates the sphere, marks dirty, arms the "
       "preview QUIETLY — and never refreshes mid-drag",
       len(_geom_parts) > 1
-      and "mark_dirty()" in _geom_body
+      and "state.set(spec_key, s)" in _geom_body
+      and "refresh_dirty()" in _geom_body
       and "_quiet_preview()" in _geom_body
-      and "refresh" not in _geom_body and "replant" not in _geom_body)
+      and "_top_bar.refresh" not in _geom_body and "replant" not in _geom_body)
 check("structural ops are bounded and replant: add is capped at "
       "MAX_SPHERES, the LAST sphere can never be removed (colour "
       "mode IS a gradient), and a recolor click opens the picker "
@@ -732,9 +361,8 @@ check("structural ops are bounded and replant: add is capped at "
       in _mm_src)
 check("the sphere lists ride save AND preview for both screens as "
       "DEEP COPIES — config must never alias live dialog state",
-      _mm_src.count('[dict(g) for g in spec["gradients"]]') == 2
-      and 'cfg["reviewer_background_gradients"] = [' in _save_slice
-      and '"reviewer_background_gradients": [' in _preview_slice)
+      "v = [dict(g) for g in (v or [])]" in open("klaus_note/prefs_state.py").read()
+      and "copy.deepcopy" in open("klaus_note/prefs_state.py").read())
 check("editing arms on open with the dialog's sink and disarms on "
       "finished — connected BEFORE the preview revert, so exactly one "
       "refresh clears the handles on every close path",
@@ -748,35 +376,35 @@ check("Save is the dialog's DEFAULT button — HIG: a dialog names its "
       "default action, and Return should save once there is something "
       "to save (Qt never fires a disabled default)",
       "save_btn.setDefault(True)" in _mm_src)
-# Anki's own Light/Dark switch, mirrored into KlausMate Preferences
+# Anki's own Light/Dark switch, mirrored into KlausNote Preferences
 # (2026-08-30, Pouya) — the ONE row writing an Anki preference.
 check("the Anki theme row seeds from mw.pm.theme(), marks dirty like "
       "every deferred pref, and Save applies via mw.set_theme ONLY on "
       "an actual change (setupStyle repaints every webview)",
-      "anki_theme_combo.currentIndexChanged.connect(lambda _i: mark_dirty())"
-      in _mm_src
-      and "mw.set_theme(_Theme(_want))" in _mm_src
-      and 'int(getattr(mw.pm.theme(), "value", 0)) != _want' in _mm_src)
+      '_Binding(state, "anki_theme"' in _mm_src
+      and 'state.reseed("anki_theme", _cur_theme)' in _mm_src
+      and "mw.set_theme(_Theme(int(effect[1])))" in _mm_src
+      and '("anki_theme", after["anki_theme"])' in open("klaus_note/prefs_state.py").read())
 check("accent swatches carry accessible names — a bare colour square "
       "is silent in VoiceOver; the name mirrors the tooltip identity",
       'sw.setAccessibleName(' in _mm_src
       and '"Custom accent color"' in _mm_src)
 check("appearance_changed both marks unsaved AND schedules the preview",
       "def appearance_changed() -> None:" in _mm_src
-      and "mark_dirty()\n        _preview_timer.start()" in _mm_src)
+      and "refresh_dirty()\n        _preview_timer.start()" in _mm_src)
 check("the preview is debounced — top_bar.refresh() resets the main "
       "window and the blur slider fires continuously while dragged",
       "_preview_timer = QTimer(dlg)" in _mm_src
       and "_preview_timer.setSingleShot(True)" in _mm_src
       and "_preview_timer.timeout.connect(apply_appearance_live)" in _mm_src)
 check("Save is still the ONLY writer of the appearance config keys",
-      _mm_src.count('cfg["color_theme"] = ') == 1
-      and _mm_src.count('cfg["background_mode"] = ') == 1
-      and "def save_general() -> None:" in _mm_src)
+      _mm_src.count("settings.patch(commit.patch)") == 1
+      and 'cfg["color_theme"] = ' not in _mm_src
+      and 'cfg["background_mode"] = ' not in _mm_src)
 check("Save paints through the same one path, THEN drops the override so "
       "a stale preview cannot shadow later config changes",
-      "        apply_appearance_live()\n        _background.set_preview(None)"
-      in _mm_src)
+      "            apply_appearance_live()\n            _background.set_preview(None)"
+      in _mm_src.split("def _run_effect")[1].split("def save_all")[0])
 check("every close path reverts — finished() covers Save, Cancel, Esc "
       "and the title-bar close alike",
       "dlg.finished.connect(lambda _result: revert_appearance_preview())"
@@ -806,57 +434,17 @@ def _fn_src(name):
 check("connection check runs without collection", "without_collection().run_in_background()" in _fn_src("test_connection"))
 
 print("== changing the model re-indexes everything (K-152) ==")
-# save_embed is the ONE writer of the embedding keys, so it is also the
-# only place that can see the settings move under the stored vectors.
-# AST, not text: what matters is the ORDER of statements inside that
-# function — capturing the signature after the mutations would compare
-# the new settings with themselves and never sweep, silently, forever.
-import ast  # noqa: E402
+# The signature comparison lives in prefs_state.commit() now (pinned
+# behaviourally in tests/test_prefs_state.py: the index_sweep effect
+# carries the BASELINE signature); the shell only dispatches it.
+check("the shell dispatches the index_sweep effect, which tooltips where to "
+      "re-index (manual indexing: no re-index prompt)",
+      "index_queue" not in _fn_src("_run_index_sweep")
+      and "REINDEX_HINT" in _fn_src("save_all")
+      and "_run_index_sweep(effect[1])" in _fn_src("_run_effect"))
 
-_mm_tree = ast.parse(_mm_src)
-_save_embed = next(
-    (n for n in ast.walk(_mm_tree)
-     if isinstance(n, ast.FunctionDef) and n.name == "save_embed"),
-    None,
-)
-check("save_embed is still the function to pin", _save_embed is not None)
-
-
-def _stmt_index(fn, needle):
-    """Position of the first TOP-LEVEL statement of `fn` whose unparsed
-    source contains `needle`. Body order, not ast.walk's breadth-first
-    traversal — the whole point of these three pins is the order the
-    statements run in."""
-    if fn is None:
-        return None
-    for i, node in enumerate(fn.body):
-        try:
-            if needle in ast.unparse(node):
-                return i
-        except Exception:
-            pass
-    return None
-
-
-_sig_line = _stmt_index(_save_embed, "index_signature(cfg)")
-_mut_line = _stmt_index(_save_embed, "cfg['endpoint'] =")
-_write_line = _stmt_index(_save_embed, "write_config(cfg)")
-_offer_line = _stmt_index(_save_embed, "offer_model_sweep")
-check("the previous signature is captured off STORED config",
-      _sig_line is not None)
-check("...BEFORE the widgets overwrite it — capturing it after would "
-      "compare the new settings against themselves and never sweep",
-      _sig_line is not None and _mut_line is not None and _sig_line < _mut_line)
-check("...and the sweep is offered AFTER the write, so a decline still "
-      "leaves the new settings saved",
-      _offer_line is not None and _write_line is not None
-      and _write_line < _offer_line)
-check("save_embed delegates the sweep comparison to index_queue",
-      "index_queue.offer_model_sweep(" in code_only(_mm_src)
-      and code_only(_mm_src).count("prev_sig") == 2)
-
-_iq_code = code_only(open("klausmate/index_queue.py").read())
-check("the sweep offer is raised window-modal — open() and a finished "
+_iq_code = code_only(open("klaus_note/index_queue.py").read())
+check("the card-index confirm is raised window-modal — open() and a finished "
       "callback, never exec() (K-114: exec's nested app-modal loop "
       "segfaults on Qt 6.11 + macOS 26, and the Preferences window this "
       "is raised from is itself non-modal)",
@@ -885,8 +473,8 @@ check("K-232: no blocking askUser or QMessageBox.question anywhere in "
       "regression fails a real test and not just the board gate",
       "askUser" not in _src2 and "QMessageBox.question" not in _src2)
 
-_save_threshold_src = _fn_src("save_threshold")
-check("save_threshold was found", bool(_save_threshold_src))
+_save_threshold_src = _fn_src("_apply_threshold_to_tuned")
+check("the threshold_changed effect handler was found", bool(_save_threshold_src))
 check("the tuned-PDFs confirm is window-modal — hand-built QMessageBox, "
       "open() + finished, never a blocking call",
       "msg = QMessageBox(dlg)" in _save_threshold_src
@@ -941,7 +529,7 @@ check("...chained by a plain continuation call rather than a nested "
       "never stack — the continuation is defined before it is used",
       "_after_dirty_check()" in _confirm_close_src
       and _confirm_close_src.index("def _after_dirty_check")
-      < _confirm_close_src.index('if ui_state["dirty"]:'))
+      < _confirm_close_src.index("if state.dirty:"))
 check("...and dlg.accept() only fires from a Yes/skip path — the "
       "no-dialog-needed fallthrough and the stop-confirm's Yes — never "
       "unconditionally once a confirm is showing",

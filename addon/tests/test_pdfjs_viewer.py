@@ -14,41 +14,21 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section
 
 install()
-pv = importlib.import_module("klausmate.pdfjs_viewer")
+pv = importlib.import_module("klaus_note.pdfjs_viewer")
 
-section("renderer flag resolution")
-check("empty config -> native", pv.renderer_from_config({}) == "native")
-check("explicit native", pv.renderer_from_config({"pdf_renderer": "native"}) == "native")
-check("explicit pdfjs", pv.renderer_from_config({"pdf_renderer": "pdfjs"}) == "pdfjs")
-check("unknown value degrades to native",
-      pv.renderer_from_config({"pdf_renderer": "webgl"}) == "native")
-check("non-dict degrades to native", pv.renderer_from_config(None) == "native")
-
-section("base64 chunking")
-data = os.urandom(100_000)
-parts = pv.chunk_b64(data, chunk_chars=7_000)
-check("chunks are bounded", all(len(p) <= 7_000 for p in parts))
-check("multiple chunks for data beyond one chunk", len(parts) > 1)
-check("reassembled chunks round-trip the bytes",
-      base64.b64decode("".join(parts)) == data)
-check("small payload -> single chunk", len(pv.chunk_b64(b"x" * 10)) == 1)
-check("empty payload -> no chunks", pv.chunk_b64(b"") == [])
-try:
-    pv.chunk_b64(b"x", chunk_chars=0)
-    bad_chunk_raised = False
-except ValueError:
-    bad_chunk_raised = True
-check("chunk_chars=0 raises", bad_chunk_raised)
+section("PDF reader 2/5: the whole-file feed is gone")
+check("chunk_b64 is gone", not hasattr(pv, "chunk_b64"))
+check("CHUNK_CHARS is gone", not hasattr(pv, "CHUNK_CHARS"))
 
 section("page HTML build")
-html = pv.build_page_html("klausmate", night=False)
+html = pv.build_page_html("klaus_note", night=False)
 check("addon substituted into script srcs",
-      '/_addons/klausmate/web/pdfjs/pdf.min.js' in html
-      and '/_addons/klausmate/web/pdfjs/pdf.worker.min.js' in html)
+      '/_addons/klaus_note/web/pdfjs/pdf.min.js' in html
+      and '/_addons/klaus_note/web/pdfjs/pdf.worker.min.js' in html)
 check("no placeholder left behind",
       "__ADDON__" not in html and "__THEME_VARS__" not in html)
 check("theme tokens injected (light bg)", "--bg: #F5F5F7;" in html)
-dark = pv.build_page_html("klausmate", night=True)
+dark = pv.build_page_html("klaus_note", night=True)
 check("theme tokens injected (dark bg)", "--bg: #191919;" in dark)
 # Both substitutions are a GLOBAL str.replace, so a placeholder spelled
 # in the template's prose gets the replacement — the entire palette,
@@ -58,22 +38,23 @@ check("theme tokens injected (dark bg)", "--bg: #191919;" in dark)
 # rendered output. build_page_html's docstring is where those names
 # are spelled; the template describes them instead.
 _TPL = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "..", "klausmate", "web",
+                         "..", "klaus_note", "web",
                          "pdfjs_viewer.html"), encoding="utf-8").read()
 check("template spells __THEME_VARS__ only at its real site "
       "(a prose mention would splice the whole palette in)",
       _TPL.count("__THEME_VARS__") == 1)
-check("template spells __ADDON__ only at its two real sites",
-      _TPL.count("__ADDON__") == 2)
+check("template spells __ADDON__ only at its five real sites "
+      "(pdf.min.js, pdfjs_pure.js, rough.min.js, the worker, Excalifont)",
+      _TPL.count("__ADDON__") == 5)
 check("so the rendered page carries the palette exactly once",
       html.count("--bg: ") == 1 and dark.count("--bg: ") == 1)
-for fn in ("klausPdfChunk", "klausPdfLoad", "klausPdfError",
+for fn in ("klausPdfOpen", "klausPdfError",
            "klausGoToPage", "klausSetZoom", "klausSetAnnotations",
            "klausToggleThumbs", "klausScrollTo", "klausZoomReset"):
     check(f"JS API {fn} present", fn in html)
-check("bridge prefix wired", "klausmate_pdfjs:" in html)
+check("bridge prefix wired", "klaus_note_pdfjs:" in html)
 for feature in ("findbar", "findinput", "ctxmenu", "thumbs", "marquee",
-                "hlLayer", "noteLayer"):
+                "hlLayer", "noteLayer", "cardLayer"):
     check(f"page has {feature}", feature in html)
 # pdf.js 3.x text-layer contract: spans are sized via
 # calc(var(--scale-factor) * ...). Shipping without setting it made
@@ -101,21 +82,318 @@ check("there are exactly five render sites",
 
 section("bridge parsing")
 check("non-klaus command ignored", pv.parse_bridge("ankiweb:xyz") is None)
-check("action only", pv.parse_bridge("klausmate_pdfjs:ready") == ("ready", ""))
+check("action only", pv.parse_bridge("klaus_note_pdfjs:ready") == ("ready", ""))
 check("action + payload",
-      pv.parse_bridge("klausmate_pdfjs:page:3:10") == ("page", "3:10"))
+      pv.parse_bridge("klaus_note_pdfjs:page:3:10") == ("page", "3:10"))
 check("payload keeps colons (data urls)",
-      pv.parse_bridge("klausmate_pdfjs:copy-image:iVBOR:w0KG")
+      pv.parse_bridge("klaus_note_pdfjs:copy-image:iVBOR:w0KG")
       == ("copy-image", "iVBOR:w0KG"))
 import base64 as _b64
 payload = _b64.b64encode(b'{"id": "abc"}').decode()
 check("b64 json round-trip", pv.decode_b64_json(payload) == {"id": "abc"})
 check("bad b64 json degrades to None", pv.decode_b64_json("!!") is None)
 
+section("PDF reader 2/5: time to first page is logged")
+check("the page posts firstpage:<ms> once page 1 has rendered",
+      'if (num === 1 && state.t0 !== null) {' in html
+      and 'post("firstpage:" + Math.round(performance.now() - state.t0));'
+      in html)
+import contextlib as _ctxl
+import io as _io
+_fp_stand = type("_FpStand", (), {})()
+_fp_stand._name = "lecture.pdf"
+_fp_out = _io.StringIO()
+with _ctxl.redirect_stdout(_fp_out):
+    pv.PdfJsViewer._bridge_firstpage(_fp_stand, "412")
+check("Python prints the timing line",
+      _fp_out.getvalue().strip()
+      == "[klaus_note] pdfjs first page lecture.pdf 412 ms")
+
+section("PDF reader 2/5: piece loader (pdf.js asks Python for byte ranges)")
+import builtins as _bi
+import tempfile as _tf
+
+_ps = importlib.import_module("klaus_note.pdf_source")
+_ph = importlib.import_module("klaus_note.pdf_handler")
+_tmp8 = _tf.mkdtemp()
+_pdf8 = os.path.join(_tmp8, "lecture.pdf")
+_w8 = _ph.pypdf.PdfWriter()
+_w8.add_blank_page(width=200, height=200)
+with open(_pdf8, "wb") as _f8:
+    _w8.write(_f8)
+    _f8.write(b"\n%" + b"k" * 400_000 + b"\n")   # comment padding past 256 KB
+_data8 = open(_pdf8, "rb").read()
+check("fixture is a real PDF larger than the first chunk",
+      _data8.startswith(b"%PDF") and len(_data8) > _ps.FIRST_CHUNK)
+
+check("parse_bridge routes range",
+      pv.parse_bridge("klaus_note_pdfjs:range:3:0:262144") == ("range", "3:0:262144"))
+check("the viewer has a range handler", hasattr(pv.PdfJsViewer, "_bridge_range"))
+
+_src8 = _ps.DocSource(_pdf8)
+_r8 = pv.handle_range("1:0:262144", _src8, 1)
+check("handle_range returns base64 of the first 256 KB",
+      _b64.b64decode(_r8["b64"]) == _data8[:262144])
+_r8 = pv.handle_range("1:1000:5000", _src8, 1)
+check("...and of a range in the middle",
+      _b64.b64decode(_r8["b64"]) == _data8[1000:5000])
+check("an old generation is refused",
+      pv.handle_range("0:0:10", _src8, 1) == {"refused": True})
+for _bad in ("", "1", "1:0", "1:0:10:5", "1:-1:10", "1:0:-10", "1:0.5:10",
+             "1:x:10", "True:0:10", "1:0:1e3", " 1:0:10", "1:²:10",
+             "1::10", None, 7):
+    check("malformed payload %r is refused" % (_bad,),
+          pv.handle_range(_bad, _src8, 1) == {"refused": True})
+check("no source (load failed) answers stale",
+      pv.handle_range("1:0:10", None, 1) == {"stale": True})
+_new8 = os.path.join(_tmp8, "new.pdf")
+with open(_new8, "wb") as _f8:
+    _f8.write(_data8 + b"%changed\n")
+os.replace(_new8, _pdf8)
+check("after the file is replaced the reply is stale",
+      pv.handle_range("1:0:10", _src8, 1) == {"stale": True})
+_data8 = open(_pdf8, "rb").read()
+
+
+class _CountingFile:
+    def __init__(self, f, box):
+        self._f, self._box = f, box
+
+    def read(self, n=-1):
+        out = self._f.read(n)
+        self._box[0] += len(out)
+        return out
+
+    def __getattr__(self, name):
+        return getattr(self._f, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self._f.close()
+
+
+_real_open8 = _bi.open
+
+
+def _counting(box):
+    def _open(*a, **k):
+        return _CountingFile(_real_open8(*a, **k), box)
+    return _open
+
+
+_src8 = _ps.DocSource(_pdf8)
+_box8 = [0]
+_bi.open = _counting(_box8)
+try:
+    _len8, _first8 = pv.first_chunk(_src8)
+finally:
+    _bi.open = _real_open8
+check("first_chunk returns the source's length", _len8 == len(_data8))
+check("first_chunk returns base64 of the first 256 KB, read through the "
+      "same source as every range",
+      _b64.b64decode(_first8) == _data8[:_ps.FIRST_CHUNK])
+check("first_chunk reads no more than FIRST_CHUNK bytes",
+      0 < _box8[0] <= _ps.FIRST_CHUNK)
+
+
+class _FakeWeb8:
+    def __init__(self):
+        self.js = []
+
+    def eval(self, js):
+        self.js.append(js)
+
+    def setZoomFactor(self, _z):
+        pass
+
+
+_read8 = os.path.join(_tmp8, "reading")   # never the real user_files
+pv._reading_dir = lambda: _read8
+
+
+def _viewer8():
+    v = pv.PdfJsViewer.__new__(pv.PdfJsViewer)   # no Qt construction
+    v._web = _FakeWeb8()
+    v._page_loaded = True
+    v._gen = 0
+    v._source = None
+    v._path = None
+    v._name = None
+    v._scroll_pos = 0
+    v._hold_scroll = False
+    v._highlights = []
+    return v
+
+
+os.makedirs(_read8, exist_ok=True)
+_leftover8 = os.path.join(_read8, "leftover.pdf")
+open(_leftover8, "wb").close()
+pv._SWEPT = False
+_v8 = _viewer8()
+_box8 = [0]
+_bi.open = _counting(_box8)
+try:
+    _v8.load_path(_pdf8, "lecture.pdf")
+finally:
+    _bi.open = _real_open8
+check("load_path reads only the first chunk on the main thread",
+      0 < _box8[0] <= _ps.FIRST_CHUNK)
+_open8 = [j for j in _v8._web.js if "klausPdfOpen(" in j]
+check("load_path calls klausPdfOpen(gen, length, firstB64, name, keepView) once",
+      _open8 == ["window.klausPdfOpen && window.klausPdfOpen(1, %d, %s, "
+                 "\"lecture.pdf\", false);" % (len(_data8), '"' + _first8 + '"')])
+check("no whole-file feed is sent", not any("klausPdfChunk" in j
+                                            for j in _v8._web.js))
+check("load_path bumps the generation and holds a DocSource",
+      _v8._gen == 1 and _v8._source is not None
+      and _v8._source.length == len(_data8))
+_link8 = _v8._source.read_path
+check("the source reads a hard-link snapshot under <user files>/reading",
+      os.path.dirname(_link8) == _read8 and os.path.samefile(_link8, _pdf8))
+check("the first load sweeps leftover snapshots, keeping its own",
+      not os.path.exists(_leftover8) and os.path.exists(_link8))
+_rep8 = _v8._on_bridge("klaus_note_pdfjs:range:1:0:10")
+check("_on_bridge RETURNS the range reply (Anki hands it to the JS callback)",
+      isinstance(_rep8, dict) and _b64.b64decode(_rep8["b64"]) == _data8[:10])
+check("other bridge commands keep the old (True, None) reply",
+      _v8._on_bridge("klaus_note_pdfjs:scroll:5") == (True, None)
+      and _v8._scroll_pos == 5)
+_bake8 = os.path.join(_tmp8, "bake.pdf")
+with open(_bake8, "wb") as _f8:
+    _f8.write(_data8 + b"%baked\n")
+os.replace(_bake8, _pdf8)                     # what Klaus's own bake does
+_rep8 = _v8._on_bridge("klaus_note_pdfjs:range:1:100:200")
+check("a bake (os.replace) does not make the open document stale (R20)",
+      "b64" in _rep8 and _b64.b64decode(_rep8["b64"]) == _data8[100:200])
+_data8 = open(_pdf8, "rb").read()
+
+_v8._web.js.clear()
+_out8 = _io.StringIO()
+with _ctxl.redirect_stdout(_out8):
+    _v8.load_path(os.path.join(_tmp8, "missing.pdf"), "missing.pdf")
+check("a missing file at load does not raise and opens nothing",
+      not any("klausPdfOpen(" in j for j in _v8._web.js)
+      and "[klaus_note] pdfjs read failed" in _out8.getvalue())
+check("...the previous snapshot is closed", not os.path.exists(_link8))
+check("...the page tears the old document down and shows the error",
+      any(j.startswith("window.klausPdfClose && window.klausPdfClose(2, ")
+          and "Could not open this PDF." in j for j in _v8._web.js))
+check("...and the generation moved on, so the old page's ranges "
+      "are refused", _v8._gen == 2
+      and _v8._on_bridge("klaus_note_pdfjs:range:1:0:10") == {"refused": True})
+
+_v8._web.js.clear()
+_max8 = pv.MAX_PDF_MB
+pv.MAX_PDF_MB = 0
+try:
+    _v8.load_path(_pdf8, "lecture.pdf")
+finally:
+    pv.MAX_PDF_MB = _max8
+check("MAX_PDF_MB still applies before anything is opened",
+      not any("klausPdfOpen(" in j for j in _v8._web.js)
+      and any(j.startswith("window.klausPdfClose && window.klausPdfClose(3, ")
+              and "too large" in j for j in _v8._web.js))
+check("...and leaves no snapshot behind", os.listdir(_read8) == [])
+
+# stale: the page aborts its transport and posts stale:<gen>
+_v8 = _viewer8()
+_v8.load_path(_pdf8, "lecture.pdf")
+_stale8 = []
+_v8.on_stale = lambda: _stale8.append(1)
+
+
+class _NowTimer:
+    @staticmethod
+    def singleShot(_ms, fn):
+        fn()
+
+
+_qt8 = pv.QTimer
+pv.QTimer = _NowTimer
+try:
+    _v8._on_bridge("klaus_note_pdfjs:stale:0")
+    check("a stale report for an old generation is ignored", _stale8 == [])
+    _v8._on_bridge("klaus_note_pdfjs:stale:1")
+    check("a stale report for the current generation calls on_stale",
+          _stale8 == [1])
+finally:
+    pv.QTimer = _qt8
+_v8._scroll_pos = 900
+_old8 = _v8._source.read_path
+_v8._web.js.clear()
+pv.PdfJsViewer._reload_current(_v8)
+check("the default on_stale reloads the current document, keeping the view",
+      _v8._gen == 2 and any('klausPdfOpen(2, ' in j
+                            and '"lecture.pdf", true);' in j for j in _v8._web.js))
+check("...and closes the previous snapshot", not os.path.exists(_old8))
+check("a stale reload keeps the scroll position", _v8._scroll_pos == 900)
+_v8._on_bridge("klaus_note_pdfjs:scroll:0")   # the teardown's scroll to the top
+check("...through the teardown's scroll-to-top report", _v8._scroll_pos == 900)
+_v8._web.js.clear()
+_v8._on_bridge("klaus_note_pdfjs:ready")
+check("...and ready scrolls back there",
+      any("klausScrollTo(900)" in j for j in _v8._web.js))
+_v8._on_bridge("klaus_note_pdfjs:scroll:40")
+check("after ready, scroll reports count again", _v8._scroll_pos == 40)
+
+_v8._web.js.clear()
+_cur8 = _v8._source.read_path
+_v8.clear_document()
+check("clear_document bumps the generation and closes the snapshot",
+      _v8._gen == 3 and _v8._source is None and not os.path.exists(_cur8))
+check("...and tears the page's document down",
+      "window.klausPdfClose && window.klausPdfClose(3);" in _v8._web.js)
+
+_v8.load_path(_pdf8, "lecture.pdf")
+_cur8 = _v8._source.read_path
+_v8.cleanup = pv.PdfJsViewer.cleanup.__get__(_v8)
+_v8._web = None
+_v8.cleanup()
+check("cleanup closes the snapshot", not os.path.exists(_cur8)
+      and _v8._source is None)
+
+_FEED8 = html.split("/* ==== feed", 1)[1].split("async function availWidth", 1)[0]
+check("the page builds a PDFDataRangeTransport",
+      "extends pdfjsLib.PDFDataRangeTransport" in _FEED8)
+check("getDocument is range-loaded with the agreed options",
+      "range: transport," in _FEED8
+      and "disableAutoFetch: true," in _FEED8
+      and "disableStream: true," in _FEED8
+      and "rangeChunkSize: 262144," in _FEED8
+      and "getDocument({ data" not in html)
+check("ranges are fetched over the bridge with a callback",
+      'pycmd("klaus_note_pdfjs:range:" + gen + ":" + begin + ":" + end, resolve)'
+      in _FEED8)
+check("a stale reply aborts the transport and posts stale:<gen>",
+      'this.abort();' in _FEED8 and 'post("stale:" + this.gen);' in _FEED8)
+check("one onDataRange per request, at the begin pdf.js asked for",
+      _FEED8.count("this.onDataRange(") == 1
+      and "this.onDataRange(begin, chunk);" in _FEED8)
+_TD8 = html.split("function teardown() {", 1)[1].split("\n}\n", 1)[0]
+check("teardown aborts the transport and destroys the document",
+      "transport.abort();" in _TD8 and "await task.destroy();" in _TD8)
+check("the whole-file feed is gone from the page",
+      "b64parts" not in html and "klausPdfChunk" not in html
+      and "klausPdfLoad" not in html)
+check("first-page timing is measured from klausPdfOpen",
+      "window.klausPdfOpen = function (gen, length, firstB64, _name, keepView) {\n"
+      "  state.t0 = performance.now();" in html)
+check("a reload keeps a user zoom instead of refitting",
+      "if (!(state.keepZoom && state.userZoomed))" in html)
+_OD8 = html.split("async function openDocument(", 1)[1].split("\n}\n", 1)[0]
+check("openDocument re-checks the generation after building placeholders",
+      "await buildPlaceholders();\n  if (gen !== state.gen) return;" in _OD8)
+_PC8 = html.split("window.klausPdfClose = function", 1)[1].split("\n};\n", 1)[0]
+check("klausPdfClose tears the document down, then shows any error where "
+      "#pages was", "state.gen = gen;" in _PC8 and "teardown()" in _PC8
+      and "window.klausPdfError(text)" in _PC8)
+
 section("live selection reported over the bridge (K-196 task 10)")
 _sel_payload = _b64.b64encode(b'{"text": "abc"}').decode()
 check("parse_bridge routes sel",
-      pv.parse_bridge("klausmate_pdfjs:sel:" + _sel_payload)
+      pv.parse_bridge("klaus_note_pdfjs:sel:" + _sel_payload)
       == ("sel", _sel_payload))
 check("decode_b64_json decodes the selection payload",
       pv.decode_b64_json(_sel_payload) == {"text": "abc"})
@@ -167,13 +445,12 @@ check("malformed input degrades to empty",
       and pv.records_from_rect_map({"x": [[1, 2, 3, 4]]}) == [])
 
 section("duck-typed viewer surface")
-# Shared PdfSidebar/poller code calls these on WHICHEVER renderer is
-# active (grep pdf_viewer.py for `self._viewer.` and `v._`). A missing
-# one is a live AttributeError — _apply_mirror crashed exactly that way
-# on 2026-08-25 (external-change poll against the pdfjs renderer).
+# PdfSidebar and its hosts call these on the viewer (grep reader_panel.py
+# for `self._viewer.` and `v.`). A missing one is a live AttributeError —
+# _apply_mirror crashed exactly that way on 2026-08-25 (external-change
+# poll against the pdfjs renderer).
 for attr in ("load_path", "set_page_texts", "load_annotations",
-             "set_document", "clear_document", "go_to_page",
-             "scroll_position", "restore_scroll_position",
+             "clear_document", "go_to_page",
              "toggle_thumbnails", "_apply_mirror",
              "_refresh_highlight_overlay", "_start_foreign_mirror"):
     check(f"PdfJsViewer has {attr}", hasattr(pv.PdfJsViewer, attr))
@@ -241,31 +518,25 @@ check("the guard is real: a webview destroyed WITHOUT cleanup crashes",
 leaked.cleanup()
 
 section("cleanup is wired into every teardown path")
-pdf_viewer = importlib.import_module("klausmate.pdf_viewer")
+reader_panel = importlib.import_module("klaus_note.reader_panel")
 check("PdfSidebar forwards cleanup to the renderer",
-      hasattr(pdf_viewer.PdfSidebar, "cleanup"))
+      hasattr(reader_panel.PdfSidebar, "cleanup"))
 check("a profile/quit sweep exists as backstop",
-      hasattr(pdf_viewer, "cleanup_all_sidebars"))
+      hasattr(reader_panel, "cleanup_all_sidebars"))
 _here = os.path.dirname(os.path.abspath(__file__))
-_src = lambda n: open(os.path.join(_here, "..", "klausmate", n)).read()
-check("editor panel close tears the sidebar down",
-      "_sidebar.cleanup()" in _src("__init__.py"))
+_src = lambda n: open(os.path.join(_here, "..", "klaus_note", n)).read()
+check("the reader host's release() tears the sidebar down, and a Browse closing with no home calls it",
+      "r.cleanup()" in _src("reader_host.py") and "reader_host.release()" in _src("library_viewer.py"))
 check("sweep registered on profile switch AND quit",
       _src("__init__.py").count("cleanup_all_sidebars") >= 2)
 
 section("vendored pdf.js present")
 here = os.path.dirname(os.path.abspath(__file__))
-pdfjs = os.path.join(here, "..", "klausmate", "web", "pdfjs")
+pdfjs = os.path.join(here, "..", "klaus_note", "web", "pdfjs")
 check("pdf.min.js vendored",
       os.path.getsize(os.path.join(pdfjs, "pdf.min.js")) > 100_000)
 check("pdf.worker.min.js vendored",
       os.path.getsize(os.path.join(pdfjs, "pdf.worker.min.js")) > 500_000)
-
-section("config default")
-import json
-cfg = json.load(open(os.path.join(here, "..", "klausmate", "config.json")))
-check("config.json defaults pdf_renderer to native",
-      cfg.get("pdf_renderer") == "native")
 
 section("bridge dialogs deferred past the webchannel call (live crash)")
 # The deferral rule itself — QTimer.singleShot(0, ...) around every
@@ -439,7 +710,7 @@ check("annobar zoom buttons ride the shared zoom API",
 
 section("K-116: text-add bridge — Python clamps, JS is never trusted")
 check("parse_bridge routes text-add",
-      pv.parse_bridge("klausmate_pdfjs:text-add:eyJ4IjogMX0=")
+      pv.parse_bridge("klaus_note_pdfjs:text-add:eyJ4IjogMX0=")
       == ("text-add", "eyJ4IjogMX0="))
 check("valid payload -> (page, x, y)",
       pv.clamp_text_add({"page": 2, "x": 10.5, "y": 20.25}, 5)
@@ -486,7 +757,7 @@ check("explicit black + 12pt — the validator backfills a missing "
 check("uuid id, empty note", len(rec["id"]) == 32 and rec["note"] == "")
 check("NO origin key — native records must not claim to be external",
       "origin" not in rec)
-_ph = importlib.import_module("klausmate.pdf_handler")
+_ph = importlib.import_module("klaus_note.pdf_handler")
 check("pdf_handler validation round-trips the record UNCHANGED",
       _ph._validate_highlight(rec) == rec)
 _w1 = pv.text_box_size("abc")
@@ -821,7 +1092,7 @@ check("anything that is not a hex colour falls back, never lands in "
 check("a chosen ink reaches the record",
       pv.records_from_rect_map(
           {"0": [[1, 2, 3, 4]]}, color="#8ae08c")[0]["color"] == "#8ae08c")
-_theme149 = importlib.import_module("klausmate.theme")
+_theme149 = importlib.import_module("klaus_note.theme")
 check("the swatch palette lives in theme.py, not in the page",
       len(_theme149.HIGHLIGHT_INKS) == 5)
 check("yellow stays first and IS the native default — the two "
@@ -892,7 +1163,7 @@ check("the button lives INSIDE #annobar (the bar every host already "
 section("K-149: merging happens at MINT time, never in storage")
 # pdf_handler collapses duplicates ONLY for origin=="external" records
 # (Preview autosaves the same box repeatedly while you type), and
-# test_klausmate pins that overlapping NATIVE highlights are never
+# test_klaus_note pins that overlapping NATIVE highlights are never
 # collapsed there — K-081's architecture. So the second-drag merge
 # lives here, in the mint path.
 _YEL, _GRN = "#fadc50", "#8ae08c"
@@ -1031,7 +1302,7 @@ check("pdf.js really does build those wrappers (the rule is not "
       "guarding a case that cannot happen)",
       'classList.add("markedContent")'
       in open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "..", "klausmate", "web", "pdfjs",
+                           "..", "klaus_note", "web", "pdfjs",
                            "pdf.min.js"), encoding="utf-8").read())
 
 section("K-149: a non-yellow ink survives the bake (end to end)")
@@ -1042,7 +1313,7 @@ section("K-149: a non-yellow ink survives the bake (end to end)")
 # does not ship — shim it BEFORE pdf_handler's guarded import so
 # BAKE_AVAILABLE matches the Anki runtime (py3.13 has it) instead of
 # silently SKIPPING the one check that proves the ink reaches the file.
-# Same shim as test_klausmate.py's, deliberately local: it has to run
+# Same shim as test_klaus_note.py's, deliberately local: it has to run
 # before this file's first pdf_handler import, and pdfjs_viewer only
 # ever imports pdf_handler lazily, inside functions.
 try:
@@ -1064,7 +1335,7 @@ except ImportError:
 
     sys.modules["typing_extensions"] = _TEModule149("typing_extensions")
 
-_ph149 = importlib.import_module("klausmate.pdf_handler")
+_ph149 = importlib.import_module("klaus_note.pdf_handler")
 import tempfile as _tf149
 _uf149 = _tf149.mkdtemp(prefix="klaus_k149_")
 if not _ph149.BAKE_AVAILABLE:
@@ -1218,9 +1489,10 @@ section("K-150: the editor outlives every layer rebuild")
 # these pins hold that arrangement in place.
 _RAL150 = _H150.split("function renderAnnotLayers(", 1)[1].split("\n}\n", 1)[0]
 _TDP150 = _H150.split("function teardownPage(", 1)[1].split("\n}\n", 1)[0]
-check("renderAnnotLayers still destroys exactly .hlLayer/.noteLayer "
-      "on every pass — the reason the editor cannot live in either",
-      'for (const cls of [".hlLayer", ".noteLayer"]) {' in _RAL150
+check("renderAnnotLayers still destroys exactly .hlLayer/.noteLayer/"
+      ".cardLayer on every pass — the reason the editor cannot live in "
+      "any of them",
+      'for (const cls of [".hlLayer", ".noteLayer", ".cardLayer"]) {' in _RAL150
       and "div.removeChild(old)" in _RAL150)
 check("...and it is still reached from all four sites plus the "
       "teardown, so this is not a hazard that quietly went away",
@@ -1280,18 +1552,49 @@ check("its layout width and font size are POINTS — the transform "
       "carries them to the current zoom",
       'te.el.style.width = box[0] + "px";' in _H150
       and 'body.style.fontSize = size + "px";   // POINTS' in _H150)
-check("the frame takes NO layout space (an outline, and a grip offset "
+check("the frame takes NO layout space (box-shadows, and a grip offset "
       "above it), so the glyphs sit exactly where the committed "
       "record draws them and nothing shifts on commit",
-      "outline: 1px solid var(--accent); outline-offset: 3px;" in _H150
-      and "padding: 0; border: none; background: transparent;" in _H150
-      and "top: -11px;" in _H150)
-check("the page carries textBoxSize with the SAME constants as "
-      "text_box_size, so the box you type in is the box you get "
-      "(mergeRects' two-implementations arrangement)",
-      "function textBoxSize(text, size, rows)" in _H150
-      and "* 0.6 + 8, 60), 480)" in _H150
-      and "* 1.35 + 6, size * 1.5), 720)" in _H150)
+      "box-shadow: 0 0 0 calc(1px * var(--k, 1)) var(--accent);" in _H150
+      and "inset: calc(-3px * var(--k, 1));" in _H150
+      and "padding: 0; border: none; background: transparent; outline: none;"
+      in _H150
+      and "top: calc(-11px * var(--k, 1));" in _H150)
+# 2026-09-30 text-box fix: the page used to carry textBoxSize, a mirror
+# of text_box_size's 0.6-em guess. It sized a one-line box several rows
+# tall and wider than its text, and the commit's measured rows could
+# only RAISE Python's copy, so the box jumped on close. The page now
+# measures in the browser, in the same font, and sends what it measured.
+# What the editor DOES — sizes live from measurement, sends the measured
+# w/h, keeps a stored box until the text or size changes, sets
+# --k = 1/scale — is run for real under node by
+# tests/pdfjs_textbox_test.js (from test_pdfjs_pure.py). Only what node
+# cannot run stays here: the CSS, and that the old estimate is gone.
+check("the 0.6-em estimate is gone from the page",
+      "function textBoxSize(" not in _H150
+      and "* 0.6 + 8" not in _H150 and "* 1.35 + 6" not in _H150)
+_TMR = _H150.split("#textMeasure {", 1)[1].split("}", 1)[0] if "#textMeasure {" in _H150 else ""
+_HLT = _H150.split(".hlLayer .hltext {", 1)[1].split("}", 1)[0]
+_EBD = _H150.split(".editLayer .editBody {", 1)[1].split("}", 1)[0]
+check("the measuring twin, the editor and the committed .hltext share "
+      "font, line-height and wrapping, so all three break lines alike",
+      all("font-family: Helvetica, Arial, sans-serif;" in r
+          and "line-height: 1.15;" in r and "white-space: pre-wrap;" in r
+          and "overflow-wrap: break-word;" in r
+          for r in (_TMR, _HLT, _EBD)), repr((_TMR, _HLT, _EBD)))
+check("the twin is unscaled (its px are page points) and invisible",
+      "visibility: hidden;" in _TMR and "width: max-content;" in _TMR
+      and "max-width: 480px;" in _TMR and "transform" not in _TMR)
+check("the page's box caps are Python's",
+      "const TEXT_BOX_MAX_W = 480;" in _H150
+      and "const TEXT_BOX_MAX_H = 720;" in _H150
+      and pv.TEXT_BOX_MAX_W == 480.0 and pv.TEXT_BOX_MAX_H == 720.0)
+check("the committed .hltext font scales WITH the page — no 6px floor, "
+      "which made the glyphs outgrow a measured box below 50% zoom "
+      "(fit-width in a narrow dock is ~45%) so the text wrapped and "
+      "clipped",
+      't.style.fontSize = (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) * s + "px";'
+      in _H150 and "Math.max(6," not in _H150)
 check("and sanitizeEditText mirroring sanitize_text, on the same cap",
       "function sanitizeEditText(value)" in _H150
       and "MAX_TEXT_CHARS = 4000" in _H150 and pv.MAX_TEXT_CHARS == 4000)
@@ -1328,7 +1631,7 @@ check("double-clicking an existing box re-opens it, gated OFF the "
       and _H150.find("if (!(ev.metaKey || ev.ctrlKey)) return;")
       < _H150.find("if (ev.metaKey || ev.ctrlKey || state.textEdit) return;"))
 check("parse_bridge routes text-update",
-      pv.parse_bridge("klausmate_pdfjs:text-update:e30=")
+      pv.parse_bridge("klaus_note_pdfjs:text-update:e30=")
       == ("text-update", "e30="))
 
 section("K-150: the body is untrusted input now")
@@ -1364,8 +1667,375 @@ check("the page's measured row count raises the estimate and never "
 check("an untrusted row count degrades to the formula alone",
       pv.text_box_size("hi", 12.0, -5) == pv.text_box_size("hi", 12.0)
       and pv.text_box_size("hi", 12.0, 10 ** 9)[1] == 720.0)
-check("the commit sends its measured rows",
-      "rows: rows," in _H150 and "te.body.scrollHeight" in _H150)
+_ELR = _H150.split("  .editLayer {", 1)[1].split("}", 1)[0]
+_RING = _H150.split(".editLayer::after {", 1)[1].split("}", 1)[0] \
+    if ".editLayer::after {" in _H150 else ""
+_GRIP = _H150.split(".editLayer .editGrip {", 1)[1].split("}", 1)[0]
+check("the frame is CHROME: grip, ring and halo are all multiplied by "
+      "--k (which the node test shows positionTextEdit sets to "
+      "1 / state.scale), so they stay the same screen size at any zoom "
+      "(a 6 px grip was an 18 px bar at 300%)",
+      "calc(6px * var(--k, 1)) var(--accent-selection)" in _ELR
+      and "calc(1px * var(--k, 1)) var(--accent)" in _RING
+      and "calc(-3px * var(--k, 1))" in _RING
+      and all(f"calc({v} * var(--k, 1))" in _GRIP
+              for v in ("-11px", "6px", "3px")))
+check("...and the ring is NOT an outline: Blink snaps an outline's "
+      "width up to 1 layout px before scale(), so 1/3 px drew 3 px "
+      "wide at 300% (measured in headless Chrome)",
+      "outline: none;" in _ELR and "outline:" not in _RING
+      and "outline-width" not in _H150)
+
+section("2026-09-30: the bridge stores the MEASURED box")
+check("validate_text_box passes a measured box through",
+      pv.validate_text_box(58.5, 14) == (58.5, 14.0))
+check("...caps an absurd one, and refuses a sliver (below one line)",
+      pv.validate_text_box(1e9, 1e9) == (pv.TEXT_BOX_MAX_W, pv.TEXT_BOX_MAX_H)
+      and pv.validate_text_box(0.25, 0.5) is None)
+check("...and REJECTS junk: absent, bools, strings, non-finite, zero "
+      "and negative sizes all mean 'not measured'",
+      all(pv.validate_text_box(w, h) is None for w, h in (
+          (None, None), (None, 14), (58, None), (True, 14), (58, False),
+          ("58", 14), (float("nan"), 14), (58, float("inf")),
+          (0, 14), (58, -1), ([1], 14))))
+check("make_text_record stores a measured box as-is",
+      pv.make_text_record(0, 5.0, 6.0, "hi", box=(20.0, 14.0))["rects"]
+      == [[5.0, 6.0, 20.0, 14.0]])
+check("...and falls back to text_box_size without one",
+      pv.make_text_record(0, 5.0, 6.0, "hi")["rects"]
+      == [[5.0, 6.0] + list(pv.text_box_size("hi"))])
+
+
+def _b64(obj):
+    import json as _json
+    return base64.b64encode(_json.dumps(obj).encode()).decode()
+
+
+class _FakeViewer:
+    """The handful of attributes the text handlers touch — called
+    directly, never through a Qt slot (PyQt6 aborts on a slot that
+    raises)."""
+
+    def __init__(self, highlights=None, save_ok=True):
+        self._page_count = 3
+        self._highlights = list(highlights or [])
+        self.saves = self.pushes = 0
+        self._save_ok = save_ok
+        self._save_failed = False
+
+    def _sync_marks(self):
+        pass
+
+    def _save_annotations(self):
+        # The real one sets _save_failed from save_annotations' result
+        # and toasts the failure itself.
+        self.saves += 1
+        self._save_failed = not self._save_ok
+
+    def _push_annotations(self):
+        self.pushes += 1
+
+
+_fv = _FakeViewer()
+pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+    {"page": 1, "x": 10, "y": 20, "text": "Hello world", "size": 12,
+     "color": "#000000", "w": 60, "h": 14}))
+check("text-add stores the page's measured w/h",
+      [h["rects"] for h in _fv._highlights] == [[[10.0, 20.0, 60.0, 14.0]]]
+      and _fv.saves == 1, repr(_fv._highlights))
+_fv = _FakeViewer()
+pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+    {"page": 1, "x": 10, "y": 20, "text": "Hello world", "size": 12}))
+check("text-add without w/h (an older payload) falls back to "
+      "text_box_size",
+      _fv._highlights[0]["rects"][0][2:]
+      == list(pv.text_box_size("Hello world", 12.0)))
+_fv = _FakeViewer()
+pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+    {"page": 1, "x": 10, "y": 20, "text": "Hello world", "size": 12,
+     "w": "wide", "h": -3}))
+pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+    {"page": 1, "x": 10, "y": 20, "text": "Hello", "size": 12,
+     "w": 1e12, "h": 1e12}))
+check("text-add rejects a junk box (formula instead) and clamps an "
+      "absurd one",
+      _fv._highlights[0]["rects"][0][2:]
+      == list(pv.text_box_size("Hello world", 12.0))
+      and _fv._highlights[1]["rects"][0][2:]
+      == [pv.TEXT_BOX_MAX_W, pv.TEXT_BOX_MAX_H], repr(_fv._highlights))
+
+_old_rec = dict(pv.make_text_record(0, 10.0, 20.0, "hello"),
+                rects=[[10.0, 20.0, 99.0, 22.2]])
+_fv = _FakeViewer([_old_rec])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _old_rec["id"], "x": 10, "y": 20, "text": "hello there",
+     "color": "#000000", "size": 12, "w": 57, "h": 14}))
+check("text-update stores the measured w/h for edited text",
+      _fv._highlights[0]["rects"] == [[10.0, 20.0, 57.0, 14.0]]
+      and _fv.saves == 1 and _fv.pushes == 1, repr(_fv._highlights))
+_fv = _FakeViewer([_old_rec])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _old_rec["id"], "x": 10, "y": 20, "text": "hello there",
+     "color": "#000000", "size": 12}))
+check("text-update without w/h falls back to text_box_size",
+      _fv._highlights[0]["rects"][0][2:]
+      == list(pv.text_box_size("hello there", 12.0)))
+_fv = _FakeViewer([_old_rec])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _old_rec["id"], "x": 10, "y": 20, "text": "hello",
+     "color": "#000000", "size": 12, "w": 31, "h": 14}))
+check("an OLD record re-committed with the same text and size keeps "
+      "its stored box — no re-measure, no save, still a push",
+      _fv._highlights[0]["rects"] == [[10.0, 20.0, 99.0, 22.2]]
+      and _fv.saves == 0 and _fv.pushes == 1, repr(_fv._highlights))
+_fv = _FakeViewer([_old_rec])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _old_rec["id"], "x": 30, "y": 40, "text": "hello",
+     "color": "#000000", "size": 12, "w": 31, "h": 14}))
+check("...and a pure MOVE keeps the stored size too",
+      _fv._highlights[0]["rects"] == [[30.0, 40.0, 99.0, 22.2]])
+_fv = _FakeViewer([_old_rec])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _old_rec["id"], "x": 10, "y": 20, "text": "hello",
+     "color": "#000000", "size": 18, "w": 45, "h": 21}))
+check("a new SIZE is a re-measure",
+      _fv._highlights[0]["rects"] == [[10.0, 20.0, 45.0, 21.0]])
+
+# The bake reads rects[0] like .hltext does, so a measured box reaches
+# the PDF's FreeText /Rect — OUTSET by the 2pt PDFKit insets FreeText
+# text on every side. Rendered through PDFKit (Preview's engine), the
+# bare measured box wrapped "Hello world" onto a clipped second line
+# and cut 18pt descenders; the old estimate's +8pt slack had hidden
+# the inset. Outset, the text fits and lands where the reader draws it
+# (the reader has no inset). Proved on a real bake into a temp
+# user_files (never klaus_note/user_files).
+import tempfile as _tf930
+_ph930 = importlib.import_module("klaus_note.pdf_handler")
+_uf930 = _tf930.mkdtemp(prefix="klaus_textbox_bake_")
+_root930 = _ph930._live_library_root
+_ph930._live_library_root = lambda: None   # never the real Library
+try:
+    from pypdf import PdfReader as _R930, PdfWriter as _W930
+    os.makedirs(os.path.join(_uf930, "pdfs"))
+    _w930 = _W930()
+    _w930.add_blank_page(width=612, height=792)
+    with open(os.path.join(_uf930, "pdfs", "Box.pdf"), "wb") as _f930:
+        _w930.write(_f930)
+    _rec930 = pv.make_text_record(0, 100.0, 200.0, "Hello world",
+                                  box=(61.0, 14.0))
+    _ph930.save_annotations(_uf930, "Box", [_rec930])
+    _ok930 = _ph930.bake_annotations(_uf930, "Box")
+    _ft930 = [a.get_object() for a in (_R930(os.path.join(
+        _uf930, "pdfs", "Box.pdf")).pages[0].get("/Annots") or [])
+        if a.get_object().get("/Subtype") == "/FreeText"]
+    check("the baked FreeText /Rect is the measured box outset by "
+          "FREETEXT_INSET_PT on every side (Qt top-left 100,200 61x14 "
+          "-> PDF 98,576 .. 163,594)",
+          _ok930 and len(_ft930) == 1
+          and getattr(_ph930, "FREETEXT_INSET_PT", None) == 2.0
+          and [round(float(v), 2) for v in _ft930[0]["/Rect"]]
+          == [98.0, 576.0, 163.0, 594.0],
+          repr([list(o.get("/Rect")) for o in _ft930]))
+    check("...and the stored record keeps the measured box: the outset "
+          "is applied at bake time only, so it cannot compound",
+          _ph930.load_annotations(_uf930, "Box")[0]["rects"]
+          == [[100.0, 200.0, 61.0, 14.0]])
+
+    def _rects930():
+        return [[round(float(v), 2) for v in a.get_object()["/Rect"]]
+                for a in (_R930(os.path.join(_uf930, "pdfs", "Box.pdf"))
+                          .pages[0].get("/Annots") or [])
+                if a.get_object().get("/Subtype") == "/FreeText"]
+
+    # Round 1 (R55 I2): the outset must survive every round trip the
+    # file takes, without growing and without touching the record.
+    _ok930b = _ph930.bake_annotations(_uf930, "Box")
+    _ph930.bake_annotations(_uf930, "Box")
+    check("a RE-bake (twice) writes the same /Rect — the 2pt outset is "
+          "applied to the record, never to the previous bake's /Rect",
+          _ok930b and _rects930() == [[98.0, 576.0, 163.0, 594.0]],
+          repr(_rects930()))
+    check("...and leaves the stored record exactly as it was",
+          _ph930.load_annotations(_uf930, "Box") == [_rec930],
+          repr(_ph930.load_annotations(_uf930, "Box")))
+    _scan930 = _ph930.scan_working_annotations(_uf930, "Box") or {}
+    check("a scan after the bake finds NOTHING foreign (the outset box "
+          "is a Klaus mark, recognised by /NM, never re-adopted) and "
+          "sees the record's id as present",
+          _scan930.get("foreign") == []
+          and _rec930["id"] in set(_scan930.get("marked_ids") or ()),
+          repr(_scan930))
+    _ph930.mirror_foreign_annotations(_uf930, "Box", _scan930)
+    check("...and mirroring that scan leaves the stored record unchanged",
+          _ph930.load_annotations(_uf930, "Box") == [_rec930],
+          repr(_ph930.load_annotations(_uf930, "Box")))
+    _ph930.save_annotations(_uf930, "Box", [])
+    _ok930c = _ph930.bake_annotations(_uf930, "Box")
+    _scan930c = _ph930.scan_working_annotations(_uf930, "Box") or {}
+    check("an UN-bake (no records) leaves no FreeText behind, and its "
+          "scan finds nothing foreign to adopt back",
+          _ok930c and _rects930() == [] and _scan930c.get("foreign") == [],
+          repr((_rects930(), _scan930c)))
+    # A new mark gets a fresh id (re-adding the SAME id after an
+    # un-bake is the K-085 resurrection guard's case, not this one).
+    _rec930d = dict(_rec930, id="f" * 32)
+    _ph930.save_annotations(_uf930, "Box", [_rec930d])
+    _ph930.bake_annotations(_uf930, "Box")
+    check("a box added after the un-bake bakes the SAME /Rect and keeps "
+          "its record as stored",
+          _rects930() == [[98.0, 576.0, 163.0, 594.0]]
+          and _ph930.load_annotations(_uf930, "Box") == [_rec930d],
+          repr(_rects930()))
+finally:
+    _ph930._live_library_root = _root930
+    import shutil as _sh930
+    _sh930.rmtree(_uf930, ignore_errors=True)
+section("text-box fix round 1: a huge JSON number never crashes a slot")
+# JSON has no size limit on integers and Python parses 10**400 as an
+# int, so it passed every isinstance(int) check and then float() raised
+# OverflowError — inside a bridge slot, where PyQt6 aborts the process.
+_HUGE = (10 ** 400, 10 ** 4000)
+_r1base = pv.make_text_record(1, 10.0, 20.0, "hello")
+
+
+def _no_raise(f):
+    try:
+        return True, f()
+    except Exception as exc:  # the test reports instead of aborting
+        return False, exc
+
+
+for _hv in _HUGE:
+    _tag = "10**%d" % (len(str(_hv)) - 1)
+    _ok, _res = _no_raise(lambda: pv.validate_text_box(_hv, 14))
+    check(f"validate_text_box refuses ({_tag}, 14)", _ok and _res is None,
+          repr(_res))
+    _ok, _res = _no_raise(lambda: pv.validate_text_box(_hv, _hv))
+    check(f"validate_text_box refuses ({_tag}, {_tag})",
+          _ok and _res is None, repr(_res))
+    _ok, _res = _no_raise(lambda: pv.validate_text_size(_hv))
+    check(f"validate_text_size falls back on {_tag}",
+          _ok and _res == pv.TEXT_SIZE_DEFAULT, repr(_res))
+    _ok, _res = _no_raise(lambda: pv._validate_rows(_hv))
+    check(f"_validate_rows reads {_tag} as 'not measured'",
+          _ok and _res == 0, repr(_res))
+    _ok, _res = _no_raise(
+        lambda: pv.clamp_text_add({"page": 0, "x": _hv, "y": 1}, 1))
+    check(f"clamp_text_add refuses x={_tag}", _ok and _res is None,
+          repr(_res))
+    _ok, _res = _no_raise(lambda: pv.apply_text_update(
+        [_r1base], {"id": _r1base["id"], "text": "edited",
+                     "x": _hv, "y": _hv, "w": _hv, "h": _hv,
+                     "size": _hv, "rows": _hv}))
+    check(f"apply_text_update with every number {_tag}: keeps the anchor, "
+          "default size, estimated box",
+          _ok and _res[0][0]["rects"]
+          == [[10.0, 20.0] + list(pv.text_box_size("edited", 12.0))],
+          repr(_res))
+    _fv = _FakeViewer()
+    _ok, _res = _no_raise(lambda: pv.PdfJsViewer._bridge_text_add(
+        _fv, _b64({"page": 0, "x": 5, "y": 5, "text": "hi",
+                   "w": _hv, "h": _hv, "size": _hv})))
+    check(f"_bridge_text_add with w/h/size {_tag} does not raise and "
+          "stores the estimate",
+          _ok and len(_fv._highlights) == 1
+          and _fv._highlights[0]["rects"][0][2:]
+          == list(pv.text_box_size("hi", 12.0)), repr(_res))
+    _fv = _FakeViewer()
+    _ok, _res = _no_raise(lambda: pv.PdfJsViewer._bridge_text_add(
+        _fv, _b64({"page": 0, "x": _hv, "y": 5, "text": "hi"})))
+    check(f"_bridge_text_add with x={_tag} does not raise and mints "
+          "nothing", _ok and _fv._highlights == [], repr(_res))
+    _fv = _FakeViewer([_r1base])
+    _ok, _res = _no_raise(lambda: pv.PdfJsViewer._bridge_text_update(
+        _fv, _b64({"id": _r1base["id"], "text": "edited", "x": _hv,
+                   "y": _hv, "w": _hv, "h": _hv, "size": _hv})))
+    check(f"_bridge_text_update with every number {_tag} does not raise",
+          _ok and _fv._highlights[0]["text"] == "edited", repr(_res))
+    _fv = _FakeViewer()
+    _ok, _res = _no_raise(lambda: pv.PdfJsViewer._bridge_hl_add(
+        _fv, _b64({"pages": {"0": [[_hv, 1, 2, 3], [10, 10, 50, 12]]},
+                   "color": "#fadc50"})))
+    check(f"_bridge_hl_add with a {_tag} rect does not raise and keeps "
+          "the good rect",
+          _ok and [h["rects"] for h in _fv._highlights]
+          == [[[10.0, 10.0, 50.0, 12.0]]], repr(_res))
+
+section("text-box fix round 1: a measured box is at least one line")
+check("a box narrower than 0.2 em or shorter than 1.1 lines of its own "
+      "font size is refused (falls back to the estimate)",
+      pv.validate_text_box(1, 1, 12.0) is None
+      and pv.validate_text_box(2, 14, 12.0) is None
+      and pv.validate_text_box(61, 13, 12.0) is None
+      and pv.validate_text_box(61, 20, 24.0) is None)
+check("...while real measured boxes pass: 'i' at 12 pt (4 x 14), "
+      "'Hello world' (61 x 14), 'i' at 96 pt (23 x 111)",
+      pv.validate_text_box(4, 14, 12.0) == (4.0, 14.0)
+      and pv.validate_text_box(61, 14, 12.0) == (61.0, 14.0)
+      and pv.validate_text_box(23, 111, 96.0) == (23.0, 111.0))
+_fv = _FakeViewer()
+pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+    {"page": 0, "x": 5, "y": 5, "text": "Hello world", "size": 12,
+     "w": 1, "h": 1}))
+check("text-add with a 1x1 'measurement' stores the estimate, not a "
+      "1x1 box",
+      _fv._highlights[0]["rects"][0][2:]
+      == list(pv.text_box_size("Hello world", 12.0)))
+_fv = _FakeViewer([_r1base])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _r1base["id"], "text": "Hello there", "size": 24,
+     "w": 70, "h": 14}))
+check("text-update floors against the NEW size: a 14 pt-tall box for "
+      "24 pt text is refused",
+      _fv._highlights[0]["rects"][0][2:]
+      == list(pv.text_box_size("Hello there", 24.0)))
+
+section("text-box fix round 1: a size-less record is 12 pt everywhere")
+_nosize = {"id": "ns1", "kind": "text", "page": 0, "text": "Preview note",
+           "note": "", "color": "#000000", "origin": "external",
+           "rects": [[1.0, 2.0, 80.0, 20.0]]}
+check("re-committing a size-less (adopted) record at the 12 pt the page "
+      "opens it at changes nothing: no save, box kept",
+      pv.apply_text_update([_nosize], {"id": "ns1", "text": "Preview note",
+                                       "color": "#000000", "size": 12,
+                                       "w": 80, "h": 20})[1] is False)
+_out_ns = pv.apply_text_update([_nosize], {
+    "id": "ns1", "text": "Preview note", "color": "#000000", "size": 18,
+    "w": 110, "h": 21})[0][0]
+check("...and a real size change re-measures it",
+      _out_ns["size"] == 18.0 and _out_ns["rects"] == [[1.0, 2.0, 110.0, 21.0]],
+      repr(_out_ns))
+check("the page's default text size IS Python's (the size a size-less "
+      "record is drawn, edited and stored at)",
+      "const TEXT_SIZE_DEFAULT = 12;" in _H150
+      and pv.TEXT_SIZE_DEFAULT == 12.0
+      and 't.style.fontSize = (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) * s + "px";'
+      in _H150)
+
+section("text-box fix round 1: a failed save shows ONE toast")
+_toasts = []
+_tooltip_was = pv.tooltip
+pv.tooltip = _toasts.append
+try:
+    _fv = _FakeViewer(save_ok=False)
+    pv.PdfJsViewer._bridge_hl_add(_fv, _b64(
+        {"pages": {"0": [[10, 10, 50, 12]]}, "color": "#fadc50"}))
+    pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+        {"page": 0, "x": 5, "y": 5, "text": "hi", "w": 11, "h": 14}))
+    check("a failed write does not ALSO toast 'highlight added' / 'text "
+          "added' (the save already toasted its failure)",
+          _toasts == [], repr(_toasts))
+    _fv = _FakeViewer()
+    pv.PdfJsViewer._bridge_hl_add(_fv, _b64(
+        {"pages": {"0": [[10, 10, 50, 12]]}, "color": "#fadc50"}))
+    pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+        {"page": 0, "x": 5, "y": 5, "text": "hi", "w": 11, "h": 14}))
+    check("a successful write still confirms both",
+          _toasts == ["KlausNote: highlight added", "KlausNote: text added"],
+          repr(_toasts))
+finally:
+    pv.tooltip = _tooltip_was
+
 _KEYS150 = {"id", "kind", "page", "rects", "text", "note", "color", "size"}
 check("a picked ink and size are written EXPLICITLY, and the KEY SET "
       "is still closed: the editor's frame is chrome, not record "
@@ -1374,9 +2044,12 @@ check("a picked ink and size are written EXPLICITLY, and the KEY SET "
       set(pv.make_text_record(0, 0, 0, "x", color="#137bbb", size=18.0))
       == _KEYS150)
 _PH150 = _src("pdf_handler.py")
-check("...and the bake still passes None for border and background, "
-      "so the box on screen and the baked PDF agree by construction",
-      "border_color=None," in _PH150 and "background_color=None," in _PH150)
+check("...and the bake still passes None for border, and None for "
+      "background unless the record is a note card (filled with its ink), "
+      "so a text box on screen and in the baked PDF agree by construction",
+      "border_color=None," in _PH150
+      and 'background_color=_bake_color(fill, "fadc50") if fill else None,' in _PH150
+      and "_freetext(hl.get(\"text\"), box, ox, oy, ph,\n                                     hl.get(\"color\"), hl.get(\"size\"))" in _PH150)
 
 section("K-150: re-editing an existing box")
 _base150 = pv.make_text_record(1, 10.0, 20.0, "hello")
@@ -1690,9 +2363,9 @@ for _n in ("QApplication", "QImage", "QInputDialog", "QLabel",
     setattr(shim, _n, _Any)
 shim.Qt = _Any()
 sys.modules["aqt.qt"] = shim
-sys.modules.pop("klausmate.pdfjs_viewer", None)
+sys.modules.pop("klaus_note.pdfjs_viewer", None)
 
-pv = importlib.import_module("klausmate.pdfjs_viewer")
+pv = importlib.import_module("klaus_note.pdfjs_viewer")
 
 # Importing is most of the point, but on its own it would also pass if the
 # probe simply failed to reproduce a partial surface. So prove the module
@@ -1702,11 +2375,11 @@ assert pv.QWidget is None, "probe did not reproduce a partial aqt.qt"
 assert pv.PDFJS_AVAILABLE is False, pv.PDFJS_AVAILABLE
 assert pv.PdfJsViewer.__bases__ == (object,), pv.PdfJsViewer.__bases__
 
-# The six aqt-free helpers the card names, each actually exercised.
-assert pv.renderer_from_config({"pdf_renderer": "pdfjs"}) == "pdfjs"
-assert pv.chunk_b64(b"klaus") == ["a2xhdXM="]
-assert "__ADDON__" not in pv.build_page_html("klausmate", night=False)
-assert pv.parse_bridge("klausmate_pdfjs:hl-add:a:b") == ("hl-add", "a:b")
+# The aqt-free helpers the card names, each actually exercised (the
+# renderer-flag reader among them is gone with the setting).
+assert pv.handle_range("1:0", None, 1) == {"refused": True}
+assert "__ADDON__" not in pv.build_page_html("klaus_note", night=False)
+assert pv.parse_bridge("klaus_note_pdfjs:hl-add:a:b") == ("hl-add", "a:b")
 assert pv.decode_b64_json("eyJhIjogMX0=") == {"a": 1}
 assert pv.records_from_rect_map({"0": [[1, 2, 3, 4]]})[0]["page"] == 0
 
@@ -1751,7 +2424,7 @@ import glob as _glob164
 
 def _ctor_sites164():
     out = []
-    for path in sorted(_glob164.glob("klausmate/**/*.py", recursive=True)):
+    for path in sorted(_glob164.glob("klaus_note/**/*.py", recursive=True)):
         rel = path.replace(os.sep, "/")
         if "/vendor/" in rel:
             continue
@@ -1768,184 +2441,761 @@ def _ctor_sites164():
 _sites164 = _ctor_sites164()
 check("exactly one module builds a PdfJsViewer — a second one would need "
       "its own copy of the gate: %s" % (_sites164,),
-      len(_sites164) == 1 and _sites164[0].startswith("klausmate/pdf_viewer.py:"))
+      len(_sites164) == 1 and _sites164[0].startswith("klaus_note/reader_panel.py:"))
 
-_PV164 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                      "..", "klausmate", "pdf_viewer.py")
-with open(_PV164, encoding="utf-8") as _fh164:
-    _pvtree164 = _ast164.parse(_fh164.read())
+_RP164 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "..", "klaus_note", "reader_panel.py")
+with open(_RP164, encoding="utf-8") as _fh164:
+    _rptree164 = _ast164.parse(_fh164.read())
 
 
-def _renderer_assigns164(node, guarded=False, out=None):
-    """(lineno, source of the value, guarded-by-PDFJS_AVAILABLE?) for every
-    ``self._renderer = ...`` in pdf_viewer.py.
-
-    Checks the node itself BEFORE recursing: an earlier draft only walked
-    children, so an assignment sitting directly in an ``if`` body — which
-    is the only interesting one here — was never looked at, and the whole
-    check went quietly vacuous. The ``len(...) >= 2`` guard below is what
-    caught that.
-    """
+def _guarded_builds164(node, guarded=False, out=None):
+    """(lineno, guarded-by-PDFJS_AVAILABLE?) for every ``PdfJsViewer(...)``
+    call in reader_panel.py. Only an ``if`` BODY is guarded by its test;
+    the else leg is not."""
     out = [] if out is None else out
     if isinstance(node, _ast164.If):
         inner = "PDFJS_AVAILABLE" in _ast164.unparse(node.test) or guarded
         for sub in node.body:
-            _renderer_assigns164(sub, inner, out)
-        for sub in node.orelse:           # the else leg is NOT guarded
-            _renderer_assigns164(sub, guarded, out)
+            _guarded_builds164(sub, inner, out)
+        for sub in node.orelse:
+            _guarded_builds164(sub, guarded, out)
         return out
-    if isinstance(node, _ast164.Assign):
-        for tgt in node.targets:
-            if isinstance(tgt, _ast164.Attribute) and tgt.attr == "_renderer":
-                out.append((node.lineno,
-                            _ast164.unparse(node.value), guarded))
+    if (isinstance(node, _ast164.Call)
+            and _ast164.unparse(node.func).split(".")[-1] == "PdfJsViewer"):
+        out.append((node.lineno, guarded))
     for child in _ast164.iter_child_nodes(node):
-        _renderer_assigns164(child, guarded, out)
+        _guarded_builds164(child, guarded, out)
     return out
 
 
-_assigns164 = _renderer_assigns164(_pvtree164)
-check("the renderer flag's assignments were actually found — none would "
-      "make the gate check below vacuous", len(_assigns164) >= 2)
-check("nothing sets the renderer to anything but 'native' outside an "
-      "``if ... PDFJS_AVAILABLE`` — that is the whole gate, and the "
-      "build site downstream tests only the flag it sets: %s"
-      % ([(ln, v) for ln, v, g in _assigns164 if v != "'native'" and not g],),
-      not [1 for _ln, _v, _g in _assigns164 if _v != "'native'" and not _g])
+_builds164 = _guarded_builds164(_rptree164)
+check("the PdfJsViewer build in reader_panel.py was actually found — none "
+      "would make the gate check below vacuous", len(_builds164) == 1)
+check("...and it sits inside an ``if ... PDFJS_AVAILABLE`` body: that is "
+      "the whole gate (PDF reader 5/5: no native fallback, the else leg "
+      "is the unavailable label): %s" % (_builds164,),
+      all(g for _ln, g in _builds164))
 
-section("K-154: native renderer — a keyboard binding reaches "
-        "toggle_thumbnails, the same way Ctrl+F reaches the find bar")
-# The pdfjs half of K-154 lives above (the annobar button); the native
-# renderer's own affordance is a keyboard shortcut, claimed the same
-# way every other viewer combo already is (_match_shortcut_combo /
-# _dispatch_shortcut_combo, pdf_viewer.py) rather than a new mechanism.
-# This needs REAL Qt.Key/KeyboardModifier enums — the plain aqt stub's
-# Qt is a permissive _Dummy whose attribute lookups all collapse to the
-# same object (see anki_stubs.py), so Key_T and Key_F would compare
-# equal and the test would prove nothing. klausmate.pdf_viewer is
-# therefore imported here with REAL PyQt6 behind aqt.qt (test_drive.py's
-# K-117 pattern) — the module is not needed anywhere else in this
-# pdfjs-focused file, so swapping the stub this late costs nothing.
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+section("PDF reader 2/5: trackpad pinch and smart zoom go to the PDF, "
+        "never the whole page")
+# The page cancels every ctrl-wheel, yet a pinch still zoomed the WHOLE
+# page (gray background too): Chromium pinch-zooms the visual viewport
+# for gestures the page never sees as a cancellable wheel — one landing
+# before the page script attached, or the macOS two-finger double-tap.
+# So Qt takes the native gesture before Chromium does and hands it to
+# the page's own zoom.
+import math as _m10
+from types import SimpleNamespace as _NS10
+
+from PyQt6.QtCore import QObject as _QObj10, QPointF as _QPF10, Qt as _Qt10
+from PyQt6.QtGui import QNativeGestureEvent as _NGE10
+from PyQt6.QtGui import QPointingDevice as _QPD10
+from PyQt6.QtWidgets import QApplication as _QApp10, QWidget as _QW10
+
+_NG10 = _Qt10.NativeGestureType
+check("a zoom gesture is a pinch by exp(value)",
+      pv.gesture_action(_NG10.ZoomNativeGesture, 0.1)
+      == ("pinch", _m10.exp(0.1)))
+check("the two-finger double-tap is a smart zoom",
+      pv.gesture_action(_NG10.SmartZoomNativeGesture, 0.0) == ("smart",))
+for _g10 in (_NG10.BeginNativeGesture, _NG10.EndNativeGesture,
+             _NG10.RotateNativeGesture, _NG10.PanNativeGesture,
+             _NG10.SwipeNativeGesture):
+    check(f"{_g10.name} passes through",
+          pv.gesture_action(_g10, 0.3) is None)
+
+_app10 = _QApp10.instance() or _QApp10([])
+
+
+class _Recv10(_QW10):
+    """QWebEngineView's focusProxy stand-in: records what reaches it."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.got = []
+
+    def event(self, e):
+        if e.type() == e.Type.NativeGesture:
+            self.got.append(e.gestureType())
+        return super().event(e)
+
+
+_view10 = _QW10()
+_proxy10 = _Recv10(_view10)
+_proxy10.setGeometry(10, 20, 300, 300)
+_js10 = []
+_stand10 = _NS10(_page_label=None, _web=_view10, _eval=_js10.append,
+                 _claimed=lambda _e: False)
+
+
+class _Filter10(_QObj10):
+    """PdfJsViewer.eventFilter itself, installed on the stand-in."""
+
+    def eventFilter(self, obj, ev):
+        return pv.PdfJsViewer.eventFilter(_stand10, obj, ev)
+
+
+_filter10 = _Filter10()
+_proxy10.installEventFilter(_filter10)
+_view10.installEventFilter(_filter10)
+
+
+_view10.move(100, 200)   # so global, view and proxy coordinates all differ
+
+
+def _gesture10(kind, value, recv, x=5.0, y=6.0):
+    """A gesture at local (x, y) on ``recv``, its global point consistent."""
+    p = _QPF10(x, y)
+    g = recv.mapToGlobal(p)
+    return _NGE10(kind, _QPD10.primaryPointingDevice(), 2, p, p, g,
+                  value, _QPF10(0, 0))
+
+
+_QApp10.sendEvent(_proxy10, _gesture10(_NG10.ZoomNativeGesture, 0.1, _proxy10))
+check("a pinch on the focusProxy never reaches Chromium",
+      _proxy10.got == [], repr(_proxy10.got))
+check("...and becomes ONE klausPinch at the point in view coordinates",
+      _js10 == ["window.klausPinch && window.klausPinch(%r, 15.0, 26.0);"
+                % _m10.exp(0.1)], repr(_js10))
+_js10.clear()
+_QApp10.sendEvent(_proxy10, _gesture10(_NG10.SmartZoomNativeGesture, 0.0, _proxy10))
+check("a two-finger double-tap is consumed and becomes klausSmartZoom",
+      _proxy10.got == []
+      and _js10 == ["window.klausSmartZoom && window.klausSmartZoom();"],
+      repr(_js10))
+_js10.clear()
+_QApp10.sendEvent(_proxy10, _gesture10(_NG10.RotateNativeGesture, 0.2, _proxy10))
+check("a non-zoom gesture is not consumed",
+      _proxy10.got == [_NG10.RotateNativeGesture] and _js10 == [])
+_QApp10.sendEvent(_view10, _gesture10(_NG10.ZoomNativeGesture, -0.1, _view10))
+check("a pinch delivered to the view itself lands at its view point",
+      _js10 == ["window.klausPinch && window.klausPinch(%r, 5.0, 6.0);"
+                % _m10.exp(-0.1)], repr(_js10))
+_label10 = _Recv10()                  # the page label lives in the header
+_stand10._page_label = _label10
+_label10.installEventFilter(_filter10)
+_js10.clear()
+_QApp10.sendEvent(_label10, _gesture10(_NG10.ZoomNativeGesture, 0.1, _label10))
+check("a pinch over the page label (outside the view) is left alone",
+      _js10 == [] and _label10.got == [_NG10.ZoomNativeGesture])
+
+# Backstop: if Chromium zooms the visual viewport anyway, only a new
+# page resets it — the page reports it, Python reloads the HTML and
+# re-opens the document at the same scroll and zoom.
+_v10 = _viewer8()
+_v10.load_path(_pdf8, "lecture.pdf")
+_v10._scroll_pos = 700
+_pages10 = []
+
+
+def _ensure10():   # stdHtml stand-in; a no-op once loaded, like the real one
+    if _v10._page_loaded:
+        return
+    _pages10.append(1)
+    _v10._page_loaded = True
+
+
+_v10._ensure_page = _ensure10
+class _Timer10:
+    """singleShot(0) runs now (the deferred reload); anything longer is
+    held until the test fires it (the end-of-gap retry)."""
+    held = []
+
+    @staticmethod
+    def singleShot(ms, fn):
+        if ms == 0:
+            fn()
+        else:
+            _Timer10.held.append((ms, fn))
+
+
+_qt10 = pv.QTimer
+pv.QTimer = _Timer10
+_out10 = _io.StringIO()
+
+
+def _bridge10(cmd):
+    with _ctxl.redirect_stdout(_out10):
+        _v10._on_bridge("klaus_note_pdfjs:" + cmd)
+
+
+_BAD10 = ("abc", "nan", "inf", "-2", "", "1.0", "1.005")
+_REARM10 = "window.klausVvRearm && window.klausVvRearm();"
 try:
-    from PyQt6 import QtCore as _QtC154
-    from PyQt6 import QtGui as _QtG154
-    from PyQt6 import QtWidgets as _QtW154
+    _bridge10("zoom:abc")
+    _bridge10("zoom:1.75")
+    _v10._web.js.clear()
+    for _bad10 in _BAD10:
+        _bridge10("vv-scale:" + _bad10)
+    check("malformed or unzoomed vv-scale reports are ignored",
+          _pages10 == [] and _v10._web.js == [] and _Timer10.held == [],
+          repr(_v10._web.js))
+    _bridge10("vv-scale:1.4")
+    check("a zoomed visual viewport reloads the page once", _pages10 == [1])
+    _open10 = [i for i, j in enumerate(_v10._web.js)
+               if "klausPdfOpen(2, " in j and '"lecture.pdf", true);' in j]
+    _keep10 = [i for i, j in enumerate(_v10._web.js)
+               if j == "window.klausKeepZoom && window.klausKeepZoom(1.75);"]
+    check("...re-opens the document once, keeping the view",
+          len(_open10) == 1, repr(_v10._web.js))
+    check("...at the user's zoom, set before the document opens",
+          len(_keep10) == 1 and _keep10[0] < _open10[0], repr(_v10._web.js))
+    check("...and the scroll position", _v10._scroll_pos == 700)
 
-    _HAVE_QT154 = True
-except Exception as _qt_e154:  # noqa: BLE001
-    _HAVE_QT154 = False
-    print(f"  SKIP: PyQt6 unavailable under this python ({_qt_e154}) — "
-          "the native shortcut binding needs real Qt enums")
+    _v10._web.js.clear()
+    _bridge10("vv-scale:1.4")
+    _bridge10("vv-scale:1.6")
+    check("reports inside the gap do not reload again (no loop if a "
+          "reload ever kept the scale)", _pages10 == [1])
+    check("...but schedule exactly ONE retry, at the end of the gap",
+          len(_Timer10.held) == 1
+          and 0 < _Timer10.held[0][0] <= pv.VV_RELOAD_GAP_S * 1000 + 1,
+          repr(_Timer10.held))
+    check("...and nothing reaches the page until it fires",
+          _v10._web.js == [])
+    _ms10, _fire10 = _Timer10.held.pop()
+    _fire10()
+    check("the retry re-arms the page so it re-checks and re-reports "
+          "if still zoomed", _v10._web.js == [_REARM10], repr(_v10._web.js))
+    _bridge10("vv-scale:1.4")
+    check("...while still inside the gap a report schedules a new single "
+          "retry rather than reloading", _pages10 == [1]
+          and len(_Timer10.held) == 1)
+    _Timer10.held.clear()
+    _v10._vv_retry_pending = False
 
-if _HAVE_QT154:
-    import types as _types154
+    _v10._vv_reload_at -= pv.VV_RELOAD_GAP_S + 1    # the gap has passed
+    _bridge10("vv-scale:1.4")
+    check("a report after the gap reloads again — the backstop is never "
+          "dead for the viewer's life", _pages10 == [1, 1]
+          and _Timer10.held == [])
+    _v10._web.js.clear()
+    for _bad10 in _BAD10:
+        _bridge10("vv-scale:" + _bad10)
+    check("...and malformed reports are still ignored after that",
+          _pages10 == [1, 1] and _v10._web.js == [] and _Timer10.held == [])
+finally:
+    pv.QTimer = _qt10
+check("the recovery is logged and nothing raised",
+      "pdfjs page zoomed to 1.40; reloading" in _out10.getvalue()
+      and "retrying in" in _out10.getvalue()
+      and "error" not in _out10.getvalue(), _out10.getvalue())
 
-    _qt_shim154 = _types154.ModuleType("aqt.qt")
+_v10._path = None
+_v10._web.js.clear()
+pv.PdfJsViewer._vv_retry(_v10)
+check("a retry with no document loaded does nothing",
+      _v10._web.js == [] and _v10._vv_retry_pending is False)
+_v10._path = _pdf8
 
-    def _qt_getattr154(name, _mods=(_QtW154, _QtC154, _QtG154)):
-        for _m in _mods:
-            if hasattr(_m, name):
-                return getattr(_m, name)
-        if name == "qconnect":
-            return lambda sig, fn: sig.connect(fn)
-        raise AttributeError(name)
+_claimed10 = []
+_v10._web.installEventFilter = lambda f: _claimed10.append(("view", f))
+_v10._web.focusProxy = lambda: _NS10(
+    installEventFilter=lambda f: _claimed10.append(("proxy", f)))
+_bridge10("ready")
+check("ready (re)claims the live focusProxy, so the gesture filter is on it",
+      _claimed10 == [("view", _v10), ("proxy", _v10)], repr(_claimed10))
 
-    _qt_shim154.__getattr__ = _qt_getattr154
-    sys.modules["aqt.qt"] = _qt_shim154
-    # Line 244 already imported klausmate.pdf_viewer once, under the
-    # plain permissive aqt.qt stub — its cached module (with Qt bound to
-    # that stub's dummy) would otherwise win over this fresh shim, since
-    # Python does not re-execute an already-imported module. Popping it
-    # is safe here (unlike the partial-Qt probe above, which needs a
-    # subprocess instead): nothing after this section reads
-    # klausmate.pdf_viewer again, and the earlier ``pdf_viewer`` name at
-    # line 244 keeps pointing at its own already-bound module object.
-    sys.modules.pop("klausmate.pdf_viewer", None)
-    pv_native154 = importlib.import_module("klausmate.pdf_viewer")
+_v10.load_path(_pdf8, "lecture.pdf")
+check("a new document forgets the user zoom", _v10._user_zoom == 0.0)
 
-    class _FakeKeyEvent154:
-        """Just enough of a QKeyEvent for _match_shortcut_combo, which
-        only calls .key()/.modifiers() on whatever it's handed."""
+_HTML10 = _src(os.path.join("web", "pdfjs_viewer.html"))
+_KP10 = _HTML10.split("window.klausPinch = function", 1)[1].split("\n};\n", 1)[0]
+check("klausPinch feeds the SAME zoom session as ctrl-wheel, at the point",
+      "zoomTo(sessionTarget() * factor, x, y, false)" in _KP10
+      and 'getElementById("scroll").contains(' in _KP10)
+_SZ10 = _HTML10.split("window.klausSmartZoom = async function", 1)[1]
+_SZ10 = _SZ10.split("\n};\n", 1)[0]
+check("klausSmartZoom toggles fit-width and the previous user zoom "
+      "(2x fit if none), centred",
+      "zoomTo(fit, c[0], c[1], true)" in _SZ10
+      and "state.prevZoom || fit * 2" in _SZ10
+      and "viewportCenter()" in _SZ10)
+check("the page watches visualViewport resize and scroll",
+      'window.visualViewport.addEventListener("resize", vvCheck)' in _HTML10
+      and 'window.visualViewport.addEventListener("scroll", vvCheck)'
+      in _HTML10)
+_VV10 = _HTML10.split("function vvCheck()", 1)[1].split("\n}\n", 1)[0]
+check("...and posts vv-scale once, debounced, only when zoomed",
+      'post("vv-scale:" + vv.scale)' in _VV10
+      and "Math.abs(vv.scale - 1) <= 0.01" in _VV10
+      and "vvPosted" in _VV10 and ", 200)" in _VV10)
+check("...checking once at boot too (a pinch before the script ran)",
+      "\nvvCheck();\n" in _HTML10)
+check("every committed zoom is reported so a page reload can restore it",
+      'post("zoom:" + (state.userZoomed ? state.scale : 0))' in _HTML10
+      and "window.klausKeepZoom = function" in _HTML10)
+check("...and forgets the previous document's smart-zoom target",
+      "if (!state.keepZoom) state.prevZoom = 0;" in _HTML10)
+check("the page re-arms the backstop when the scale returns to 1, and "
+      "exposes klausVvRearm for Python's retry",
+      "if (Math.abs(vv.scale - 1) <= 0.01) { vvPosted = false; return; }"
+      in _HTML10
+      and "window.klausVvRearm = function () { vvPosted = false; vvCheck(); };"
+      in _HTML10)
+check("a fresh document's fit clears a stale user-zoom flag",
+      "state.scale = clampScale(avail / base.width);\n"
+      "    state.userZoomed = false;" in _HTML10)
 
-        def __init__(self, key, mods):
-            self._key, self._mods = key, mods
+section("the no-webview fallback names no switch that no longer exists")
+with open(pv.__file__, encoding="utf-8") as _fh:
+    _PY_SRC = _fh.read()
+check("no 'switch off the pdf.js viewer' copy (PDF reader 5/5 deleted the switch)",
+      "switch off the pdf.js" not in _PY_SRC and "The PDF viewer could not start." in _PY_SRC)
 
-        def key(self):
-            return self._key
+section("Round 4: the first-page timing bridge never raises in its slot")
+_fp = pv.PdfJsViewer.__new__(pv.PdfJsViewer)
+_fp._name = "Doc"
+_fp_errors = []
+for _payload in ("812", "abc", "", "9" * 400, "1e999", "-5"):
+    try:
+        _fp._bridge_firstpage(_payload)
+    except Exception as _exc:  # noqa: BLE001
+        _fp_errors.append((_payload[:12], type(_exc).__name__))
+check("malformed or huge payloads are ignored, not raised", _fp_errors == [], str(_fp_errors))
+check("it goes through the shared number guard",
+      "_finite(" in __import__("inspect").getsource(pv.PdfJsViewer._bridge_firstpage))
 
-        def modifiers(self):
-            return self._mods
+section("hand-drawn reader 1: the page can load Excalifont and rough.js")
+import re as _re
+_init = open("klaus_note/__init__.py", encoding="utf-8").read()
+_pat = _re.search(r'setWebExports\(\s*__name__,.*?\br"([^"]+)"', _init, _re.S).group(1)
+check("web exports serve the font and rough.js",
+      _re.fullmatch(_pat, "web/fonts/Excalifont-Regular.ttf") is not None
+      and _re.fullmatch(_pat, "web/rough.min.js") is not None
+      and _re.fullmatch(_pat, "user_files/annotations/x.json") is None)
+_tpl = open("klaus_note/web/pdfjs_viewer.html", encoding="utf-8").read()
+check("the page declares Excalifont from the add-on's own file",
+      '@font-face { font-family: "Excalifont"; src: url("/_addons/__ADDON__/web/fonts/Excalifont-Regular.ttf"); }' in _tpl)
+_pure_at = _tpl.find('<script src="/_addons/__ADDON__/web/pdfjs_pure.js"></script>')
+_rough_at = _tpl.find('<script src="/_addons/__ADDON__/web/rough.min.js"></script>')
+_main_at = _tpl.find("<script>", _rough_at)
+check("rough.js loads after pdfjs_pure.js and before the main script", 0 < _pure_at < _rough_at < _main_at)
+check("rough.js ships with its MIT licence and a pinned build script",
+      os.path.isfile("klaus_note/web/rough.min.js")
+      and "MIT" in open("klaus_note/web/LICENSE-roughjs.txt", encoding="utf-8").read()
+      and "roughjs@4.6.6" in open("scripts/build_roughjs.sh", encoding="utf-8").read())
 
-    class _ShortcutStand154:
-        """Duck-typed self, the _SelStand pattern from above (K-196):
-        _match_shortcut_combo only reads self._find_bar, and
-        _dispatch_shortcut_combo only calls named self methods — no
-        real QWidget construction needed to prove the wiring."""
+section("hand-drawn reader 3: the note record, the card offset and their bridges")
+_phn = importlib.import_module("klaus_note.pdf_handler")
+_note = {"id": "n1", "kind": "note", "page": 0, "rects": [[10.0, 20.0, 120.0, 40.0]],
+         "text": "remember β", "note": "", "color": "#8ae08c", "size": 12.0}
+check("a note record round-trips exactly", _phn._validate_highlight(dict(_note)) == _note,
+      repr(_phn._validate_highlight(dict(_note))))
+check("an empty or whitespace note is dropped",
+      _phn._validate_highlight(dict(_note, text="")) is None
+      and _phn._validate_highlight(dict(_note, text="  \n ")) is None)
+check("a note's colour must be #rrggbb, else yellow",
+      _phn._validate_highlight(dict(_note, color="red"))["color"] == "#fadc50")
+check("a note's size follows the text rule (missing stays missing, bad dropped)",
+      "size" not in _phn._validate_highlight({k: v for k, v in _note.items() if k != "size"})
+      and "size" not in _phn._validate_highlight(dict(_note, size=-4)))
+_hl = {"id": "h1", "page": 0, "rects": [[100.0, 50.0, 80.0, 12.0]], "color": "#fadc50", "note": "see p.4"}
+check("a highlight keeps a two-number card offset",
+      _phn._validate_highlight(dict(_hl, card=[12.5, -3]))["card"] == [12.5, -3.0])
+check("...and drops a bad one",
+      all("card" not in _phn._validate_highlight(dict(_hl, card=c))
+          for c in (["x", 1], [1, 2, 3], [float("nan"), 1], "12,3", None)))
+check("a text record never carries a card",
+      "card" not in _phn._validate_highlight({"id": "t", "kind": "text", "page": 0,
+                                               "rects": [[1, 2, 3, 4]], "text": "t", "card": [1, 2]}))
+check("record_kind names the three kinds",
+      [_phn.record_kind(r) for r in (_note, _hl, {"kind": "text"}, {"kind": "weird"})]
+      == ["note", "highlight", "text", "highlight"])
+check("a note and a highlight on the same rects are not the same annotation",
+      not _phn._same_annotation(dict(_note, rects=_hl["rects"]), _hl))
+check("signatures differ by kind",
+      _phn._record_signature(dict(_note, rects=_hl["rects"])) != _phn._record_signature(_hl))
+import time as _time
+_tomb = {"page": 0, "kind": "note", "rects": _note["rects"], "text": "remember β", "ts": _time.time()}
+check("a note's tombstone matches the same note and never a highlight",
+      _phn._tombstone_hits(_tomb, _note) and not _phn._tombstone_hits(_tomb, dict(_hl, rects=_note["rects"])))
+check("_is_plain_highlight is False for a note", not pv._is_plain_highlight(_note, 0))
+check("make_note_record's key set is closed",
+      set(pv.make_note_record(0, 1.0, 2.0, "x", "#fadc50", 12.0, 50.0, 20.0)) == set(_note))
 
-        def __init__(self):
-            self._find_bar = object()  # non-None -> find combos in play
-            self.calls: list[str] = []
+_fv = _FakeViewer()
+pv.PdfJsViewer._bridge_note_add(_fv, _b64({"page": 1, "x": 10, "y": 20, "text": "hi", "color": "#f79ac8",
+                                           "size": 14, "w": 60, "h": 30}))
+_n = _fv._highlights[0] if _fv._highlights else {}
+check("note-add stores one note with the measured box and its ink",
+      len(_fv._highlights) == 1 and _n.get("kind") == "note" and _n["rects"] == [[10.0, 20.0, 60.0, 30.0]]
+      and _n["color"] == "#f79ac8" and _n["size"] == 14.0 and _fv.saves == 1 and _fv.pushes == 1, repr(_fv._highlights))
+pv.PdfJsViewer._bridge_note_add(_fv, _b64({"page": 1, "x": 10, "y": 20, "text": "   ", "w": 60, "h": 30}))
+check("an empty note-add mints nothing", len(_fv._highlights) == 1)
+pv.PdfJsViewer._bridge_note_update(_fv, _b64({"id": _n["id"], "x": 30, "y": 40, "text": "hello", "color": "#7fc6f2",
+                                              "size": 14, "w": 70, "h": 30}))
+_n = _fv._highlights[0]
+check("note-update moves, recolours and re-texts it",
+      _n["rects"] == [[30.0, 40.0, 70.0, 30.0]] and _n["text"] == "hello" and _n["color"] == "#7fc6f2", repr(_n))
+pv.PdfJsViewer._bridge_note_update(_fv, _b64({"id": _n["id"], "text": "hello", "color": "#7fc6f2", "size": 14,
+                                              "x": 30, "y": 40}))
+check("note-update never touches a text box with the same id scheme",
+      pv.apply_text_update([{"id": "t", "kind": "text", "page": 0, "rects": [[0, 0, 5, 5]], "text": "a"}],
+                           {"id": "t", "text": "b"}, kind="note")[1] is False)
+pv.PdfJsViewer._bridge_note_remove(_fv, _b64({"id": _n["id"]}))
+check("note-remove deletes it", _fv._highlights == [])
+_fv = _FakeViewer([dict(_hl), dict(_hl, id="h2", note="")])
+pv.PdfJsViewer._bridge_card_move(_fv, _b64({"id": "h1", "dx": 15, "dy": -4}))
+pv.PdfJsViewer._bridge_card_move(_fv, _b64({"id": "h2", "dx": 15, "dy": -4}))
+check("card-move stores the offset on a highlight with a note, ignores one without",
+      _fv._highlights[0].get("card") == [15.0, -4.0] and "card" not in _fv._highlights[1])
+pv.PdfJsViewer._bridge_card_move(_fv, _b64({"id": "h1", "dx": "x", "dy": 1}))
+check("a bad card-move changes nothing", _fv._highlights[0].get("card") == [15.0, -4.0])
+pv.PdfJsViewer._bridge_note_text(_fv, _b64({"id": "h2", "text": "new note"}))
+check("note-text sets a highlight's note", _fv._highlights[1]["note"] == "new note")
+pv.PdfJsViewer._bridge_note_text(_fv, _b64({"id": "h1", "text": "  "}))
+check("an emptied note-text clears the note and its card",
+      _fv._highlights[0]["note"] == "" and "card" not in _fv._highlights[0])
 
-        def toggle_thumbnails(self):
-            self.calls.append("toggle_thumbnails")
+section("hand-drawn reader 5: the reader hears the switch")
+check("set_hand_drawn_all exists", callable(getattr(pv, "set_hand_drawn_all", None)))
+_PV5 = _src("pdfjs_viewer.py")
+check("the page is told the stored value on ready, beside the occlusion state",
+      "window.klausSetHandDrawn && " in _PV5 and "window.klausSetOcclusionEnabled && " in _PV5)
+_cfg = json.load(open("klaus_note/config.json")) if "json" in dir() else __import__("json").load(open("klaus_note/config.json"))
+check("config.json ships hand_drawn on, config.md documents it",
+      _cfg.get("hand_drawn") is True and "**hand_drawn**" in open("klaus_note/config.md", encoding="utf-8").read())
 
-        def _show_find_bar(self):
-            self.calls.append("find")
+section("hand-drawn reader 6: the page draws hand-drawn marks and cards")
+_H6 = open("klaus_note/web/pdfjs_viewer.html", encoding="utf-8").read()
 
-        def _find_next_shortcut(self):
-            self.calls.append("find_next")
 
-        def _find_prev_shortcut(self):
-            self.calls.append("find_prev")
+def _fn6(name):
+    """One top-level function of the page, from its header to the first
+    column-0 closing brace."""
+    if ("\nfunction " + name + "(") not in _H6:
+        return ""
+    return _H6.split("\nfunction " + name + "(", 1)[1].split("\n}\n", 1)[0]
 
-        def _prompt_go_to_page(self):
-            self.calls.append("goto")
 
-        def _add_highlight_from_selection(self):
-            self.calls.append("highlight")
+_RAL6 = _fn6("renderAnnotLayers")
+_TDP6 = _fn6("teardownPage")
+_BANDS6 = _fn6("roughBands")
+_CARD6 = _fn6("noteCardEl")
+_HLCARD6 = _fn6("highlightCard")
+_MTB6 = _fn6("measureTextBox")
+_SHD6 = (_H6.split("window.klausSetHandDrawn = function", 1)[1].split("\n};\n", 1)[0]
+         if "window.klausSetHandDrawn = function" in _H6 else "")
+_DRAW6 = _RAL6 + _BANDS6 + _CARD6 + _HLCARD6
+check("state.handDrawn defaults on until the first push",
+      "  handDrawn: true," in _H6.split("const state = {", 1)[1].split("\n};", 1)[0])
+check("without rough.js the page takes the off path and says why",
+      'if (typeof rough === "undefined") {' in _H6
+      and "state.handDrawn = false;" in _H6.split('if (typeof rough === "undefined") {', 1)[1][:400]
+      and "console.warn(" in _H6.split('if (typeof rough === "undefined") {', 1)[1][:400])
+check("klausSetHandDrawn exists, refuses to switch on without rough.js "
+      "and flips the body class every hand-drawn rule keys on",
+      bool(_SHD6) and 'typeof rough !== "undefined"' in _SHD6
+      and 'document.body.classList.toggle("handDrawn", state.handDrawn)' in _H6)
+check("...and repaints every rendered page through the one redraw path "
+      "(no new renderAnnotLayers call site)",
+      "state.annotsPrev = null;" in _SHD6
+      and "window.klausSetAnnotations(state.annots)" in _SHD6
+      and _H6.count("renderAnnotLayers(num, div)") == 3)
+check("the first switch-on waits for Excalifont: it starts the load, then "
+      "awaits document.fonts.ready before the repaint that measures",
+      "document.fonts.load(" in _SHD6 and "document.fonts.ready" in _SHD6
+      and _SHD6.index("document.fonts.load(") < _SHD6.index("document.fonts.ready")
+      < _SHD6.index("window.klausSetAnnotations(state.annots)"))
+check("...once: the gate is a flag, set by the first switch-on only",
+      "&& !state.fontsWaited &&" in _SHD6 and "state.fontsWaited = true;" in _SHD6
+      and "fontsWaited: false," in _H6)
+check("measurement itself stays synchronous (openTextEdit relies on it)",
+      bool(_MTB6) and "await" not in _MTB6 and "async function measureTextBox" not in _H6
+      and "Promise" not in _MTB6)
+check("teardownPage drops the card layer with the others",
+      '".hlLayer", ".noteLayer", ".cardLayer"]' in _TDP6)
+check("highlight bands are seeded rough.js polygons, solid, no stroke",
+      "rough.svg(" in _BANDS6 and ".polygon(" in _BANDS6
+      and 'fillStyle: "solid"' in _BANDS6 and "roughness: 1" in _BANDS6
+      and "seed: seedFor(rec.id)" in _BANDS6 and 'stroke: "none"' in _BANDS6)
+check("...in the record's own ink at 0.43 through fill-opacity, never by "
+      "editing the hex",
+      "fill: rec.color" in _BANDS6 and 'setAttribute("fill-opacity", "0.43")' in _BANDS6)
+check("...one SVG per page, drawn in page points (viewBox), so the "
+      "wobble keeps its shape at every zoom",
+      '"roughLayer"' in _RAL6 and 'setAttribute("viewBox"' in _H6)
+check("...the band is 2 pt taller than the rect, 1 pt each side",
+      "y - 1" in _BANDS6 and "y + h + 1" in _BANDS6)
+# No blend at all (final review): multiply of any ink over a dark
+# slide is dark, so a 0.43 band vanished and coloured text boxes in the
+# layer went near-black. Bands are the plain ink at 0.43, like OFF.
+check("no mix-blend-mode anywhere in the page: a hand-drawn band stays "
+      "visible on a dark slide, exactly like the plain path",
+      "mix-blend-mode" not in _H6)
+check("no Math.random anywhere in the renderer: every wobble is seeded",
+      bool(_DRAW6) and "Math.random" not in _DRAW6)
+check("hand-drawn off still draws today's .hl divs at 0.43",
+      "hexToRgba(rec.color, 0.43)" in _RAL6)
+check("a note record is drawn as a card BEFORE the highlight branch, in "
+      "both modes (it is never a band)",
+      'rec.kind === "note"' in _RAL6
+      and _RAL6.index('rec.kind === "note"') < _RAL6.index("hexToRgba(rec.color, 0.43)")
+      and "noteCardEl(" in _RAL6.split('rec.kind === "note"', 1)[1].split("} else", 1)[0]
+      and "hand" not in _RAL6.split('rec.kind === "note"', 1)[1].split("} else", 1)[0])
+check("the ✎ anchor renders only with hand-drawn off",
+      "if (note && first && hand) {" in _RAL6
+      and "} else if (note && first) {" in _RAL6
+      and _RAL6.index("} else if (note && first) {") < _RAL6.index('a.className = "noteAnchor"'))
+check("a highlight's card is placed by cardSpot, measured first",
+      "cardSpot(rec, pageW, pageH, cw, ch)" in _HLCARD6
+      and _HLCARD6.index("measureTextBox(") < _HLCARD6.index("cardSpot("))
+check("card geometry is page points multiplied by state.scale",
+      'c.style.left = x * s + "px"' in _CARD6 and 'c.style.top = y * s + "px"' in _CARD6
+      and 'c.style.width = w * s + "px"' in _CARD6 and "const s = state.scale;" in _RAL6)
+check("cards carry data-id and data-kind so the card editor can find them",
+      "c.dataset.id = String(rec.id" in _CARD6 and "c.dataset.kind = kind" in _CARD6
+      and 'noteCardEl(rec, "note"' in _RAL6 and '"hl"' in _HLCARD6)
+check("the hand-drawn card is a seeded rough outline + fill at 0.85",
+      "seed: seedFor(rec.id)" in _CARD6 and 'setAttribute("fill-opacity", "0.85")' in _CARD6
+      and "fill: rec.color" in _CARD6)
+check("the plain card (off) fills with the record's ink at 0.85",
+      "hexToRgba(rec.color, 0.85)" in _CARD6)
+check("the connector is a seeded rough line to the highlight",
+      ".line(" in _HLCARD6 and "seed: seedFor(rec.id)" in _HLCARD6)
+check("the card layer sits over the notes, under the kept marquee",
+      "div.appendChild(noteLayer);\n  div.appendChild(cardLayer);" in _RAL6)
+_CSS6 = _H6.split("<style>", 1)[1].split("</style>", 1)[0]
+_HD_CSS6 = "".join(_CSS6.split(".cardLayer {", 1)[1:2]) and (
+    ".cardLayer {" + _CSS6.split(".cardLayer {", 1)[1].split("#marquee {", 1)[0])
+check(".cardLayer is z 4 and lets clicks through; cards take them",
+      bool(_HD_CSS6) and "z-index: 4" in _HD_CSS6.split("}", 1)[0]
+      and "pointer-events: none" in _HD_CSS6.split("}", 1)[0]
+      and "pointer-events: auto" in _HD_CSS6.split(".noteCard {", 1)[-1].split("}", 1)[0])
+check("the card CSS spells no hex (inks arrive from the record)",
+      bool(_HD_CSS6) and not _re.search(r"#[0-9a-fA-F]{3,8}\b", _HD_CSS6), _HD_CSS6[:200])
+check("card text is the dark text ink, through its theme var",
+      "var(--tink-black)" in _HD_CSS6)
 
-    _Qt154 = _QtC154.Qt
-    _stand154 = _ShortcutStand154()
-    _ev_thumbs154 = _FakeKeyEvent154(
-        _Qt154.Key.Key_T,
-        _Qt154.KeyboardModifier.ControlModifier
-        | _Qt154.KeyboardModifier.ShiftModifier,
-    )
-    _combo154 = pv_native154.PdfViewer._match_shortcut_combo(
-        _stand154, _ev_thumbs154
-    )
-    check("Ctrl+Shift+T resolves to a thumbs combo",
-          _combo154 == "thumbs", repr(_combo154))
-    check("dispatching that combo reaches toggle_thumbnails — exactly "
-          "as dispatching \"find\" reaches _show_find_bar below",
-          pv_native154.PdfViewer._dispatch_shortcut_combo(
-              _stand154, _combo154
-          ) is True
-          and _stand154.calls == ["toggle_thumbnails"])
+section("hand-drawn reader 6, fix round 1")
+check("a text box sized in Helvetica never clips in the wider Excalifont: "
+      "overflow shows under body.handDrawn, in its own rule",
+      "body.handDrawn .hlLayer .hltext { overflow: visible; }" in _H6)
+check("rendered pages keep their UNROUNDED size in points (both render sites)",
+      _H6.count("ptW: viewport.width / viewport.scale, ptH: viewport.height / viewport.scale") == 2)
+check("...and the card clamp and viewBox read it, not the floored div px",
+      "const pageW = rendered.ptW" in _RAL6 and "const pageH = rendered.ptH" in _RAL6)
+check("a card's height is capped once: measured with the card's own height cap",
+      "measureTextBox(note, size, TEXT_BOX_MAX_W - 2 * CARD_PAD,\n"
+      "                               TEXT_BOX_MAX_H - 2 * CARD_PAD)" in _HLCARD6
+      and "const ch = th + 2 * CARD_PAD;" in _HLCARD6 and "Math.min(th" not in _HLCARD6)
+check("measureTextBox takes the height cap the same way it takes the width cap",
+      "function measureTextBox(text, size, maxW, maxH)" in _H6
+      and "maxH || TEXT_BOX_MAX_H" in _MTB6)
 
-    _ev_find154 = _FakeKeyEvent154(
-        _Qt154.Key.Key_F, _Qt154.KeyboardModifier.ControlModifier
-    )
-    _stand154.calls.clear()
-    check("...proven against the existing Ctrl+F -> find_bar wiring, "
-          "same mechanism",
-          pv_native154.PdfViewer._match_shortcut_combo(
-              _stand154, _ev_find154
-          ) == "find"
-          and pv_native154.PdfViewer._dispatch_shortcut_combo(
-              _stand154, "find"
-          ) is True
-          and _stand154.calls == ["find"])
+section("hand-drawn reader 7: Note tool, in-place card editing, dragging, card menu")
+_H7 = open("klaus_note/web/pdfjs_viewer.html", encoding="utf-8").read()
 
-    _ev_hl154 = _FakeKeyEvent154(
-        _Qt154.Key.Key_A,
-        _Qt154.KeyboardModifier.ControlModifier
-        | _Qt154.KeyboardModifier.ShiftModifier,
-    )
-    check("Ctrl+Shift+A (highlight) is untouched by the new binding",
-          pv_native154.PdfViewer._match_shortcut_combo(
-              _stand154, _ev_hl154
-          ) == "highlight")
+
+def _fn7(name):
+    if ("\nfunction " + name + "(") not in _H7:
+        return ""
+    return _H7.split("\nfunction " + name + "(", 1)[1].split("\n}\n", 1)[0]
+
+
+def _cut(s, a, b=None):
+    """s after the first a (up to the first b after it), "" when a is absent."""
+    if a not in s:
+        return ""
+    s = s.split(a, 1)[1]
+    return s.split(b, 1)[0] if b else s
+
+
+def _order(s, *parts):
+    """Every part present in s, in this order."""
+    idx = [s.find(x) for x in parts]
+    return all(i >= 0 for i in idx) and idx == sorted(idx)
+
+
+_AB7 = _H7.split('<div id="annobar">', 1)[1].split('<div id="ctxmenu">', 1)[0]
+_OTE7 = _fn7("openTextEdit")
+_CTE7 = _fn7("commitTextEdit")
+_TBF7 = _fn7("textBoxFor")
+_RAL7 = _fn7("renderAnnotLayers")
+_CARDAT7 = _fn7("cardAt")
+_CLAMP7 = _fn7("clampCard")
+_HLAT7 = _fn7("highlightAt")
+_SYNC7 = _fn7("syncAnnobarMode")
+_CTX7 = _cut(_H7, 'getElementById("scroll").addEventListener("contextmenu"', "\n});\n")
+_MD7 = _cut(_H7, 'getElementById("scroll").addEventListener("mousedown"', "\n});\n")
+_NOTECLICK7 = _cut(_H7, 'if (state.tool !== "note" || ev.button !== 0) return;', "\n});\n")
+_TEXTCLICK7 = _cut(_H7, 'if (state.tool !== "text" || ev.button !== 0) return;', "\n});\n")
+_DRAGUP7 = _cut(_H7, "/* card-drag:up */", "\n});\n")
+_DRAGMV7 = _cut(_H7, "/* card-drag:move */", "\n});\n")
+_SW7 = _cut(_H7, 'if (!sw.dataset.ink) return;', "\n  });")
+
+check("the annobar has #abNote, titled \"Add Note\", an icon button like its "
+      "neighbours, between #abText and the size stepper",
+      'id="abNote" title="Add Note" aria-pressed="false"' in _AB7
+      and _order(_AB7, 'id="abText"', 'id="abNote"', 'id="abTszSep"')
+      and "<svg" in _cut(_AB7, 'id="abNote"', "</button>"))
+check("setTool knows the note tool, and the button arms it like Add Text",
+      '["abNote", "note"]' in _fn7("setTool")
+      and 'getElementById("abNote").addEventListener(\n  "click", () => setTool("note"));' in _H7)
+check("...the placement cursor covers the note tool too",
+      'state.tool === "text" || state.tool === "note"' in _fn7("setTool"))
+check("Escape disarms the note tool the way it disarms Add Text (any armed tool)",
+      "if (state.tool) setTool(null);" in _H7)
+check("the Note tool's ink row shows the five highlight inks (not the text inks) "
+      "and the size stepper shows: textMode excludes a card editor, noteMode is its own",
+      'state.tool === "text" || state.textEdit !== null' in _fn7("textMode")
+      and "!(te && te.card)" in _fn7("textMode")
+      and 'te ? te.card === "note" : state.tool === "note"' in _fn7("noteMode")
+      and 'classList.toggle("textMode", on || nm)' in _SYNC7
+      and 'getElementById("abInks").classList.toggle("textMode", on)' in _SYNC7
+      and "inkNameFor(te.color)" in _SYNC7)
+check("a note's default ink is the yellow highlight ink and its default size 12",
+      '  ink: "yellow",' in _H7 and "  tsize: 12," in _H7
+      and "currentInk()" in _OTE7)
+check("picking an ink while a note card is open recolours it live, at the card's 0.85",
+      "if (noteMode()) {" in _SW7 and "hexToRgba(te.color, 0.85)" in _SW7
+      and "addHighlightFromSelection();" in _SW7
+      and _order(_SW7, "if (noteMode()) {", "addHighlightFromSelection();"))
+check("a Note-tool click opens the card editor at the click, posting nothing yet",
+      'openTextEdit(hit.page0, hit.xPt, hit.yPt, null, "note");' in _NOTECLICK7
+      and "postB64" not in _NOTECLICK7 and "setTool(null)" not in _NOTECLICK7)
+check("...and neither tool's click acts on the click that ends a card press",
+      "if (state.cardPress) return;" in _NOTECLICK7
+      and "if (state.cardPress) return;" in _TEXTCLICK7)
+check("the card editor IS openTextEdit (a card variant), not a parallel editor",
+      "function openTextEdit(page0, xPt, yPt, rec, card)" in _H7
+      and _H7.count('className = "editLayer"') == 1)
+check("...a card editor looks like its card: CARD_PAD a side in points, the ink at 0.85",
+      'el.style.padding = CARD_PAD + "px";' in _OTE7
+      and "el.style.background = hexToRgba(color, 0.85);" in _OTE7)
+check("...a highlight card edits the highlight's note and never keeps the "
+      "highlight's rect as its box",
+      'card === "hl" ? rec.note : rec.text' in _OTE7
+      and 'card !== "hl" && rec && (rec.rects || [])[0]' in _OTE7)
+check("...a note keeps its stored card box minus its margin, so an untouched "
+      "click-away is no resize",
+      "box: [r0[2] - pad, r0[3] - pad]" in _OTE7)
+check("...and measures inside the card margin, like highlightCard",
+      "TEXT_BOX_MAX_W - 2 * CARD_PAD, TEXT_BOX_MAX_H - 2 * CARD_PAD" in _TBF7)
+check("the record under edit has no static twin: notes and highlight cards are "
+      "skipped while their editor is open (the line goes with the card)",
+      _RAL7.count("if (state.textEdit && state.textEdit.id === rec.id) continue;") == 3
+      and "if (state.textEdit && state.textEdit.id === rec.id) continue;"
+      in _cut(_RAL7, 'rec.kind === "note"', "noteCardEl(")
+      and "if (state.textEdit && state.textEdit.id === rec.id) continue;"
+      in _cut(_RAL7, "if (note && first && hand) {", "pointSvg(\"cardLines\""))
+check("commit: a note posts note-add with the measured box INCLUDING CARD_PAD, "
+      "page as text-add sends it, clamped into the page",
+      'postB64("note-add", {' in _CTE7 and "page: te.page0," in _cut(_CTE7, 'postB64("note-add"')
+      and "const w = box[0] + 2 * CARD_PAD, h = box[1] + 2 * CARD_PAD;" in _CTE7
+      and "clampCard(te.page0, te.x, te.y, w, h)" in _CTE7)
+check("...an existing note posts note-update; a highlight card posts note-text",
+      'postB64("note-update", {' in _CTE7 and 'postB64("note-text", { id: te.id, text: text })' in _CTE7)
+check("Review Focus 3: an empty new note posts NOTHING (note-add is reached only "
+      "with text), an emptied note posts note-remove",
+      "if (!text) return;" in _cut(_CTE7, "if (te.card) {", 'postB64("note-add"')
+      and 'if (!text) { postB64("note-remove", { id: te.id }); return; }' in _CTE7)
+check("...an emptied highlight card posts note-text with \"\" (its card goes); an "
+      "unchanged one posts nothing, since note-text always saves",
+      "const same = text === te.text0;" in _CTE7
+      and 'if (!same) postB64("note-text"' in _CTE7)
+check("cardAt hit-tests the card under a point; the context menu, the press "
+      "and highlightAt's callers ask it FIRST",
+      "function cardAt(clientX, clientY)" in _H7
+      and 'closest(".noteCard")' in _CARDAT7 and "cardBox" in _CARDAT7
+      and "c.cardBox = box;" in _fn7("noteCardEl")
+      and "const card = cardAt(ev.clientX, ev.clientY);" in _CTX7
+      and "const rec = card ? null : highlightAt(" in _CTX7
+      and "cardAt(ev.clientX, ev.clientY)" in _MD7)
+check("highlightAt no longer hits a note's card rect as a highlight",
+      'rec.kind === "note"' in _HLAT7)
+check("Review Focus 4: a card's menu lists Edit Note, Remove Note FIRST, then the "
+      "normal tail with the occlusion items and the zoom items",
+      _order(_CTX7, 'items.push(["Edit Note"', 'items.push(["Remove Note"',
+             "if (hasSel)", "occlusionItems(", 'items.push(["Zoom In')
+      and "} else if (hasSel) {" in _CTX7)
+check("...Remove Note clears a highlight's note (the highlight stays) and removes "
+      "a free-standing note",
+      'postB64("note-text", { id: card.rec.id, text: "" })' in _CTX7
+      and 'postB64("note-remove", { id: card.rec.id })' in _CTX7)
+_OCC7 = (
+    "\n/* [label, action, disabled] rows for the context menu; the region item\n"
+    "   exists only while a marquee stands. \"Draw a diagram…\" (3/3) opens the\n"
+    "   occlusion editor on its Draw tab; it renders nothing from the page.\n"
+    "   Disabled without an editor. */\n"
+    "function occlusionItems(page0, pm, enabled) {\n"
+    "  const off = !enabled;\n"
+    "  const items = [[\"Occlude this page\", () => occludeImage(page0, null), off]];\n"
+    "  if (pm) items.push([\"Occlude this region\", () => occludeImage(pm.page0, pm), off]);\n"
+    "  items.push([\"Draw a diagram…\", () => post(\"draw-diagram\"), off]);\n"
+    "  return items;\n"
+    "}\n")
+check("the occlusion-items block is byte-for-byte what Task 6 left",
+      _cut(_H7, "/* occlusion-items:start */", "/* occlusion-items:end */") == _OCC7)
+check("note-edit (the Python dialog) is posted only with hand-drawn off: the menu "
+      "branches on state.handDrawn, the anchor exists only on the off path",
+      _H7.count('postB64("note-edit"') == 2
+      and "if (state.handDrawn) {" in _cut(_CTX7, '"Add note…"', 'postB64("note-edit"')
+      and 'postB64("note-edit"' in _cut(_RAL7, "} else if (note && first) {")
+      and "if (note && first && hand) {" in _RAL7)
+check("...with hand-drawn on, the highlight menu's note item opens the card editor "
+      "where highlightCard draws it",
+      'openTextEdit(rec.page | 0, spot.x, spot.y, rec, "hl")' in _CTX7
+      and "cardSpot(rec, W, H," in _fn7("hlCardSpot"))
+check("a press on a card is the card's: no text selection starts under it",
+      "ev.preventDefault();" in _cut(_MD7, "cardAt(ev.clientX, ev.clientY)")
+      and "state.cardPress = {" in _MD7 and "state.cardPress = null;" in _MD7)
+check("dragging sends NOTHING while moving, and only past a 3 px slop",
+      "postB64" not in _DRAGMV7 and "post(" not in _DRAGMV7
+      and "Math.hypot(dx, dy) < CARD_SLOP" in _DRAGMV7 and "const CARD_SLOP = 3;" in _H7)
+check("...and is clamped with cardSpot's bounds (0..ptW-cardW, 0..ptH-cardH)",
+      "clampCard(" in _DRAGMV7
+      and "Math.max(0, Math.min(v, Math.max(0, hi)))" in _CLAMP7
+      and "clamp(x, W - w), clamp(y, H - h)" in _CLAMP7)
+check("one message on mouseup: card-move {id,dx,dy} (the new offset from the "
+      "union's top-right, as cardSpot reads it) or note-update carrying the record",
+      _DRAGUP7.count("postB64(") == 2
+      and 'postB64("card-move", { id: rec.id, dx: p.x - right, dy: p.y - top })' in _DRAGUP7
+      and 'postB64("note-update", {' in _DRAGUP7
+      and "text: String(rec.text" in _DRAGUP7 and "w: box[2], h: box[3]" in _DRAGUP7)
+
+section("hand-drawn reader 7, fix round 1")
+check("a highlight card's editor has no grip: note-text carries no position, "
+      "so a grip move would be thrown away (drag the card itself); notes keep it",
+      'if (card !== "hl") el.appendChild(grip);' in _OTE7
+      and "el.appendChild(grip);\n" not in _OTE7.replace('if (card !== "hl") el.appendChild(grip);', ""))
+check("the drop re-reads the record and its card element by id, so a push during "
+      "the drag cannot send stale text, ink or size",
+      "const rec = state.annots.find(" in _DRAGUP7
+      and "const el = cardEl(p.card.page0, id);" in _DRAGUP7
+      and "if (!rec || !el) return;" in _DRAGUP7
+      and "const box = el.cardBox;" in _DRAGUP7
+      and "p.card.rec" not in _DRAGUP7.split("const rec = state.annots.find(", 1)[-1]
+      and "color: rec.color, size: parseFloat(rec.size)" in _DRAGUP7)
+check("...and the move follows the CURRENT element by id, not the press-time one",
+      "cardEl(p.card.page0, p.card.rec.id)" in _DRAGMV7
+      and "p.card.el.style" not in _DRAGMV7)
+check("a press whose mouseup was lost (no left button held) ends without posting, "
+      "and a moved card goes back where its record says",
+      "if (!(ev.buttons & 1)) {" in _DRAGMV7
+      and "p.live = false;" in _cut(_DRAGMV7, "if (!(ev.buttons & 1)) {", "}")
+      and "repaintAnnotPage(p.card.page0)" in _cut(_DRAGMV7, "if (!(ev.buttons & 1)) {", "return;")
+      and _order(_DRAGMV7, "if (!(ev.buttons & 1)) {", "Math.hypot(dx, dy) < CARD_SLOP"))
+check("...a press with no real movement is a click: it opens the card's editor",
+      "if (!p.moved) {" in _DRAGUP7
+      and "openTextEdit(p.card.page0, box[0], box[1], rec, kind)" in _DRAGUP7)
+check("a card is exactly its box: border-box inline, since #root * (content-box) "
+      "outranks the .noteCard rule and drew it CARD_PAD a side too big (found live)",
+      'c.style.boxSizing = "border-box";' in _fn7("noteCardEl")
+      and "#root, #root * { box-sizing: content-box; }" in _H7)
+check("__ADDON__ still appears exactly five times",
+      _H7.count("__ADDON__") == 5)
+
+section("pdf.js never compiles font glyphs with eval")
+# pdf.js 3.11.174 (vendored) builds glyph path functions with new Function()
+# unless isEvalSupported is false; a crafted Type1 font turns that into
+# script execution in a page that can post bridge messages (CVE-2024-4367,
+# fixed upstream in 4.2.67). Anki serves this page with no script-src CSP.
+_GD = _H7.split("pdfjsLib.getDocument({", 1)[-1].split("});", 1)[0]
+check("every getDocument call passes isEvalSupported: false",
+      _H7.count("pdfjsLib.getDocument(") == 1 and "isEvalSupported: false," in _GD)
 
 raise SystemExit(report())

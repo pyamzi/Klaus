@@ -1,4 +1,4 @@
-# CLAUDE.md — Addons repo / Klaus (klausmate)
+# CLAUDE.md — Addons repo / Klaus (klaus_note)
 
 ## Current architecture: local-model reversion
 
@@ -10,21 +10,18 @@ lecture recording was removed on 2026-09-30 (K-314): recording belongs to the
 Klaus app, not the add-on. See [completion evidence and limits](docs/superpowers/reports/2026-09-19-local-model-reversion.md).
 Older API-first and cloud-only designs are dated history, not current guidance.
 
-The real project here is **`klausmate/`** — "Klaus", an Anki addon for a
+The real project here is **`klaus_note/`** — "Klaus", an Anki addon for a
 lecture-PDF library with per-PDF retention scoring, semantic card↔PDF
-matching (indexing a PDF tags every card it covers), a native
-PDF viewer with highlights/sticky notes, and image cropping. Around it:
-`tests/` (headless logic tests), `board/` + `context/` (the multi-agent
-kanban board — see below), `References/` and `scripts/` (vendored
+matching (indexing a PDF tags every card it covers), a PDF reader
+(pdf.js) with highlights/sticky notes, and image cropping. Around it:
+`tests/` (headless logic tests), `board/` (the retired kanban board,
+kept for its ARCHIVE.md history — see below), `References/` and `scripts/` (vendored
 reference repos + packaging), and `AGENTS.md` (deep architecture guide:
 hooks registered, JS↔Python protocol, config keys, packaging).
 `PRODUCT.md` says what Klaus is for; `DESIGN.md` is the design language —
-tokens, surfaces, the "Quiet Clinic" brief — **and its star section is
-stale**: six passages still describe a hand-drawn point-down pentagram and
-name `top_bar._STAR_PATH`, but K-270 replaced that on 2026-09-17 with the
-impossible star's five filled paths (`_STAR_PATHS`, sourced from
-`klausmate/web/klaus-logo.svg`). Trust the code over that section until it
-is rewritten.
+tokens, surfaces, the "Quiet Clinic" brief, and the mark: Pouya's
+hand-drawn k (2026-10-01), one evenodd path in `top_bar._LOGO_PATH`,
+verbatim from `docs/reference/brand/klaus-logo.svg`.
 
 Klaus was **embeddings-only** from 2026-08 to 2026-09-01: its one AI
 capability was semantic search, which defaulted then to the **Voyage**
@@ -49,11 +46,11 @@ Plan 3 was never built and is not pending work. Historical specs:
 [API-first](docs/superpowers/specs/2026-09-15-api-first-klaus-design.md),
 [Plus](docs/superpowers/specs/2026-09-16-klaus-plus-subscription-design.md).
 
-**`klausmate/` is tracked in git** as of 2026-08-23. Its `user_files/`
+**`klaus_note/` is tracked in git** as of 2026-08-23. Its `user_files/`
 (personal PDFs, annotations, card index) and `meta.json*` (live config,
 holds API keys) stay ignored — never stage those.
 
-- **Always edit the main checkout**, `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon/klausmate/`,
+- **Always edit the main checkout**, `/Users/pyamzi/Documents/Github/Klaus/klaus-note/addon/klaus_note/`,
   even though worktrees now contain a copy. Anki loads the addon through a
   symlink to the main checkout only, and the PostToolUse compile hook
   compiles that symlink target — so a worktree edit would report success
@@ -64,7 +61,7 @@ holds API keys) stay ignored — never stage those.
 
 - **Run the whole test suite**:
   `failed=0; for t in tests/test_*.py; do env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 "$t" || failed=1; done; test "$failed" -eq 0`
-- **Run one test file**: `python3 tests/test_klausmate.py`. The files that
+- **Run one test file**: `python3 tests/test_klaus_note.py`. The files that
   need real PyQt6 widgets use offscreen rendering. Set that environment
   explicitly; see "Anki runtime & testing".
 - **Add `PYTHONDONTWRITEBYTECODE=1` when you re-run a test after editing the
@@ -76,38 +73,37 @@ holds API keys) stay ignored — never stage those.
   the test passes on it. `scripts/mutation_audit.py` purges both cache roots
   and aborts on a stray `.pyc` for exactly this reason.
 - **Verify syntax through the symlink Anki actually loads** — do this after
-  every `klausmate/*.py` edit (the PostToolUse hook already runs it
+  every `klaus_note/*.py` edit (the PostToolUse hook already runs it
   automatically):
-  `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`
-- **Build the shippable package**: `./scripts/package.sh` → `dist/klausmate.ankiaddon`
+  `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klaus_note/*.py`
+- **Build the shippable package**: `./scripts/package.sh` → `dist/klaus_note.ankiaddon`
 - **The vacuity gate**: `python3 scripts/mutation_audit.py --modules <module>`
   breaks the code on purpose to find pins that cannot fail (`--list <module>`
   shows the mutations, `--selftest` checks the tool). It never touches the
   working tree — every mutation is applied in a sandbox copy, and the repo is
   hashed before the run and re-hashed in a `finally`.
-- **Board CLI** (see "The agent board" below):
-  `python3 board/board.py {list,show,claim,move,comment,check-disjoint}`
+- **Issues** (see "Issue tracker" below): `gh issue list --repo
+  pyamzi/klaus-note-addon --label ready-for-agent`
 - No linter is configured in this repo.
 
-## The agent board
+## Issue tracker
 
-Multi-session work is coordinated through a kanban board:
-`board/BOARD.md` is the source of truth, and **every state change
-(claim/move/comment) goes through `python3 board/board.py`** — it
-serializes writes behind a lockfile; hand-editing BOARD.md to move a card
-will eventually lose a write (card *body* prose may be hand-edited by the
-orchestrator/designer only). Claiming enforces file-disjointness against
-cards already in Doing, and a card's `verify:` command must fail before
-the work and pass after. Roles, columns, and gates: `context/ROLES.md`;
-the rules a session must hold to share the board safely are the
-`agent-board` skill (`.claude/skills/agent-board/`).
-Dashboard: `python3 board/serve.py --port 8766` → 127.0.0.1:8766
-(preview config "board-dashboard" in `.claude/launch.json`). **Not
-8765** — an unrelated long-running `stream_server.py` owns that port on
-this machine, so the board silently failed to bind there and the
-preview served that server's "you need a WebSocket client" page
-instead. Signed-off history is in
-`board/ARCHIVE.md` — search it (K-0xx) before re-debugging anything.
+Add-on work lives in GitHub Issues on `pyamzi/klaus-note-addon` (via
+`gh`; see `docs/agents/issue-tracker.md`). Every issue carries one
+category label (`bug`/`enhancement`), one state label (`needs-triage`,
+`needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`; see
+`docs/agents/triage-labels.md`) and a priority (`P1` data loss or
+security, `P2`, `P3`). The repo is public: write issue text neutrally,
+and keep an unfixed security hole off GitHub until its fix lands.
+Claim an issue by assigning yourself before you start (`gh issue edit
+<n> --add-assignee @me`), and comment on it at milestones and blockers.
+
+The old kanban board (`board/BOARD.md`) was retired on 2026-10-02.
+Its full history, K-001 onward, is in `board/ARCHIVE.md` — search it
+(K-0xx) before re-debugging anything. `board/board.py` stays because
+the Website, Auth and Agenda boards still use it.
+
+anything.
 
 **Parking another session's uncommitted hunk (Pouya, 2026-09-01).**
 Three sessions routinely work this checkout at once, so you WILL claim
@@ -119,25 +115,25 @@ revert to every other session, and on 2026-09-01 it was reported as one
 <your card> <what the hunk is>" -- <file>`; (2) a patch copy in YOUR
 scratchpad (`git diff HEAD -- <file> > .../parked-<file>.patch`),
 because the stash stack is shared across the main checkout and every
-worktree and another session may pop it; (3) a `board.py comment` on
-your claiming card naming both the stash message and the patch path.
-Re-apply exactly as found when your commit lands, before moving your
-card to Review, and say so in a comment. Bare `git stash`/`stash pop`
+worktree and another session may pop it; (3) a comment on your issue
+naming both the stash message and the patch path.
+Re-apply exactly as found when your commit lands, and say so in a
+comment on the issue. Bare `git stash`/`stash pop`
 without `-m` and without the file scope are off-limits here for the
 same reason.
 
 ## How Anki loads the addon
 
-- Symlink: `~/Library/Application Support/Anki2/addons21/klausmate` →
-  `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon/klausmate`. If the repo
+- Symlink: `~/Library/Application Support/Anki2/addons21/klaus_note` →
+  `/Users/pyamzi/Documents/Github/Klaus/klaus-note/addon/klaus_note`. If the repo
   folder is ever renamed, this symlink breaks silently and Anki loads nothing
   — and this file goes stale with it: the repo WAS `Addons/` until the
   2026-08 rename, and both paths here went on naming a dead directory until
   2026-08-31. `ls -l` the link before trusting a path written here.
 - **Never create a second copy under `addons21/`** (e.g. a numbered AnkiWeb
-  install). Two copies race on the same hooks and `editor._klausmate_*`
+  install). Two copies race on the same hooks and `editor._klaus_note_*`
   attribute guards make the collision silent. A removed duplicate is backed up
-  at `~/Library/Application Support/Anki2/klausmate-duplicate-1402639583.backup`.
+  at `~/Library/Application Support/Anki2/klaus-note-duplicate-1402639583.backup`.
 - Anki must be **fully restarted** to pick up code changes.
 
 ## Anki runtime & testing
@@ -151,11 +147,11 @@ same reason.
 - So headless testing = **stub `aqt`/`anki` in `sys.modules` and test
   logic, with real Qt offscreen where widget behavior matters**. The harness lives in `tests/` (see its
   README) with the bootstrap documented in the `klaus-test` skill — use
-  that skill when adding or changing klausmate modules. Run everything:
+  that skill when adding or changing klaus_note modules. Run everything:
   `failed=0; for t in tests/test_*.py; do env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 "$t" || failed=1; done; test "$failed" -eq 0`
 - **Offscreen PyQt6 can verify far more than "does it construct"
   (Pouya, 2026-09-01).** Under `QT_QPA_PLATFORM=offscreen` a real
-  `PdfSidebar`/`MapCanvas` (or the Browse-sidebar delegate) renders to a `grab()` you can
+  `ReaderTabs`/`MapCanvas` (or the Browse-sidebar delegate) renders to a `grab()` you can
   pixel-read, and every one of these is reachable headless — do not
   claim they need a live screen: **Retina** (`QT_SCALE_FACTOR=2` before
   `QApplication`, then `devicePixelRatioF()` is 2.0 and strokes render
@@ -178,9 +174,9 @@ same reason.
   python3, so pdf.js pixels cannot be produced headless; say so rather
   than claim them.
 - Verify syntax **through the symlink**:
-  `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`
-  (the PostToolUse hook `.claude/hooks/klausmate-compile.sh` does this
-  automatically after every klausmate `*.py` edit, and fails loudly if the
+  `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klaus_note/*.py`
+  (the PostToolUse hook `.claude/hooks/klaus-note-compile.sh` does this
+  automatically after every klaus_note `*.py` edit, and fails loudly if the
   symlink is missing or dangling — that failure means Anki is not loading
   this code; fix the symlink, don't suppress the hook).
 - Never point tests at the real `user_files` — use a scratch copy.
@@ -193,46 +189,52 @@ same reason.
 ## Module map
 
 - `__init__.py`: bootstrap + gui_hooks; JS bridge
-  (`pycmd("klausmate:<action>:<b64 json>")` routed in `on_js_message`, which
+  (`pycmd("klaus_note:<action>:<b64 json>")` routed in `on_js_message`, which
   splits `":", 2` — only `focus`/`crop`/`log`/`dbg` actions remain, the
-  `complete`/`ask` actions are gone with autocomplete/Ask); the config
-  accessors — **`write_config(cfg)` REPLACES the whole stored blob**
-  (that is exactly why `_migrate_config` can scrub a key by popping it),
-  so a partial dict handed to it wipes every other setting, API keys and
-  library root included. **`patch_config(updates)`** (getConfig → update
-  → writeConfig, hopped onto the main thread via `mw.taskman.run_on_main`
-  and applied inline when there is no taskman) is the merge writer, and
-  the ONE config writer a background thread may use — which is why every
-  `plus.*` sink takes it and never the plain writer (two reviewers found
-  that wipe as a Critical; `plus.remember`'s parameter is still *named*
-  `write_config`, so read the type, not the name); `PdfDock` (a
-  `QDockWidget` of the host window — Browse and Add Cards — since
-  2026-09-05): the PDF viewer panel. Its title bar is `_PanelBar` (`[◫]
-  [＋] [tabs] … [page n/m] [⧉] [✕]`), which IGNORES presses it does not
-  handle so Qt moves, docks and floats the dock from the empty bar
-  (`setTitleBarWidget`'s contract; the tab bar does not stretch over that
-  space). Allowed areas: left, right, bottom; floating is Qt's attached
-  tool window, above the host and hidden with it — the parentless
-  Mission-Control window, the six pane-anchored placements (K-169's note
-  anchor included) and the `startSystemMove` tear-off with its watchdog
-  and ghost were all deleted with the 2026-09-05 dock. `pdf_tabs.json`
-  keeps `placement` (`left`/`right`/`bottom`/`float`, old values migrated
-  once by `pdf_handler.migrate_placement`) and `geom`; applied on the
-  first `panel_show`, never from Anki's saved `QMainWindow` state.
-  `setDockNestingEnabled(True)` on the host lets it sit beside Anki's
-  Browse sidebar dock. Host close still runs `PdfSidebar.cleanup()`
-  before the window's C++ objects die. Anki's three editor windows —
-  Browse, Add Cards and Edit Current — are all `QMainWindow`s and all
-  get the dock; only an editor whose window is not a `QMainWindow` (a
-  third-party add-on's) gets none — `hasattr(parent_window,
-  'addDockWidget')` declines it with one log line — and the bar's ＋
-  button only started working with the dock: `@_guarded` zero-argument
+  `complete`/`ask` actions are gone with autocomplete/Ask); the
+  bootstrap of the **settings store** (`settings.py`, aqt-free; spec
+  [settings-seam](docs/superpowers/specs/2026-09-30-settings-seam-design.md),
+  2026-09-30): `__init__` installs
+  `settings.store = AnkiStore(mw.addonManager, __name__)`, `settings.run_on_main` and
+  `settings.current_profile`, and every module reads config through
+  `settings.read()` and writes through **`settings.patch(updates,
+  remove=())`** — the ONE writer, a merge into a fresh read, inline on
+  the main thread and hopped through `run_on_main` from any other,
+  dropped if the profile changed before the hop ran. **There is no
+  whole-blob writer any more**: the old `write_config(cfg)` replaced the
+  stored blob, so a partial dict handed to it wiped API keys and the
+  library root (two reviewers found that as a Critical), and
+  `patch_config` existed to work around it; both are gone with the six
+  `_pkg()` helpers, `index_queue._cfg`, `retention._cfg` and the
+  `USER_FILES` copies (`settings.user_files()` is the one path).
+  Migrations are pure `dict -> dict` functions registered with
+  `settings.register_migration` (retention's two threshold bumps; the
+  legacy-key scrub is built in) and run ONCE per profile open by
+  `settings.migrate()`, never on read. Tests assign `settings.store =
+  DictStore({...})` (or the harness's `LiveStore` over a dict they keep
+  mutating) and `settings.user_files_dir = <scratch>`; the ONE PDF reader
+  (`reader_panel.PdfSidebar`, `host_key="editor"`, the `ReaderTabs` strip
+  above its page) is owned by `reader_host.py` since the Add tab
+  (2026-10-01, spec `docs/superpowers/specs/2026-10-01-add-tab-design.md`):
+  its permanent parent is the Add tab's reader slot (`set_home`), Browse's
+  viewer mode borrows it (`library_viewer.enter` → `lend(box)`, `leave` →
+  `give_back()`), `release()` is cleanup + forget and a cleaned reader is
+  never reused (the peer's lifecycle rule: `PdfJsViewer.cleanup` drops its
+  webview for good). It is NEVER re-parented across top-level windows — a
+  lend into another window releases and rebuilds there; in fallback mode
+  (stock Browse) it is built under Browse and released when that Browse
+  closes. The dock (`PdfDock`, `_PanelBar`, left/right/bottom/float
+  placement in `pdf_tabs.json`, migrated by `migrate_placement`), the
+  editor-toolbar Library… button (`copilot.js` + the `library` pycmd) and
+  the status-bar / bottom-row "Right Sidebar" dock toggles were deleted
+  with it; `_load_tabs_file` drops `placement`/`geom` from older files.
+  The reader strip's ＋ button: `@_guarded` zero-argument
   slots connected to `clicked` had been swallowing PyQt's `checked`
   argument as a TypeError since the panel was built (both slots now
   take `*_args`); image-crop plumbing;
   Tools menu
   (`install_menu`: ONE entry,
-  "KlausMate Preferences…", inserted ahead of Anki's own items — the old
+  "KlausNote Preferences…", inserted ahead of Anki's own items — the old
   Klaus submenu's actions live inside the Preferences dialog now).
 - `heatmap.py` (aqt-free above its "aqt glue" divider): the **review
   heatmap** — a GitHub-style year grid under the deck list, past days
@@ -303,20 +305,97 @@ same reason.
   switch). The JS owns the DOM: wraps the deck table (+ in theme mode
   the still-sibling `<br>`+`#studiedToday` trio) and `.klaus-hm` into
   `.klaus-widget` divs, applies `dashboard_order`, and runs the whole
-  edit mode — right-click → "Edit Widgets…" (JS preventDefault beats
+  edit mode — right-click → "Edit Widgets" (JS preventDefault beats
   AnkiWebView's menu; pdfjs precedent), iOS jiggle (disabled under
   Anki's `body.reduce-motion` class — Anki ships NO
   prefers-reduced-motion CSS), per-widget shields so deck clicks/drags
   are unreachable while jiggling, ⊖ badge, ＋ popover, Done/outside/
-  Esc, and pointer-event drag-reorder (HTML5 DnD is dead on this
-  screen: MainWebView.dragEnterEvent eats non-file drags). Wrapper
-  sizing is `width:fit-content; max-width:100%` — BOTH measured
-  necessary (block = full-width badge misplacement; bare fit-content
-  can't go below the heatmap grid's min-content, 859px). Visibility
+  Esc, and pointer-event drag-reorder. **Other add-ons' blocks are
+  widgets too** (Pouya, 2026-09-30: "anytime there's a new thing on the
+  screen"). **They are wrapped in PYTHON, in the HTML, and the page never
+  moves a widget**: AMBOSS's `<amboss-component-wrapper>` builds a new
+  React root in `connectedCallback`, so each DOM move drew another card
+  (three, live). `dashboard.wrap_foreign` (tolerant parse, bails to the
+  unchanged body) wraps every other direct child of the deck screen's
+  `<center>` as `x:<id | .class | tag>` (`FOREIGN_ID` is the only shape
+  Python accepts; Anki's table/`<br>`/studied line, `.klaus-*` and scripts
+  are skipped); the `<center>` becomes a flex column (`klaus-dash-col`)
+  and `applyOrder`/drag/abort write CSS `order` only. Removal writes
+  `dashboard_hidden` (`apply_action(action, cfg)`), which `wrap_foreign`
+  also writes as `display:none`. Blocks added after load are not
+  adopted (wrapping them would mean moving them). The node harness
+  counts custom-element connects to pin this. (HTML5 DnD is dead on this
+  screen: MainWebView.dragEnterEvent eats non-file drags). **The deck
+  screen is a GRID since 2026-10-01** (Pouya: "they should fit within
+  square boxes"): the `<center>` is one CSS grid of `GRID_CELL` (160px)
+  squares, `GRID_GAP` (16px) apart and around, no `dense` flow (a
+  widget's place must follow its order or a drag lands elsewhere).
+  Every widget fills a whole COLUMNS x ROWS box (`--kw-cols`/`--kw-rows`
+  spans, set by the page and clamped to the columns the window has) and
+  scrolls inside its `.klaus-w-body` (the wrapper's own child, so the ⊖
+  badge is never clipped; Python's `wrap_foreign` writes the same pair).
+  Sizes are Klaus's, not a setting (Pouya: "set up predecided 2x1,
+  1x2... then I will just move it around"): `SIZES` per widget id,
+  measured once from the rendered content (re-measure in the offscreen
+  harness when a widget's content changes shape), `FOREIGN_SIZE` for an
+  add-on block not listed. A stale `dashboard_sizes` in meta.json is
+  ignored. The grid is at most `GRID_MAX` (800px, 4 columns) wide and
+  centred (`width: fit-content; max-width: min(800px, 100%)`, so the
+  box sits exactly on its tracks); edit mode shows every cell as a
+  dashed slot (`.klaus-dash-cell`, see OWN_HEIGHT below) and outlines the landing box while dragging
+  (`.klaus-dash-slot`, absolutely positioned so it takes no cell).
+  Add-on cards drawn in an OPEN shadow root (AMBOSS) get
+  `SHADOW_CSS[tag]` adopted into the root as a constructed sheet (a
+  `<style>` node would be the add-on renderer's to drop): AMBOSS's
+  440px div with 2em margins is what sat its card ~30px low.
+  `OWN_HEIGHT` (the deck list; Pouya: "let the deck list have its own
+  height") takes ONE grid row whose height is its content's: grid rows
+  are `minmax(GRID_CELL, auto)`, its body is in flow (`.klaus-w-own`)
+  with the SIZES rows as `max-height`, then it scrolls; every other
+  body is absolute, so other rows stay exactly a cell. Only full-width
+  widgets may be listed (a row it sets would stretch neighbours). So the
+  edit-mode cells are drawn by the page from the grid's computed
+  `gridTemplateRows` (`.klaus-dash-cell`, inserted first, absolute), not
+  a repeating tile, which would drift below a taller row. AMBOSS is
+  own-height too (its text wraps taller in 3 columns), so SHADOW_CSS
+  fills by FLEX (host a growing column flexbox), never height:100%,
+  which an own-height box cannot resolve. **Widget size**
+  (`dashboard_scale`, 70-150 in 5s, `valid_scale`): a slider in the edit
+  bar, live on `input`, saved on `change`; CSS `zoom` on the grid via
+  `--klaus-dash-scale`. Chromium 140 zoom: clientWidth and computed
+  tracks stay UNZOOMED, getBoundingClientRect is zoomed, so drag
+  translate and the landing outline divide screen distances by zoom().
+  The cap is `min(720px, 800px / scale, 100%)`: 4 columns at most and
+  never over 800px on screen. It sits ON TOP of Anki's User Interface
+  Size (QT_SCALE_FACTOR already scales the webview; `ankiScale` is shown
+  in the chip's title). Same Look: card #3A3A3C at night (dark `surface`
+  IS Anki's canvas), firmer hairline, no shadow (DESIGN.md), and add-on
+  buttons become DESIGN.md primary buttons (`_PRIMARY_BUTTON`, also in
+  AMBOSS's root via `:host-context`). Review fixes (2026-10-01): the
+  heatmap is own-height too, and `.klaus-widget:has(details[open])`
+  lets a popover (its settings menu) out of the scroll box and above
+  the next widget; the edit bar never covers the grid (`clearBar` adds
+  the overlap as the grid's margin-top while editing); edit-mode cells
+  are drawn only where no widget's offset box sits; keyboard: Shift+F10
+  or the Menu key opens "Edit Widgets" (no ellipsis: it is a mode, not a
+  dialog), menu items are focusable menuitems, each shield is a
+  focusable button and arrow keys move it (`moveBy`, saved per press);
+  Same Look colours are `theme.palette` tokens (`card_raised`,
+  `on_accent`); a month starting in the heatmap's last column keeps its
+  gap and loses its name. A box's ONE card stretches to fill it (`:only-child`,
+  never Anki's table: a stretched table spreads height into its rows).
+  **Same Look** (`dashboard_uniform`, explicit True only, a chip in the
+  edit bar): one DESIGN.md card on every box and each widget's own outer
+  card switched off, colours inside untouched; its 12px padding
+  replaces the child's own, so a box that fits without it still fits
+  (the 4x1 heatmap has 3px to spare). The jiggle is iOS-strength
+  (±1.5° and a 1px bob, ~0.26 s) with a random phase and period per
+  widget, and drag is 2-D: pointer over another widget takes its place
+  in the order. Visibility
   stays on per-widget bools (`heatmap_enabled`); `dashboard_order` is
   order ONLY. `_bg_preview_cfg` carries it, and `_write_cfg` patches an
   armed preview so a dashboard edit survives the next preview tick.
-  Bridge `klausmate:dash:<b64 json>`; only `add` refreshes (deferred,
+  Bridge `klaus_note:dash:<b64 json>`; only `add` refreshes (deferred,
   guarded on `mw.state`). `write_cfg` is PUBLIC (K-121) because it is
   the package's one implementation of "patch the armed appearance
   preview too" — heatmap's corner menu writes through it rather than
@@ -324,8 +403,166 @@ same reason.
   heatmap's, so its body script parses after panel_js's weld. DOM
   behaviour is tested by `tests/dashboard_js_dom_test.js` (node, run
   from test_dashboard.py, honest SKIP without node).
-- `browse_toggles.py`: Browse toolbar toggles (◧ sidebar / ◨ editor column),
-  split out of `__init__.py`.
+- `browse_toggles.py`: the pane toggles. In the single window they are
+  HTML in Anki's top bar, right after the Klaus logo
+  (`top_toolbar_will_set_left_tray_content`, `setup_top_bar` called from
+  `status_bar.setup`): ◧ ◨ for the Add tab (Library tree, editor) and
+  Browse (sidebar, card editor), hidden on Decks; a click is
+  `pycmd("klaus_note_pane:left|right")`, and every change (click, tab
+  switch via `Host.listeners`, a pane hidden elsewhere, toolbar redraw)
+  re-pushes `pane_state()` through `klausPanes`. The icon is
+  `_PaneToggle`'s geometry as SVG (`pane_icon_svg`); on = `text`, off =
+  `text_muted`. The self-painted `_PaneToggle` and `_VisibilityWatcher`
+  remain for Browse outside the single window, beside its status-bar
+  gear; plus the `browser_will_show` layout repair.
+  `pane_keep.py`: a toggle hides or shows one pane and keeps the
+  OPPOSITE one at its width (`set_visible_keeping(widget, on,
+  opposite)`); the difference goes to the widest other splitter pane
+  (the reader, the card table). A plain `setVisible` made Qt share the
+  change across every pane, so the opposite sidebar grew or shrank too.
+  A dock never matches an outer splitter (the climb stops at a main
+  window), and the width is put back now and again a tick later, when a
+  main window re-lays its docks.
+- `tasks.py` (aqt-free) + `status_bar.py` + `bottom_row.py` (spec
+  [status-bar](docs/superpowers/specs/2026-09-30-status-bar-design.md)).
+  **Main window: NO Qt bar** (the user's call, 2026-09-30, after the
+  copied-buttons version showed Anki's row twice). `bottom_row` extends
+  Anki's OWN deck-list / overview bottom row (`webview_will_set_content`,
+  `DeckBrowserBottomBar`/`OverviewBottomBar` contexts; review's answer
+  row untouched): a gear at its left edge (divs, not
+  `<button>` — Anki's bottom CSS frames buttons) → Anki's Preferences,
+  and at its RIGHT edge the task readout (newest task, then its
+  progress, red on failure; click → the task list). Its height is what
+  every Qt bar follows: a resize filter on `mw.bottomWeb` (deck screens
+  only, never the taller review row) calls `status_bar.set_row_height`,
+  so the bottom edge is one height on every tab (28px floor,
+  `STRIP_MAX` cap, both times `bar_scale`). It starts in the rendered state and follows `tasks`
+  live via `klausStatus` evals on `mw.bottomWeb` while
+  `mw.state` is deckBrowser/overview. Both clicks open a tick later
+  (`bridge_reentrancy`'s deferral rule). **Browse** keeps a 28pt Qt bar
+  (`status_bar.install_browser`): gear → Anki's Preferences in one click
+  (no menu; Klaus's settings are the top bar's k and Tools menu),
+  and at the bottom RIGHT the task text ("+N more") then its progress
+  bar (click → `show_task_list`, a `Qt.Popup` clamped to the screen by
+  its outer frame, with ✕ where a task can be cancelled). The Add tab's
+  bar is built the same way (a `QStatusBar` strip, `_strip`), so the two
+  cannot differ; neither has pane toggles in the single window (they
+  are in the top bar). `visible_tasks`, `gear_points` and
+  `show_task_list` are shared by both.
+  `tasks` is the one list of running processes — `begin`/`update`/`end`
+  from any thread; listeners run only through `run_on_main`
+  (`mw.taskman.run_on_main` once a profile opens). Reporters: indexing
+  (`index_queue._report_task`, key `index`, ✕ = `cancel_all`), folder
+  scan FAILURES only (`rescan`; the running scan is silent by request),
+  the Browse retention % (`retention`), Anki's collection and media sync
+  hook (`media`; a collection sync is the sync icon's spin, not a task), and Preferences' Ollama install/pull
+  (`ollama`). An end message lingers `LINGER_S` (4 s); `end(...,
+  error=True)` stays, in red, until the next `begin`. Tasks younger than
+  `SHOW_DELAY_S` (0.5 s) aren't drawn (no flashing). The QSS goes on Qt's
+  QStatusBar (one hairline, no macOS panel line or item frames).
+  Anki's own "Processing…" popups are deliberately not mirrored.
+  **Bar size** (`bar_scale`, 70-150 in 5s, default 85,
+  `dashboard.bar_scale_from_cfg`; 2026-10-01): one factor on top of
+  Anki's User Interface Size for the top bar, the deck/overview row and
+  the strips. Webviews: `theme.bar_zoom_css` (`body { zoom }`, Anki's
+  own `app_zoom_factor` multiplied in) injected by
+  `top_bar._on_webview_will_set_content` BEFORE the design gate, so the
+  stock bars shrink too; never `setZoomFactor` — Anki's
+  `adjustHeightToFit` reads `documentElement.offsetHeight`, which follows
+  CSS zoom only. `klausFit` divides screen px by the body zoom. Strips:
+  `status_bar.scale()` (cached, reset per profile) scales the floor
+  (never under `STRIP_MIN` 20), the cap, the gear and pane toggles
+  (`_size`; the icon follows the button, `browse_toggles.icon_size`),
+  the progress width and `status_bar_qss`'s text; `set_scale` re-sizes
+  every bar. Live: Preferences previews it (appearance preview →
+  `top_bar.refresh` redraws both webviews; `set_scale` the strips) and
+  reverts on Cancel.
+- `auto_sync.py` (aqt-free above its "aqt glue" divider; spec
+  [auto-sync](docs/superpowers/specs/2026-10-02-auto-sync-design.md),
+  config `auto_sync`, default on): Klaus syncs with AnkiWeb by itself —
+  after `IDLE_S` (120 s) without a key, click or scroll (an app-wide
+  filter that only records), or `AFTER_REVIEW_S` (30 s) after leaving a
+  review once input has been quiet `AFTER_REVIEW_QUIET_S`; at most every
+  `MIN_GAP_S` (300 s); never in review; a `TICK_MS` timer per profile.
+  **The quiet sync calls `mw.col.sync_collection` itself, never
+  `aqt.sync.sync_collection`**: Anki's opens its progress window on every
+  run, a warning dialog on every error and the upload/download question
+  for a full sync. Klaus fires `sync_will_start`/`sync_did_finish` around
+  it (its own handlers ignore that fire via `_quiet_running`), counts
+  errors silently (red entry at `FAIL_LIMIT` 3), clears auth on an AUTH
+  error, and on any result but NO_CHANGES only marks **full sync
+  pending** — the entry ("Full sync needed — click to choose") runs
+  Anki's own sync, which asks. Anki's own syncs (Y, the entry, Log In,
+  profile open/close — untouched) reset failures and pending. **Anki's
+  Sync link is hidden, never removed** (`link_html` in
+  `top_toolbar_did_init_links`): `set_sync_active`/`updateSyncColor`
+  look up `id="sync"`/`sync-spinner`; logged out it reads **Log In**
+  (same `sync` pycmd: Anki logs in, then syncs). **`toolbar.redraw()`
+  does not rebuild links** — only `draw()` re-runs that hook — so a
+  login-state change draws through `_redraw_if_login_changed` (tick,
+  sync end). The entry (`entry_state()`: last sync from `select ls from
+  col`, ms) is an ICON at the far bottom right — `entry()` gives a state
+  (`synced`/`syncing`/`never`/`failed`/`full`) and a tooltip saying what
+  it means and what a click does; `icon_svg` draws it (24-unit outline
+  paths, `currentColor`) for both `bottom_row` (`#klaus-sync`,
+  `SYNC_CMD`, CSS spin off under `body.reduce-motion`) and
+  `status_bar._SyncIcon` (`sync_label`, QSvgRenderer, timer spin) —
+  hidden while logged out. Stands down whole
+  (nothing scheduled, toolbar untouched, the Preferences switch disabled
+  and saying why) while an enabled add-on is named like "Auto Sync"
+  (`standing_down`; matched by name, its AnkiWeb id is unverified).
+- `addons_menu.py`: every top-level menu bar entry that isn't Anki's own
+  (`MAIN_MENUS`/`BROWSE_MENUS`, the `window.form` names from main.ui and
+  browser.ui) moves whole under ONE "Add-ons" menu before Help, in the main
+  window (`main_window_did_init`, which fires after all add-ons load) and
+  Browse (`browser_will_show`). A menu-bar `ActionAdded` watcher re-runs
+  it a tick later for menus added afterwards (AnkiHub's). Hidden when empty.
+- `single_window.py` + `host_keys.py` (spec
+  [single-window](docs/superpowers/specs/2026-09-30-single-window-design.md),
+  config `single_window`, default on): the main window is the only daily
+  window. Decks (Anki's whole main screen, unchanged), Add and Browse are
+  pages of a `QStackedWidget` under Anki's toolbar, whose three links are
+  the tabs (`klaus-active` class). The Add page (`build_add_page`,
+  `AddPage`) is a splitter of `library_tree.LibraryTree` | the reader
+  slot (`reader_host`'s home) | the editor slot Anki's Add is built into,
+  with Klaus's status bar (`status_bar.install_add_tab`; its ◧ tree /
+  ◨ editor toggles are in the top bar, `browse_toggles`) under it; `a` and the Add link switch to it (`open_add` asks Anki for an
+  instance when none is live), Close and Escape go back to
+  `Host.previous`, the splitter persists under `klaus_note_add_tab`
+  (`saveSplitter`), and a click on a PDF row loads it into the reader.
+  Edit Current keeps its right dock (the one dock left; it still runs the
+  full window height beside the stack — open bug). The Add tab is
+  keyboard-scoped exactly like Browse (state keys suspended, bare host
+  keys parked, `focus_in_editor` lets typing through in the editor slot
+  and the Edit dock). **Anki's windows are never moved** (see the
+  Deleted paragraph): each is BUILT as a child of its container from its
+  first line — `register` replaces the creators of every hosted name in
+  `aqt.dialogs._dialogs` (26.09 has five: Browser, AddCards, NewAddCards,
+  EditCurrent, NewEditCurrent) with `_construct`, which puts `_Shim`
+  after the class in a subclass's method resolution order (`super().
+  __init__(None, Window)` lands in the shim) AND swaps the class's
+  module-level `QMainWindow` name for the one constructor call (Browse
+  calls `QMainWindow.__init__(self, …)` explicitly); whichever the source
+  uses runs once, the other is inert. `build_host` moves whatever the
+  central layout holds (AMBOSS and AnkiHub wrap `mw.web` in a splitter
+  and find it through `mw.mainLayout`, which now IS the Decks page's
+  layout) and never detaches a layout. Browse's menus swap into the host
+  bar while its tab is active (`menus_in/out`, exempt from
+  `addons_menu`'s watcher via `_klaus_note_keep_on_bar`; its Add-ons menu
+  reads "Browse Add-ons" there), which is also what scopes their
+  shortcuts. `host_keys`: the state shortcuts (review keys) are recorded
+  from `state_shortcuts_will_change` and DISABLED (never cleared and
+  re-set) while the Add or Browse tab shows; an app-level `ShortcutOverride`
+  filter lets those keys type into the hosted editors (the Add editor
+  slot and the Edit dock). Escape does nothing in the Browse tab; Add's
+  Close and Escape go back to the previous tab (a close filter;
+  Anki's own teardown, `_close_event_has_cleaned_up`, passes); Edit
+  Current's dock is reaped once the registry shows it closed. Startup:
+  Decks, dock closed (`mw.saveState` under `klaus_note_host_state`).
+  Fallback: any preflight or shim failure restores Anki's creators for
+  the session, with a toolbar tooltip and a sticky error task; `false`
+  in config is stock Anki. Live-verified 2026-09-30 on 26.09.2 with
+  AMBOSS + AnkiHub active: both editors render.
 - `browse_highlight.py` (aqt-free at module top): Browse search-term
   highlighting (K-113), adapted from Glutanimate's
   highlight-search-results (AGPLv3 — its header must stay intact;
@@ -354,28 +591,39 @@ same reason.
   code. Disabled-state QSS must repeat any id selector it has to beat
   (`QPushButton#SecondaryButton:disabled` — an id outranks a
   pseudo-state, which is why disabled controls once looked live). Also
-  per-surface builders (`dialog_qss`, `panel_header_qss`, `find_bar_qss`,
-  `thumb_strip_qss`, `drop_zone_qss`, `muted_label_qss`,
-  `accent_rgba`). `pdf_panel_qss`'s scoped `QSplitter::handle` rule sits
-  on `bg`, because the pane it grabs (the PDF viewer's own internal
-  splitter) is `bg` too. (`library_qss` and `accent_mix` went with the
-  Library window in K-308.) A documentless native `QPdfView`
-  paints `bg` the same way — through palette roles rather than a
-  stylesheet (Window/Base/Dark/Mid, set once at construction on both
-  the view and its viewport in `pdf_viewer.py`, K-178, closed by
-  K-208) — since a `QPdfView` answers to Qt's palette, not QSS;
-  pdf.js needs no equivalent, since its own `css_vars` already hands
-  the page `var(--bg)` directly. **UI files must not hardcode colours** — import theme and
+  per-surface builders (`dialog_qss`, `panel_header_qss`,
+  `pdf_panel_qss` — the reader panel styles itself, K-153 —
+  `drop_zone_qss`, `muted_label_qss`, `accent_rgba`). (`library_qss`
+  and `accent_mix` went with the Library window in K-308;
+  `find_bar_qss`, `thumb_strip_qss` and `pdf_panel_qss`'s splitter rule
+  went with the native viewer in PDF reader 5/5.) The pdf.js reader needs no palette roles:
+  `css_vars` hands its page `var(--bg)` directly. **UI files must not hardcode colours** — import theme and
   reference tokens; styles are computed at widget creation (a night-mode
   flip catches up on next open). Dialog buttons are blue-primary by
   default with `SecondaryButton`/`DangerButton` objectName opt-outs.
 - `pdfjs_viewer.py` + `web/pdfjs_viewer.html` + `web/pdfjs/` (vendored
-  pdf.js 3.11.174): the flicker-free webview renderer (K-095 umbrella),
-  selected by config `pdf_renderer` (`"native"` default until the K-101
-  cutover; parity cards K-097..K-100). `PdfSidebar` branches at
-  construction; the PDF is fed as chunked base64 into window globals
-  (SynapsePro's pattern), pages render lazily via IntersectionObserver
-  over sized placeholders, the pdf.js text layer gives native selection,
+  pdf.js 3.11.174): the ONE PDF reader (spec
+  `docs/superpowers/specs/2026-09-30-pdf-reader-design.md`). The native
+  QPdfView renderer (`pdf_viewer.py`) was deleted in PDF reader 5/5
+  (2026-10-01); there is no fallback — without QtWebEngine
+  (`PDFJS_AVAILABLE` false) `PdfSidebar` shows a "PDF viewer is
+  unavailable" label. The PDF loads in pieces: Python hands the page the
+  file length and the first 256 KB (`first_chunk`), and pdf.js's
+  `PDFDataRangeTransport` asks for the rest on demand over
+  `pycmd("klaus_note_pdfjs:range:<gen>:<begin>:<end>")`, answered by
+  `handle_range` → `pdf_source.range_reply` (at most 1 MB a call; a
+  request from an older document generation is refused; a stale
+  fingerprint makes the reader reload in place). `teardown()` destroys
+  the document. Pages render lazily via IntersectionObserver
+  over sized placeholders, and up to 12 pages outside the render zone
+  stay rendered (`KEEP_RENDERED` in `web/pdfjs_pure.js`, least recently
+  visible evicted first); `klausSetAnnotations` redraws only the pages
+  whose records changed; the first find searches visible pages first,
+  then the rest in idle batches. Native pinch gestures never reach
+  Chromium: the webview's event filter forwards `ZoomNativeGesture` to
+  the page and turns `SmartZoomNativeGesture` into a fit-width toggle, and a
+  page whose `visualViewport.scale` leaves 1 anyway posts `vv-scale`
+  and Python reloads it. The pdf.js text layer gives native selection,
   and theme tokens arrive as CSS vars (`theme.css_vars`) — which must
   emit EVERY var the page hands to `var()`, since an undefined one
   computes that declaration to nothing rather than failing loudly
@@ -428,30 +676,137 @@ same reason.
   stays scrollable (the old fixed-width flex centred overflow off the
   left edge, unreachable). **The page owns rendering and
   gestures; Python owns the annotations JSON** — mutations arrive over
-  the bridge (`hl-add`/`hl-remove`/`note-edit`), `PdfJsViewer` persists
-  via `pdf_handler.save_annotations` + the same 500ms debounced bake,
-  keeps K-081 tombstones, and pushes canonical records back via
-  `klausSetAnnotations`. Pure helpers (`renderer_from_config`,
-  `chunk_b64`, `build_page_html`, `parse_bridge`, `decode_b64_json`,
-  `records_from_rect_map`) are aqt-free for `tests/test_pdfjs_viewer.py`.
+  the bridge (`hl-add`/`hl-remove`/`note-edit`/`text-add`/`text-update`),
+  `PdfJsViewer` persists via `pdf_handler.save_annotations`, asks
+  `annotation_save`'s pipeline for the bake, keeps K-081 tombstones, and
+  pushes canonical records back via `klausSetAnnotations`. Pure helpers
+  (`first_chunk`, `handle_range`, `build_page_html`, `parse_bridge`,
+  `decode_b64_json`, `gesture_action`, `records_from_rect_map`) are
+  aqt-free for `tests/test_pdfjs_viewer.py`.
+  **Hand-drawn reader (2026-10-01, spec
+  [hand-drawn-reader](docs/superpowers/specs/2026-10-01-hand-drawn-reader-design.md))**:
+  three record kinds, named by `pdf_handler.record_kind` — a highlight
+  (optional `card: [dx, dy]`, its note card's offset from the union's
+  top-right), a text box (`kind: "text"`) and a free-standing sticky
+  note (`kind: "note"`, `rects[0]` its card, a highlight ink). Bridges
+  `note-add`/`note-update`/`note-remove`/`card-move`/`note-text` (empty
+  clears a highlight's note and its card); `apply_text_update(...,
+  kind=)` serves text and notes. The "Hand-drawn style" preference
+  (`hand_drawn`, default on) reaches the page as `klausSetHandDrawn` on
+  ready and on Save (`pdfjs_viewer.set_hand_drawn_all`); the page (plan
+  Tasks 6–7, pending as of 2026-10-01) draws
+  rough.js marker highlights (vendored `web/rough.min.js`, seed
+  `pdfjs_pure.seedFor(id)`, never stored) and Excalifont text (served as
+  `web/fonts/Excalifont-Regular.ttf`, OFL-1.1), and places cards with
+  `pdfjs_pure.cardSpot` — `pdf_handler.card_box` is the same arithmetic.
+  The PDF FILE never depends on the switch: text boxes stay Helvetica,
+  notes and highlight-note cards are Helvetica `/FreeText` filled with
+  their ink (no border, no `/AP`), a highlight's note also rides in its
+  `/Contents`, and the old `/Text` sticky icon is gone.
   Parity completed by K-100:
   Cmd/Ctrl-double-click copies the slide (through the shared
-  copyPageImage bridge — the native "insert into field" surface IS the
-  clipboard), the marquee persists across zoom/re-render with native
-  press semantics + drag-out (PNG dragstart; the drop-into-field leg
-  awaits live-Anki verification on the K-101 soak — re-copy+paste is
-  the working fallback), and find highlights the exact substring via
-  the CSS Custom Highlight API with the whole-span ring as guarded
-  fallback. Cutover gate: K-101 (needs-human). The annotations JSON + bake
-  pipeline are renderer-independent — parity work must not fork them.
-- `pdf_viewer.py`: `PdfViewer` (QPdfView + selection/marquee/highlight
-  overlay, find bar, thumbnails, zoom/nav, per-gesture eventFilter) and
-  `PdfSidebar` (one instance reused across tabs). No toolbar "Copy page"
+  copyPageImage bridge — the clipboard is the "insert into field"
+  surface), the marquee persists across zoom/re-render with native
+  press semantics + drag-out (PNG dragstart; re-copy+paste is the
+  fallback if a drop into a field does not land), and find highlights
+  the exact substring via the CSS Custom Highlight API with the
+  whole-span ring as guarded fallback. The cutover (K-101) finished with
+  PDF reader 5/5. The annotations JSON + bake pipeline belong to no
+  reader — never fork them.
+- `pdf_source.py` (aqt-free): piece loading's byte source. `DocSource(path,
+  snapshot_dir)` hard-links the file into `<user files>/reading/` at load
+  (`pdfjs_viewer._reading_dir`, via `pdf_source.user_files_dir()`) and
+  reads that link, so Klaus's own bakes (`os.replace` → a new inode)
+  never disturb an open reader, while an outside in-place rewrite still
+  reads stale; where a hard link is impossible (another volume) it reads
+  the live file. Each `read(begin, end)` opens and closes the file (an
+  open handle would block `os.replace` on Windows) and checks the load
+  fingerprint `(st_ino, st_mtime_ns, st_size)` (`pdf_handler.file_stat`);
+  a mismatch raises `StaleSource`. `read` also bounds the range to the
+  file and caps it at `MAX_RANGE` (1 MB). `range_reply` refuses an old
+  generation, calls `read`, and answers `{"stale": true}` for a changed
+  file. `FIRST_CHUNK` = 256 KB.
+  The snapshot goes on teardown and at the next load;
+  `sweep_snapshots` clears leftovers at a session's first load.
+- `doc_sync.py` (aqt-free above its Qt-glue divider): the folder-sync
+  engine for open PDFs. A registry of what each reader has open
+  (`open_doc`/`close_doc`, per reader instance); every open path sits on
+  a `QFileSystemWatcher`, re-added after a save-over drops it. Events to
+  subscribers: `changed` (an outside edit, once size and `mtime_ns` hold
+  across two checks `STABLE_MS` = 150 ms apart), `moved`, `missing` and
+  `back` (the last three from `pdf_drive.rescan_library_root` →
+  `_tell_readers`, AFTER the new mapping is applied). Klaus's own writes are
+  pinned (`pin_own_write`) and classify as `own`, never `changed`; a
+  `changed` drops the stale pristine original first (under `pdf_lock`),
+  so the next bake re-captures it from the edited file instead of
+  reverting the edit. The
+  reader answers `changed` by reloading in place, page and zoom kept,
+  with "Updated from disk" (an open text box commits first); `moved` by
+  re-pointing with no reload; `missing` by clearing the reader and
+  closing that PDF's tab (R50) with "<name> was removed from your
+  Library folder." (marks, JSON and tag kept). Klaus's own rename or
+  move updates the map before the rescan sees it, so `_tell_readers`
+  also re-points every open reader whose mapped path differs.
+- `annotation_save.py` (aqt-free above its Qt-glue divider):
+  `SavePipeline`, the ONE bake path. `request(name)` restarts a
+  `DEBOUNCE_MS` = 500 ms debounce; then `bake_annotations` runs on a
+  background worker, at most one per PDF (a request mid-bake sets an
+  "again" flag). A main-thread post-step pins the written fingerprint in
+  `doc_sync` and `library_stats.json`, removes omitted records and emits
+  `saved` / `records`. A failed bake keeps the JSON as the safe copy;
+  the reader toasts `SAVE_FAILED_COPY` ("Marks couldn't be saved into
+  the file yet; they're kept and will retry.") and the pipeline retries
+  on the next change and when `doc_sync` reports the file `back` or
+  `moved`. `flush_all()` runs on `profile_will_close`; a reader flushes
+  its PDF on `clear()`, `cleanup()` and before a reload from disk.
+  Switching to another PDF releases without a flush — the running
+  debounce still bakes it. A reader that opens a PDF whose JSON is newer
+  than the file requests a bake. On `saved` and `records` every reader
+  of that PDF re-reads the JSON and pushes it when it differs, so a
+  second reader never writes back a stale list over the first one's
+  marks; every mutating bridge handler also re-reads the JSON first
+  (`PdfJsViewer._sync_marks`), closing the window before `saved`
+  arrives; those re-reads use `load_annotations_strict` (None for an
+  unreadable or corrupt file), so a locked or half-synced JSON never
+  replaces the marks with `[]`. `save_annotations` writes atomically
+  (`_atomic_write_json`) and returns whether the JSON was written: a
+  failed write keeps the marks in memory, toasts `SAVE_FAILED_COPY`,
+  requests no bake, and is retried by the next save. A bake whose
+  working file differs from the stat recorded in `library_stats.json`
+  (an outside save doc_sync has not reported yet, or one landing
+  mid-bake) drops the stale pristine first; the same stat is the carry
+  scan's baseline, so a save landing after the check re-bakes. The
+  worker pins (`doc_sync`) and then records each bake's stat itself, so
+  doc_sync never reads Klaus's own write as `changed` and the next bake
+  in its "again" loop sees it as Klaus's. An UNREADABLE marks file is
+  never written over: `save_annotations`, `_update_doc_keys` (atomic
+  too) and the outside-mark mirror leave it alone, the bake skips it
+  (no un-bake), and a viewer that opens one shows no marks, toasts
+  `UNREADABLE_MARKS_COPY` once, keeps new marks in memory and merges them in
+  when the file reads again. A stored number too big for a float
+  (`10**400`) costs only its own value (`_finite_number`), never the
+  whole load. `forget(name)` (`pdf_drive.delete_pdf`, before the readers let
+  go) drops a deleted PDF's pending save and failed flag.
+- `reader_tabs.py`: `ReaderTabs`, the reader's tab strip (`[＋] [tabs]
+  … [page n/m]`), one per `PdfSidebar` (its `tabs` attribute). A tab
+  SHOWS the Library's display name (`tab_label`: drive.json, no `.pdf`,
+  `&` doubled so QTabBar shows it rather than taking a mnemonic) and
+  carries the stored name in `tabData`, which is all the interface ever
+  reports. It only shows names and reports `activated` / `closed` /
+  `add_requested`;
+  `PdfSidebar` loads documents and persists each host's tab set in
+  `pdf_tabs.json` under its `host_key` (`editor`, `lecture`).
+- `reader_panel.py`: `PdfSidebar`, the reader every host wraps — a
+  `PdfJsViewer` (or, without QtWebEngine, the "PDF viewer is
+  unavailable" label), its `ReaderTabs`, and the `doc_sync` /
+  `annotation_save` wiring above; `cleanup_all_sidebars` sweeps every
+  live one on profile close and quit. No toolbar "Copy page"
   button — Cmd/Ctrl-double-click a page, or right-click "Copy slide as
   image", copies it as an image; right-click also offers "Copy page text".
 - `pdf_handler.py`: storage + text extraction. `user_files/{contexts,pdfs,
-  pdf_originals,annotations}`, state in `pdf_tabs.json` (open tabs, placement,
-  thumbs, last_used — all writers MERGE via `_save_tabs_file`). Since K-070/
+  pdf_originals,annotations}`, state in `pdf_tabs.json` (open tabs per host,
+  last_used — all writers MERGE via `_save_tabs_file`; `placement`/
+  `geom` from older builds are dropped on read). Since K-070/
   K-073 the PDF *files* live in a user-chosen **library root** (config key
   `library_root`, picked at setup or in Preferences): `library_map.json`
   maps safe basename → path relative to that root, and **`pdf_path_for` is
@@ -466,9 +821,20 @@ same reason.
   PDF as REAL annotations
   (vendored pypdf): pristine original captured once in `pdf_originals/`,
   every bake regenerates from pristine + full json (never incremental; empty
-  json = un-bake/restore), atomic `os.replace` (safe under the viewer's open
-  QPdfDocument inode). Scheduled from `pdf_viewer._save_annotations` via a
-  1200ms debounce → daemon thread.
+  json = un-bake/restore), atomic `os.replace` from a hidden
+  `.<base>.pdf.<uuid>.tmp` in the Library root (an open reader reads its
+  hard-link snapshot, so the swap never disturbs it). The working path
+  is resolved under `pdf_lock(name)` right before the replace — the lock
+  rename, move and delete share — so a rename mid-bake writes to the
+  new path, and a bake never recreates a mapped file that is gone. A
+  file whose stat changed since the carry scan read it (an outside save
+  mid-bake) is re-baked once from the new file, never overwritten. The
+  pristine is captured with every Klaus mark (any subtype) and every
+  outside highlight/text box stripped, so a re-capture after an outside
+  edit never doubles Klaus marks. The first rescan of a session sweeps
+  bake tmps over an hour old from the root (`sweep_stranded_tmps`).
+  Scheduled only through `annotation_save.SavePipeline` (500 ms
+  debounce, one worker per PDF).
 - `top_bar.py`: the **Klaus top bar** — restyles Anki's main-window top
   toolbar IN PLACE (never rebuilds it): `webview_will_set_content` with
   an `aqt.toolbar.TopToolbar` context injects `theme.toolbar_css()`
@@ -487,20 +853,24 @@ same reason.
   Windows without touching NSWindow/DWM; the palette `chrome` token is
   only the fallback. Also
   `top_toolbar_will_set_left_tray_content` prepends `logo_html()` — the
-  **impossible star** (K-270, Pouya's `klaus-logo.svg`, 2026-09-17; the
-  design source of record is `klausmate/web/klaus-logo.svg`): five
-  FILLED paths inline in a 26×26 box on a `viewBox="0 0 1254 1254"`,
-  each `fill="var(--klaus-accent, currentColor)"` and none of them
-  stroked, click → Klaus Preferences via `klausmate:settings` on
+  **hand-drawn k** (Pouya's logo, 2026-10-01, replacing the K-270
+  impossible star; the source of record is
+  `docs/reference/brand/klaus-logo.svg`, a blue tile with a white k):
+  `logo_svg(fill)` draws ONLY the k, never the tile — ONE FILLED
+  `fill-rule="evenodd"` path (`_LOGO_PATH`, the file's white path
+  verbatim, pinned equal by `tests/test_top_bar.py`) in a 26×26 box on
+  `LOGO_VIEWBOX`, the file's 1254 box cropped to the k plus ~4% so it
+  fills the seat; `logo_html()` fills it
+  `var(--klaus-accent, currentColor)`, never stroked, click → Klaus Preferences via `klaus_note:settings` on
   `webview_did_receive_js_message`; the same hook also routes the
-  on-screen gradient editor's `klausmate:bggrad` drag-end messages
+  on-screen gradient editor's `klaus_note:bggrad` drag-end messages
   into `background.grad_edit_event`). Because it only restyles, Anki's links
   and AnkiHub's toolbar items all keep working and inherit the look via
   the shared `.hitem` class. **Anki draws the toolbar in
   `finish_ui_setup()`, BEFORE any profile opens** — so the accent a
   profile saved reaches the bar only via `_on_profile_open_redraw`
   (profile_did_open, one-tick-deferred toolbar.draw); without it the
-  star launched default-blue on every restart. `refresh()` is
+  k launched default-blue on every restart. `refresh()` is
   review-safe: in the review state it never calls `mw.reset()` (that
   rebuilds the study queues) — it evals `reviewer_style_push_js`
   (replace-not-stack on the one `#klaus-reviewer-bg` tag the
@@ -519,14 +889,14 @@ same reason.
   main/panel css + the panel_js weld), the toolbar/bottombar restyle,
   the chrome push, and the whole dashboard injection (which also resets
   `_EDIT` so toggling off mid-jiggle can't strand edit mode). NOT
-  gated: the star (fills `var(--klaus-accent, currentColor)` so it
+  gated: the k (fills `var(--klaus-accent, currentColor)` so it
   survives on the stock bar), the heatmap, every functional injection,
   and Klaus's own windows. In native mode the deck screen draws NO
   Klaus widgets: the heatmap's two injections are gated too (at the
   injections, never inside `enabled()` — the same round-trip rule as
   `resolve()` above: a reader whose value any UI seeds from and writes
   back must never be gated, or it persists a `heatmap_enabled` False
-  the user never chose). The star is
+  the user never chose). The k is
   the one survivor, and it carries its own geometry inline (`logo_html`)
   so the gate cannot move it. Corrupt values read as OFF — opposite of
   heatmap's rule — so bad config can't surprise-restyle the app.
@@ -564,7 +934,7 @@ same reason.
   Preferences dialog, `gradient_edit_eval_js`/`gradient_edit_js` grow
   a draggable centre dot + size ring on each gradient screen (JS
   repaints the page inline per pointermove; drag-end lands as a
-  `klausmate:bggrad` pycmd carrying an OP — geom / pick / add /
+  `klaus_note:bggrad` pycmd carrying an OP — geom / pick / add /
   remove — clamped in `grad_edit_event`, JS never trusted, and flows
   through the sink into the dialog's pending spec: geom stays QUIET
   (never refresh mid-drag), structural ops replant the editor, pick
@@ -652,17 +1022,29 @@ same reason.
     delete and search still work. Also a delegate that DRAWS a
     Library tag by its real name (tags cannot hold spaces; EditRole and
     search still use the tag), a right-aligned muted retention % on EVERY
-    tag (mean FSRS recall of studied cards, parents include children, new
-    and suspended excluded, computed in a QueryOp only while a Browse is
-    open), warning icons with `helpEvent` tooltips (not embedded / stale /
-    indexing, from `retention.index_status` + `index_queue.pending_names`),
+    tag (mean FSRS recall of ALL its cards, suspended included and
+    never-studied ones at 0% — recall times coverage, Pouya's call
+    2026-09-30; parents include children; computed in a QueryOp only
+    while a Browse is open), warning icons with `helpEvent` tooltips (not embedded / stale /
+    indexing, from `retention.index_status` + `index_queue.pending_names`;
+    stale includes a text file changed since indexing), excluded rows
+    dimmed with "Excluded from the index" and no warning icon,
     the right-click menus (`browser_sidebar_will_show_context_menu`), a
     click that loads the PDF into Browse's PDF panel only when that panel
-    is already showing, a drop filter for PDF files, and a footer under the
-    tree (index status line + ✕, Import PDFs…).
+    is already showing, a drop filter for PDF files, and two actions on
+    Anki's own `sidebar.toolbar` beside its search box (`header_actions`:
+    ⟳ "Index New and Changed PDFs" → `index_queue.refresh`, +PDF "Import
+    PDFs…"; the Add tab's tree puts the same two beside its filter). No
+    footer. Right-click "Exclude from Index" / "Include in Index" on a
+    PDF or folder (`library_actions.exclude`/`include`): the exclusion
+    lives in `drive.json` (`drive_store.set_excluded`, a folder covers its
+    subfolders and later imports), excluding DELETES the covered PDFs'
+    index dirs after a window-modal confirm when any exist, and card tags
+    are never touched (manual indexing, 2026-10-01, spec
+    [manual-indexing](docs/superpowers/specs/2026-10-01-manual-indexing-design.md)).
   - `library_actions.py`: the window-free actions those menus call; every
     dialog an instance with `open()`. Import COPIES files into the library
-    root and lets the background scan read, import and index them.
+    root and lets the background scan read and import them; ⟳ indexes them.
   - `pdf_drive.py` is now only the disk half: `start_library_rescan`
     (QueryOp without the collection → `pdf_handler.prepare_rescan` reads and
     OCRs new files; applied on main by `rescan_library_root`), renamed files
@@ -670,8 +1052,8 @@ same reason.
     pages — a bulk Finder rename once froze the Library for a week), the
     filesystem watcher, `delete_pdf`/`delete_folder` (files go to the
     Trash), `apply_folder_change`, and `refresh_open_library` (Preferences
-    calls it). PDFs the scan imports get page records, auto-indexing and a
-    tag (`_after_ingest`), like every other import.
+    calls it). PDFs the scan imports get page records and a tag
+    (`_after_ingest`), like every other import; nothing is indexed until ⟳.
 - `tag_sync.py`: per-PDF collection tags. THE INVARIANT: every indexed PDF
   owns exactly one tag `!Library::<folder path, / → ::>::<leaf>` (leaf =
   display name minus extension, tag-sanitized), whose members are exactly
@@ -721,11 +1103,18 @@ same reason.
 - `lecture_view.py` (aqt-free above its aqt-glue divider; K-119): the
   review-time Lecture panel. A FUNCTIONAL (never design-gated)
   "Library" button injected beside More on the reviewer's bottom bar
-  (`ReviewerBottomBar` name-match; `pycmd("klausmate:lecture")`,
+  (`ReviewerBottomBar` name-match; `pycmd("klaus_note:lecture")`,
   answered by this module's own js-message handler — the hook filters
   CHAIN and the final return wins, so `__init__`'s blanket non-Editor
-  swallow upstream is harmless) toggles a right QDockWidget on mw
-  hosting a standalone `PdfSidebar`. Once open it follows
+  swallow upstream is harmless) toggles a panel hosting a standalone
+  `PdfSidebar`. **Not a dock since 2026-10-01**: an mw `QDockWidget` runs
+  the full window height beside the top bar and the bottom row and
+  pushed the whole window aside, so `_install_beside_reviewer` moves
+  whatever holds `mw.web` in `mw.mainLayout` (the webview, or AMBOSS's
+  and AnkiHub's wrapping splitter) into a horizontal `QSplitter`
+  (`REVIEW_SPLIT`) in the same layout slot, with the panel beside it,
+  once per session; the panel takes its saved width a tick after show
+  (`_size_panel`). Once open it follows
   `reviewer_did_show_question`: note tags → `!Library` candidates
   (prefs.json inverted, casefolded; the tag IS the membership verdict
   — deliberately NO threshold re-gating, `MATCH_FLOOR` sanity only) →
@@ -734,14 +1123,14 @@ same reason.
   results cached per (nid, tags), revalidated by file stamps. No match
   shows exactly "No lecture page available for this card." pdfjs
   first-load jumps ride a generation-stamped retry ladder (the page
-  posts `count:` before its divs exist); leaving review hides the dock
+  posts `count:` before its divs exist); leaving review hides the panel
   (mw.web is shared across states); open-state + width persist under
   `pdf_tabs.json`'s `lecture_view` key; EVERY teardown path runs
   `sidebar.cleanup()` (K-095). Config `lecture_view_reopen`. Shortcut
   "l" via `state_shortcuts_will_change` (collision-scanned) + a
   reviewer context-menu toggle; never activateWindow — answer keys
-  stay on the reviewer. The dock's title bar is an empty `QWidget`
-  (K-257's Record button was removed with recording in K-314).
+  stay on the reviewer. The panel has no chrome (K-257's Record button
+  was removed with recording in K-314).
 - `projection.py` (aqt-free, pure stdlib): top-2 PCA by power iteration +
   deflation over one packed `array('d')` buffer (`math.sumprod` on
   memoryview slices, strided slices for the transpose — never the d×d
@@ -896,6 +1285,37 @@ same reason.
   bypasses `QPushButton:focus`. Checked-state bookkeeping is 100%
   inherited from `QCheckBox` — every call site keeps working unchanged.
 - `crop_dialog.py`: image-crop dialog (crop saved as NEW media file).
+- `image_occlusion/`: Image Occlusion Enhanced v1.4.0 (AGPL-3, every
+  copyright header kept; provenance and Klaus's edits in `UPSTREAM.md`),
+  ported to Klaus rules. `setup()` (called once from `__init__`) registers
+  IOE's hooks, "Image Occlusion Options…" in Tools and "Image Occlusion
+  Help…" in Help, never `setConfigAction` (Klaus keeps its Config button).
+  **Conflict guard**: with add-on `1374772155` installed AND enabled
+  (`allAddons()` first: `isEnabled` is True for a missing folder) it
+  registers nothing and shows one tooltip a second later. `occlude(editor,
+  image_path, initial_svg=None)` opens svg-edit; `initial_svg` loads as
+  the starting masks in add mode. Note type, mask SVGs and the `imgocc`
+  config stay byte-compatible with IOE. svg-edit loads by file URL; only
+  `image_occlusion/web/` and `image_occlusion/excalidraw/` are web exports.
+  **Excalidraw diagrams** (Image Occlusion 3/3): "Draw a diagram…"
+  (`occlude(..., draw=True)`) opens the same editor on a blank PNG with a
+  third tab, Draw (`excal_tab.DrawTab`, the offline bundle in
+  `excalidraw/`); "Use drawing" makes the export (PNG, 2×, 20 px padding)
+  the image and each text label one mask (`excal_masks.label_rects`).
+  Once IOE has added or updated the notes, the scene is saved in media as
+  `_<image media name>.excalidraw` (JSON plus a `klaus` block holding the
+  export origin), under the name Anki RETURNED; the `_` keeps Check Media
+  from listing it as unused. **Re-edit**: edit mode shows Draw (the Masks
+  Editor stays current) only when that file reads (`excal_tab.read_diagram`).
+  A Use drawing on top of an earlier drawing reads svg-edit's masks back and
+  `remap_masks` carries them over: the best mask with IoU >= 0.8 on an old
+  label's box follows its label and keeps its id (so the note updates in
+  place); every other mask shifts with the scene origin and goes once wholly
+  outside the new image. Only a label NEW to the scene gets a new mask (id
+  `klaus-new-<n>`, which ngen reads as a new card); one the old scene had
+  keeps what the user left, a resized mask stays theirs and a deleted one
+  stays deleted (R22). The PNG gets a new media name; the old image and its
+  scene stay for notes not yet updated.
 - `web/copilot.js`: injected into editor webviews; shadow-DOM-aware
   (`composedPath`). Ghost text and Ask are gone — this file now only tracks
   field focus (for PDF page-insert targeting) and the image-crop dblclick
@@ -936,8 +1356,8 @@ same reason.
     the one chain every index request runs. A new PDF-matching surface
     that skips it silently matches against a stale index (missing
     cards, no error). **Never delete this module**:
-    `retention.py` imports it at module top for `USER_FILES`/`INDEX_DIR`/
-    `_cfg`/`_fail` and for `_busy`, the ONE re-entrancy token every
+    `retention.py` imports it at module top for `index_dir()` (the card
+    index folder under `settings.user_files()`), `_fail` and `_busy`, the ONE re-entrancy token every
     embedding phase holds; manage_models, tag_sync and pdf_map read it
     too. Gone with K-146: `run_curation`, `_preview_in_browse`,
     `last_run`, `suggest_deck_name`, `_escape_search` (and long before
@@ -951,25 +1371,26 @@ same reason.
     its prompt and progress state. It exists
     because that chain was a METHOD on the Library window
     (`DriveWindow._on_embed`) and a PDF added from the deck screen has
-    no Library window: `_on_embed` now just calls `request_pdf`, and
-    `__init__.import_pdf_file` — the one funnel every import surface
-    returns through — calls `on_pdf_imported`, so every add indexes
-    itself (config `auto_index_on_add`, default ON; a corrupt value
-    reads ON, opposite of `background.design_enabled`'s rule, because
-    the failure here is a silently deleted feature rather than an
-    unasked-for restyle). **`curation._busy` REFUSES concurrent runs** —
+    no Library window. **Indexing is manual (2026-10-01)**: `refresh(parent)`,
+    the Library's ⟳, is the only trigger. It queues every PDF that
+    `needs_indexing` (missing, partial, older `INDEX_VERSION`, another
+    embedding signature, another source signature) or has a stale match
+    cache, minus excluded (`drive_store`) and already-queued ones, deletes
+    index dirs excluded PDFs still have, and tooltips the count. No import,
+    profile open, rescan or model change starts a job (the
+    `auto_index_on_add` key, `on_pdf_imported`, `resume_unindexed`, the
+    profile-open v2 sweep / re-match and `offer_model_sweep` are gone). A
+    PDF excluded while its own job runs loses the index that job wrote
+    (`_drop_if_excluded`). **`curation._busy` REFUSES concurrent runs** —
     right for a double-clicked button, wrong for ten dropped PDFs — so
     jobs queue here (dupes collapse, FIFO) and the runner WAITS on that
     token (`_busy_elsewhere`, bounded poll) rather than racing
     Preferences' Index Now, which still calls `ensure_index` directly
     for its own progress bar. Feedback is the shippable part: ONE
     `RunnerState` snapshot is published to every listener and rendered
-    by ONE pure `status_line`, so the Library's status line and
-    `_StatusDock` — a thin bottom dock on `mw` (a QDockWidget, the
-    `lecture_view` pattern; an overlay child over the central webview
-    is a z-order gamble) carrying the same text and a Stop button,
-    visible on the deck screen, the overview and mid-review — cannot
-    describe one job differently. No profile means no run. Local
+    by ONE pure `status_line`, which `_report_task` turns into the status
+    bar's `index` task (✕ = `cancel_all`) — the old `_StatusDock` and the
+    Library footer's status line were removed with the status bar. No profile means no run. Local
     readiness replaces provider-key gates.
     Report readiness failures rather than silently dropping work. A PDF deleted
     before OR during its turn is skipped silently, and a deletion error
@@ -977,14 +1398,11 @@ same reason.
     stops `after_matches` tagging on the PARTIAL ranking
     `ensure_matches` hands back. **Closing the Library no longer
     cancels indexing** (the job may have been started from the deck
-    screen). `offer_model_sweep(parent, prev_sig)`, called
-    from `manage_models.save_embed` with the signature captured BEFORE
-    the widgets overwrite config, re-indexes the card index plus every
-    PDF with an index on disk — announced first, counted in notes and
-    PDFs. The offer confirms local work with default No and preserves the
-    stale-index upgrade trigger.
-    `indexed_pdf_names` must inspect manifest files rather than hide old
-    versions through `stats_from_disk`.
+    screen). The Preferences `index_sweep` effect only tooltips "Press ⟳
+    in the Library to re-index for the new model."; ⟳ then finds every
+    index under the old signature. When no PDF needs work but the card
+    index needs a from-scratch rebuild, ⟳ queues one `JOB_CARDS`; a PDF
+    job's phase one still asks first (K-237, Skip default).
     Signature comparison is ALWAYS `embeddings.signature_matches`,
     never a tuple `==`: a hand-spelled one reads every cache as stale
     and needlessly re-embeds the collection (the exact bug
@@ -992,8 +1410,11 @@ same reason.
   - `pdf_drop.py` (was `deck_curate.py` until K-151, a misnomer once it
     curated nothing): the deck-screen **PDF import** surface — the
     `MainWebView.dropEvent` wrap (the only thing stopping Anki's own
-    importer choking on a dropped PDF) and the drop square on the deck
-    list and overview with its Browse… picker. K-146 removed the two
+    importer choking on a dropped PDF) and an **Add to Library** button in
+    the deck list's and overview's bottom rows (`add_library_link` on
+    `DeckBrowser.drawLinks`, `on_overview_will_render_bottom`), shown
+    in Anki's own row beside its buttons, opening the file picker. The dashed drop
+    square it replaced is gone (on request). K-146 removed the two
     bottom-bar buttons, `CURATE_CMD`, `choose_deck_scope`,
     `run_curation_flow` and `_pick_pdf_menu`; **K-151 removed the ARMED
     half whole** — `_armed_pdf`/`arm`/`disarm_if`, `DISARM_CMD` and its
@@ -1012,22 +1433,21 @@ same reason.
     (a plain list return here crashed every profile open — `on_op_finished`
     reads `.changes` off a `CollectionOp`'s result).
   - `manage_models.py`: the "Manage models" dialog (`manage_models_dialog`,
-    also first-run setup; Tools menu label "KlausMate Preferences…", and
-    the top bar's star opens it too; Appearance also carries Anki's
+    also first-run setup; Tools menu label "KlausNote Preferences…", and
+    the top bar's k opens it too; Appearance also carries Anki's
     own Follow-System/Light/Dark switch, applied on Save through
     `mw.set_theme` — the one row writing an Anki preference).
     **NON-MODAL since 2026-08-30**
     (`dlg.show()`, NEVER exec() — the 2026-08-26 segfault was
     app-modal exec's nested loop): a live control panel used beside
     the main window while appearance edits preview on it. `_OPEN_DLG`
-    keeps it a singleton (a second star click fronts it);
+    keeps it a singleton (a second k click fronts it);
     `profile_will_close` rejects it before the collection goes away. **SynapsePro settings shell
     (K-106 — replaced the K-105 card grid; built from a screenshot of
     SynapsePro 1.5.x, the vendored source only has their older grid)**:
-    a fixed `SettingsSidebar` (star-logo pixmap FILLED from
-    `top_bar.star_polygons()` — five polygons into ONE `QPainterPath` on
-    `WindingFill`, SVG's own rule, at the label's own
-    `devicePixelRatioF()` — app name + manifest `human_version`, `SettingsNav` list (ONE QListWidget — never
+    a fixed `SettingsSidebar` (k-logo pixmap: `QSvgRenderer` over
+    `top_bar.logo_svg(<blue_accent hex>)`, the toolbar's own SVG, at the
+    label's own `devicePixelRatioF()`, repainted on an accent save — app name + manifest `human_version`, `SettingsNav` list (ONE QListWidget — never
     per-page buttons; three pill-mush rounds proved per-button polish
     timing unfixable) with a row per page) beside a QStackedWidget of pages.
     Each page = `PageTitle`/`PageSubtitle` over ONE rounded `CardFrame`
@@ -1035,7 +1455,7 @@ same reason.
     muted `SettingDesc` left, control right, `RowSeparator` hairlines
     between. Sidebar display order comes from `_finish_nav(...)`,
     decoupled from widget build order; the sidebar header is the
-    star logo beside the Garamond wordmark, over a search field that filters
+    k logo beside the Excalifont wordmark, over a search field that filters
     setting rows across pages (`_apply_search`; rows carry
     `klaus_search` haystacks, structural hiding via `klaus_hidden` —
     how a background row hides whole for the mode that doesn't use it —
@@ -1069,24 +1489,34 @@ same reason.
     `bg_wash_row`) so labels dim with their controls.
     General and Appearance remain alongside Local models: Ollama runtime
     management, free-text embedding model and External clients configuration. The embedded Assistant page is removed.
-    `save_embed` captures `index_signature` before saving and offers a
-    confirmed local index sweep when appropriate.
-    **Preferences are deferred-save**: widgets only
-    call `mark_dirty()`; `save_all()` behind the **Save** button is the
-    writer of user-edited preference keys (runtime relocation separately patches only endpoint), closing dirty prompts to discard,
-    and `sync_embed_widgets`/`sync_threshold_widget` bail while dirty so
-    a background `refresh()` can't clobber unsaved edits. Adding a
-    preference = widget + `mark_dirty` signal + a line in the matching
-    `save_*`; a forgotten signal now costs a missing dirty mark, not a
-    silently unsaved setting (which is exactly how `pdf_renderer`
-    shipped broken). `sync_embed_widgets()` takes no arguments any
-    more — with one provider there is no provider switch to reload the
-    key and model fields for, and `ui_state["shown_provider"]` went with
-    it; what `save_embed` compares is `embeddings.index_signature`
-    before and after.
+    The `index_sweep` effect tooltips where to re-index (indexing is manual).
+    **Preferences are a state machine (2026-10-01, spec
+    [prefs-state](docs/superpowers/specs/2026-09-30-prefs-state-design.md))**:
+    `prefs_state.PrefsState` (aqt-free) holds EVERY value the dialog
+    edits — General, Local models, and Appearance (the two background
+    specs as values, the accent pair, the design gate, `anki_theme` as a
+    pseudo-key seeded from `mw.pm.theme()`). Widgets are `_Binding`
+    adapters (a signal is `state.set`, `paint()` writes the state back
+    under the class-wide `syncing` scope, so painting never counts as an
+    edit); the Appearance handlers copy-edit-set a spec through
+    `_edit_spec`. **Dirty is a fact** (`state.dirty` = pending values
+    exist), so a keyboard-only slider edit lights Save. `save_all()` is
+    `state.commit()`: ONE `settings.patch` of the changed keys, then the
+    effects in fixed order — `index_sweep` (the "Press ⟳" tooltip),
+    `threshold_changed` (the tuned-PDFs prompt),
+    `anki_theme` (`mw.set_theme`),
+    `appearance` (live apply, then drop the preview). Appearance's
+    **Bar size** slider (`bar_scale`, after Theme; a % readout, a caption
+    naming Anki's UI size with a link to Anki's Preferences) is an
+    appearance key, so it previews live. Discard is
+    `state.discard()` + `paint_all()`. Endpoint relocation is
+    `state.reseed` (a stored value moved; not an edit); a model pick is
+    `state.set`. The live preview reads `flatten_appearance(state.view())`
+    plus the stored-config keys it always carried. Adding a preference =
+    one key in `prefs_state.KEYS` + one `_Binding`; a forgotten binding
+    costs a missing edit, never a silently unsaved setting.
   - `setup_flow.py`: first-run library setup and profile-open local readiness.
-    Preserve one clear nudge and the once-per-profile stale-index sweep offer.
-    A declined sweep is an answer, not a snooze.
+    Preserve one clear nudge. Profile open starts no indexing.
 - **External endpoint and context**: as of 2026-09-19, the embedded dock, host
   and sessions are removed. `scripts/mcp_stdio_bridge.py` is a standalone stdlib
   process launched by an external client with Python 3.9+. It reads private
@@ -1173,16 +1603,19 @@ same reason.
     Keep these retained modules; do not restore assistant session storage.
 - Deleted (2026-08, 2026-09-02 — do not resurrect the language): `claude_api.py`,
   `settings_ui.py`, `chat_dock.py` (the "Klaus panel"),
-  `web/search.html|css|js`; also `single_window.py` (2026-08-25 — the
-  panes-in-one-window mode from K-059..K-062 was removed as too buggy:
-  dark webview panes survived five rework rounds, K-090..K-094. Anki is
-  stock multi-window again; `_migrate_config` scrubs the
-  `single_window_mode` key). **Embedding Anki's windows stays deleted.**
+  `web/search.html|css|js`. The first `single_window.py` (2026-08-25, the
+  panes-in-one-window mode from K-059..K-062) was removed as too buggy:
+  dark webview panes survived five rework rounds, K-090..K-094;
+  `settings._scrub_legacy` still scrubs its `single_window_mode` key. It is
+  BACK since 2026-09-30 (Pouya's call) with a different mechanism — see
+  the `single_window.py` bullet. **What stays banned is re-parenting a
+  window Anki built as a top-level**: a QtWebEngine view presents through
+  the window it was born under, so a moved editor is a black pane.
   `workspace.py` (K-102, the sidebar-shell follow-up) lasted one day —
   deleted 2026-08-25 as the wrong shape; the unified-UI ask is served
-  by `top_bar.py`'s toolbar restyle instead (`_migrate_config` scrubs
-  `workspace_enabled`). Config lives in `klausmate/config.json` +
-  Anki's addon config (`meta.json`) + `config.md`. `_migrate_config()`
+  by `top_bar.py`'s toolbar restyle instead (`settings._scrub_legacy`
+  scrubs `workspace_enabled`). Config lives in `klaus_note/config.json` +
+  Anki's addon config (`meta.json`) + `config.md`. `settings.migrate()`
   (profile_did_open) cleans up legacy `chat_*`/`claude_*` keys left from the
   deleted Claude-Ask feature; keep it until users have upgraded past it.
   Deleted again, 2026-09-02, for the same "converged, then reversed"
@@ -1194,7 +1627,7 @@ same reason.
   `451a753`) that the later dock replaced (itself removed in D3).
   `card_forge.py` (`120293f`) and `anki_tools.py` (`e1c023c`) survive
   from the same plan; the retained endpoint still uses `anki_tools`.
-  `_LEGACY_KEYS_DROPPED` in `__init__.py` scrubs
+  `settings.LEGACY_KEYS_DROPPED` (moved from `__init__.py` on 2026-09-30) scrubs
   `assistant_api_key`/`assistant_backend`/`assistant_token` (retired
   2026-09-01): there was never a separate assistant credential to keep;
   D3 removed the subsequent Claude Code host as well.
@@ -1204,6 +1637,12 @@ same reason.
   keys back. OCR and Voyage remain out of scope. D1-D3 retired Plus, judge
   and assistant settings; D4 removed the final cloud client and cost module.
   Current defaults are in `config.json`; preserve migration coverage.
+  Historical note, 2026-10-01 (PDF reader 5/5): the native renderer is
+  gone — `pdf_viewer.py` (`PdfViewer` on QPdfView, with its own find bar,
+  thumbnails and selection overlay), the `pdf_renderer` key (now in
+  `settings.LEGACY_KEYS_DROPPED`), Preferences' renderer switch with its
+  `renderer_restart` effect, and `pdfjs_viewer.renderer_from_config`.
+  `PdfSidebar` lives in `reader_panel.py`; there is no native fallback.
 
 ## Hard-won gotchas (each cost real debugging — don't relearn them)
 
@@ -1214,11 +1653,6 @@ same reason.
   peek-through if the item is rounded. Full fix: `::branch:{hover,
   selected}` rules + `selection-background-color: transparent` + keep
   square geometry (see `theme.sidebar_tree_qss`).
-- **pdfium hit tolerance**: `QPdfDocument.getSelection()` silently returns an
-  INVALID selection if an endpoint is >~7pt from a glyph, or if both endpoints
-  hit the same character. Never anchor at page corners/edges — use
-  `getAllText` / `getSelectionAtIndex` (index space) or the probe helpers
-  (`_probe_selection_at`, `_snap_to_char`).
 - **Host-window shortcut ambiguity**: widget-scoped QShortcuts that collide
   with Browse/AddCards QActions (⌘F, ⌘G, ⌘⌥G, ⇧⌘G, ⇧⌘H) become *dead keys*.
   The viewer claims them via `QEvent.ShortcutOverride` + KeyPress handling.
@@ -1231,8 +1665,6 @@ same reason.
 - **`QSplitter.setOrientation` transposes its sizePolicy** — re-assert the
   wrapped pane's policy after every orientation change or the host layout's
   stretch hints are lost (blank-space bug in the Add window).
-- **One `QPdfDocument` is reused across tabs** — cache by
-  `_doc_generation` (bumped in `set_document`), never `id(doc)`.
 - **Anki stores DECODED filenames in note fields** (`reverse_url_quoting` on
   save) and entity-escapes attribute values — `_replace_img_src` matches raw,
   percent-decoded, and html-unescaped forms.
@@ -1262,15 +1694,23 @@ same reason.
   page reads as "broken file" when it is the proxy that is broken;
   PDFKit — the framework Preview.app itself draws with — is the honest
   check, pdf.js with `annotationMode: ENABLE` the second.
-- **pdfium renders annotations only WITH `RenderFlag.Annotations`** — the
-  viewer and image copies render without it, so baked-in highlights never
-  double-draw under the screen overlay. The coordinate flip is
-  `y_pdf = page_mediabox_height − (y_qt + h)` (verified pixel-exact).
-- **Selection-path perf caches** (pdf_viewer): `_page_geoms_cache` keyed
-  (doc generation, viewport width, zoom mode, zoom factor, vsb.max);
-  `_alltext_bounds_cache` keyed (generation, page); `_probe_selection_at`
-  has a `fast=True` mode for per-mouse-move callers. Rewiring selection
-  code must respect these or drag/scroll jank returns.
+- **pdfium (QtPdf) renders annotations only WITH `RenderFlag.Annotations`**
+  — `page_store.render_page_png` (the external page tool's image and the
+  garbled-page OCR) renders without it, so its images carry no baked
+  marks. The bake's coordinate flip from the records' top-left page
+  points is `y_pdf = page_mediabox_height − (y + h)` (verified
+  pixel-exact).
+- **`embeddings.provider_from_config` takes a config GETTER, not a dict**
+  (`OllamaEmbeddings` calls it per request). The settings seam (d8a7025)
+  deleted curation's `_cfg` helper but left `provider_from_config(_cfg)`
+  in `_embed_plan`: every card-index phase with anything to embed died
+  with a NameError, `index_queue._fail` dropped the whole queue, and no
+  PDF embedded for a day; the first fix passed `settings.read()` (a dict)
+  and failed the same way one call later. The index_queue tests fake
+  curation entirely, so neither showed up there:
+  `tests/test_curation_embed.py` runs the real `_embed_plan`. After a
+  refactor that deletes helpers, run `uvx pyflakes klaus_note/*.py | grep
+  "undefined name"`.
 - **A GUI-launched app inherits a minimal PATH**: binary discovery must
   account for GUI launch environments. The removed `agent_host.find_claude`
   used `shutil.which`, a bounded login-shell lookup, then known paths.
@@ -1293,10 +1733,10 @@ same reason.
   the banned class too (they exec internally). QMenu.exec is fine.
   Ban pins live in tests/test_bridge_reentrancy.py + test_drive.py.
 - Defensive `try/except` around every Qt call; guarded imports with `None`
-  fallbacks (`PDF_VIEWER_AVAILABLE` pattern); log with
-  `print("[klausmate] ...")`; tooltips only for capture-style actions
+  fallbacks (`PDFJS_AVAILABLE` pattern); log with
+  `print("[klaus_note] ...")`; tooltips only for capture-style actions
   (selection/copy is silent, Preview-style).
-- pypdf is vendored in `klausmate/vendor/` (6.11.0, has
+- pypdf is vendored in `klaus_note/vendor/` (6.11.0, has
   `pypdf.annotations`); no other bundled Python dependencies or native
   Python extensions. Ollama is a separate native executable.
 - The embedding model stays free-text with local model inventory and pull

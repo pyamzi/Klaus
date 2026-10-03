@@ -11,11 +11,11 @@ from unittest.mock import patch
 sys.path.insert(0, '.claude/skills/klaus-test/scripts')
 from anki_stubs import install, check, report
 install()
-ep = importlib.import_module('klausmate.anki_endpoint')
-vc = importlib.import_module('klausmate.viewer_context')
-ps = importlib.import_module('klausmate.page_store')
-ph = importlib.import_module('klausmate.pdf_handler')
-at = importlib.import_module('klausmate.anki_tools')
+ep = importlib.import_module('klaus_note.anki_endpoint')
+vc = importlib.import_module('klaus_note.viewer_context')
+ps = importlib.import_module('klaus_note.page_store')
+ph = importlib.import_module('klaus_note.pdf_handler')
+at = importlib.import_module('klaus_note.anki_tools')
 
 with tempfile.TemporaryDirectory(prefix='MCP contracts ') as scratch:
     root = Path(scratch)

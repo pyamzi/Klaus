@@ -1,4 +1,4 @@
-"""Headless test bootstrap for the klausmate Anki addon.
+"""Headless test bootstrap for the klaus_note Anki addon.
 
 Why this exists: Anki 26.8.1 ships Python **3.13 bytecode only** (in
 /Applications/Anki.app/Contents/Resources/app_packages) and this machine's
@@ -7,7 +7,7 @@ help either — its `sip` is a 3.13-only extension, not abi3. Real Anki
 modules therefore cannot be imported at all under the available
 interpreter.
 
-The workaround: register a synthetic `klausmate` package plus stub
+The workaround: register a synthetic `klaus_note` package plus stub
 aqt/anki modules in sys.modules *before* importing the module under test.
 Anything aqt-free (embeddings, card_index, pdf_index, drive_store) needs
 only the package stub; anything importing aqt (retention, curation,
@@ -17,18 +17,18 @@ Usage:
     from anki_stubs import install, check, report
     install()                      # package + aqt stubs
     import importlib
-    retention = importlib.import_module("klausmate.retention")
+    retention = importlib.import_module("klaus_note.retention")
     check("weighted retention", abs(got - want) < 1e-9)
     raise SystemExit(report())
 
 ## The permissive Qt/aqt/anki surface
 
-klausmate imports a *lot* of names out of `aqt.qt` (every PyQt6 widget/
+klaus_note imports a *lot* of names out of `aqt.qt` (every PyQt6 widget/
 enum class it touches), plus a handful of names out of `aqt.editor`,
 `aqt.webview`, `aqt.deckbrowser`, `aqt.preferences`, `anki.hooks` and
 `anki.utils`. Hand-enumerating all of those (and keeping the list in sync
 as the addon grows) is exactly the kind of stub drift that let
-`klausmate.pdf_drive` and `klausmate.pdf_drop` go completely
+`klaus_note.pdf_drive` and `klaus_note.pdf_drop` go completely
 import-untested — the old stub only defined QAction, QInputDialog,
 QMessageBox, QTimer and qconnect.
 
@@ -44,29 +44,30 @@ raising AttributeError/ImportError. `_Dummy` works as:
 
 This is deliberately loose: it does not try to model real Qt behaviour.
 But it never hides an error in OUR code — a name that doesn't exist in
-klausmate itself, a real syntax error, a bad relative import, a genuine
+klaus_note itself, a real syntax error, a bad relative import, a genuine
 NameError in module-level code, etc. still raise normally, because those
 happen independent of (or before) any attribute lookup on these
 stand-ins. The catch-all only ever satisfies lookups *into aqt/anki*,
-which is exactly the surface klausmate does not own.
+which is exactly the surface klaus_note does not own.
 """
 from __future__ import annotations
 
 import importlib
 import os
+import copy
 import sys
 import types
 
 # Repo root derived from this file's own location (four levels up from
 # .claude/skills/klaus-test/scripts/) so renaming the repo folder can
 # never silently break the harness — a hardcoded path did exactly that
-# when Addons/ became KlausMate-Context/ (2026-08-25).
+# when Addons/ became klaus-note-addon/ (2026-08-25).
 _REPO_ROOT = os.path.dirname(
     os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     )
 )
-ADDON = os.path.join(_REPO_ROOT, "klausmate")
+ADDON = os.path.join(_REPO_ROOT, "klaus_note")
 
 _PASS = 0
 _FAIL = 0
@@ -82,7 +83,7 @@ def _purge_stale_bytecode(addon_dir: str) -> None:
     code that is no longer on disk. That really happened here: a pin was
     reported failing against a file that already held the correct value.
 
-    Worse, `rm -rf klausmate/__pycache__` does NOT fix it on this Mac:
+    Worse, `rm -rf klaus_note/__pycache__` does NOT fix it on this Mac:
     the system Python sets sys.pycache_prefix, so caches live in a MIRROR
     tree under ~/Library/Caches/com.apple.python/<abs source path>/. And
     `python3 -B` only stops bytecode being WRITTEN, not read.
@@ -109,7 +110,7 @@ _MIRROR: str | None = None
 def _scratch_mirror(addon_dir: str) -> str:
     """A temp copy of the package made of symlinks, with an EMPTY user_files/.
 
-    klausmate/ is symlinked into Anki's addons21, and curation, retention
+    klaus_note/ is symlinked into Anki's addons21, and curation, retention
     and anki_tools derive USER_FILES from `os.path.dirname(__file__)` at
     import time — so a test that imports them and writes (drive_store,
     library_map.json, pdf_index/prefs.json, contexts/*.txt) writes the
@@ -121,10 +122,10 @@ def _scratch_mirror(addon_dir: str) -> str:
     import shutil
     import tempfile
 
-    root = tempfile.mkdtemp(prefix="klausmate-test-")
+    root = tempfile.mkdtemp(prefix="klaus-note-test-")
     # rmtree unlinks the symlinks, it never descends into the real addon.
     atexit.register(shutil.rmtree, root, True)
-    mirror = os.path.join(root, "klausmate")
+    mirror = os.path.join(root, "klaus_note")
     os.mkdir(mirror)
     for name in os.listdir(addon_dir):
         if name not in ("user_files", "__pycache__"):
@@ -134,16 +135,17 @@ def _scratch_mirror(addon_dir: str) -> str:
 
 
 def install_package_stub(addon_dir: str = ADDON) -> None:
-    """Make `import klausmate.<mod>` resolve to the working tree, with
+    """Make `import klaus_note.<mod>` resolve to the working tree, with
     USER_FILES in a fresh temp dir (see _scratch_mirror)."""
     global _MIRROR
     _purge_stale_bytecode(addon_dir)
     _MIRROR = _scratch_mirror(addon_dir)
-    pkg = types.ModuleType("klausmate")
+    pkg = types.ModuleType("klaus_note")
     pkg.__path__ = [_MIRROR]
-    pkg.__package__ = "klausmate"
-    pkg.USER_FILES = os.path.join(_MIRROR, "user_files")
-    sys.modules["klausmate"] = pkg
+    pkg.__package__ = "klaus_note"
+    sys.modules["klaus_note"] = pkg
+    # klaus_note.settings derives user_files_dir from its own (mirrored)
+    # location, so it lands in the mirror's fresh user_files on its own.
 
 
 def _stub(name: str, **attrs):
@@ -176,7 +178,7 @@ class _AnyOp:
 class _DummyMeta(type):
     """Metaclass for `_Dummy` subclasses so that attribute/arithmetic
     access works even on the *class object itself* — needed because
-    klausmate uses some aqt.qt names directly as enum namespaces rather
+    klaus_note uses some aqt.qt names directly as enum namespaces rather
     than instances (``Qt.ItemDataRole.UserRole``, at module level in
     pdf_drive.py), not just as base classes.
     """
@@ -262,8 +264,8 @@ def _permissive_namespace() -> _Dummy:
 
 def install_aqt_stubs() -> None:
     """Permissive aqt/anki surface for modules that import them at load
-    time. Covers every `aqt.*`/`anki.*` module klausmate imports from
-    (grepped across klausmate/*.py — see module docstring), not just
+    time. Covers every `aqt.*`/`anki.*` module klaus_note imports from
+    (grepped across klaus_note/*.py — see module docstring), not just
     aqt.qt.
     """
     aqt_mod = _permissive_module("aqt", mw=_permissive_namespace())
@@ -300,8 +302,8 @@ def install(addon_dir: str = ADDON) -> None:
     install_aqt_stubs()
 
 
-def exec_klausmate_under_qt(scratch_user_files: str, addon_dir: str | None = None):
-    """Execute klausmate/__init__.py as a module under REAL PyQt6 with the
+def exec_klaus_note_under_qt(scratch_user_files: str, addon_dir: str | None = None):
+    """Execute klaus_note/__init__.py as a module under REAL PyQt6 with the
     aqt/anki stubs in place, and point its USER_FILES at ``scratch``.
 
     Returns the module namespace. Needs QT_QPA_PLATFORM=offscreen, a
@@ -329,12 +331,19 @@ def exec_klausmate_under_qt(scratch_user_files: str, addon_dir: str | None = Non
     sys.modules["aqt.qt"] = shim
     sys.modules["aqt"].qt = shim
     spec = importlib.util.spec_from_file_location(
-        "klausmate", os.path.join(addon_dir, "__init__.py"),
+        "klaus_note", os.path.join(addon_dir, "__init__.py"),
         submodule_search_locations=[addon_dir])
     module = importlib.util.module_from_spec(spec)
-    sys.modules["klausmate"] = module
+    settings = importlib.import_module("klaus_note.settings")  # resolves through the stub's path
+    settings.user_files_dir = scratch_user_files
+    sys.modules["klaus_note"] = module
     spec.loader.exec_module(module)
-    module.USER_FILES = scratch_user_files
+    # __init__ installed the stub mw as settings' profile token and main-thread
+    # hop; the stub answers every attribute with a NEW _Dummy, so the fence
+    # would drop every patch and the hop would swallow it. Tests that want
+    # the fence install their own (tests/test_settings.py).
+    settings.run_on_main = None
+    settings.current_profile = None
     return module
 
 
@@ -361,10 +370,28 @@ def report() -> int:
     return 1 if _FAIL else 0
 
 
+class LiveStore:
+    """``settings.store`` over a LIVE dict: reads copy it, so a test may
+    mutate ``cfg`` between calls; each write replaces it and is recorded
+    in ``writes``."""
+
+    def __init__(self, cfg: dict, writes: list | None = None) -> None:
+        self.cfg = cfg
+        self.writes = writes if writes is not None else []
+
+    def read(self) -> dict:
+        return copy.deepcopy(self.cfg)
+
+    def write(self, cfg: dict) -> None:
+        self.cfg.clear()
+        self.cfg.update(copy.deepcopy(cfg))
+        self.writes.append(copy.deepcopy(cfg))
+
+
 def code_only(src: str) -> str:
     """Source with comments AND string literals removed, layout kept.
 
-    Source-pin tests assert on the TEXT of klausmate modules, so any pin
+    Source-pin tests assert on the TEXT of klaus_note modules, so any pin
     can be silently satisfied — or silently broken — by prose that merely
     *mentions* the thing it looks for. That has now bitten four separate
     checks in this repo (a commented-out `dlg.exec()`, a `painter.end()`

@@ -5,10 +5,10 @@ from pathlib import Path
 sys.path.insert(0, '.claude/skills/klaus-test/scripts')
 from anki_stubs import install, check, report
 install()
-ep = importlib.import_module('klausmate.anki_endpoint')
-vc = importlib.import_module('klausmate.viewer_context')
-ps = importlib.import_module('klausmate.page_store')
-ph = importlib.import_module('klausmate.pdf_handler')
+ep = importlib.import_module('klaus_note.anki_endpoint')
+vc = importlib.import_module('klaus_note.viewer_context')
+ps = importlib.import_module('klaus_note.page_store')
+ph = importlib.import_module('klaus_note.pdf_handler')
 with tempfile.TemporaryDirectory() as root:
     approvals, main = [], []
     end = ep.Endpoint(col_getter=lambda: object(), run_on_main=lambda fn, timeout: (main.append(True), fn())[1],

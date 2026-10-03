@@ -1,9 +1,10 @@
 """K-310: anki_stubs.install() must never leave USER_FILES on the real Library.
 
-klausmate/ is symlinked into Anki's addons21, so klausmate/user_files IS the
+klaus_note/ is symlinked into Anki's addons21, so klaus_note/user_files IS the
 user's Library. On 2026-09-28 test_library_sync.py wrote drive.json,
-library_map.json and contexts/ there through curation.USER_FILES. This pins
-that every USER_FILES the harness exposes resolves into one temp dir.
+library_map.json and contexts/ there through curation.USER_FILES (now
+settings.user_files()). This pins that every user-files path the harness
+exposes resolves into one temp dir.
 
 Run: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_user_files_guard.py
 """
@@ -18,25 +19,21 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import ADDON, check, install, report, section  # noqa: E402
 
 install()
-sys.modules["klausmate"].get_config = lambda: {}
 
-curation = importlib.import_module("klausmate.curation")
-retention = importlib.import_module("klausmate.retention")
-pdf_drive = importlib.import_module("klausmate.pdf_drive")
-anki_tools = importlib.import_module("klausmate.anki_tools")
+import klaus_note.settings as _settings  # noqa: E402
+
+curation = importlib.import_module("klaus_note.curation")
+anki_tools = importlib.import_module("klaus_note.anki_tools")
 
 REAL = os.path.realpath(os.path.join(ADDON, "user_files"))
 TMP = os.path.realpath(tempfile.gettempdir())
 paths = {
-    "klausmate.USER_FILES": sys.modules["klausmate"].USER_FILES,
-    "curation.USER_FILES": curation.USER_FILES,
-    "curation.INDEX_DIR": os.path.dirname(curation.INDEX_DIR),
-    "retention.USER_FILES": retention.USER_FILES,
-    "pdf_drive._user_files()": pdf_drive._user_files(),
+    "settings.user_files()": _settings.user_files(),
+    "curation.index_dir()": os.path.dirname(curation.index_dir()),
     "anki_tools._USER_FILES": anki_tools._USER_FILES,
 }
 
-section("no USER_FILES points at the real klausmate/user_files")
+section("no USER_FILES points at the real klaus_note/user_files")
 for name, p in paths.items():
     real = os.path.realpath(p)
     check(f"{name} is not the real Library", real != REAL, real)
@@ -45,6 +42,6 @@ for name, p in paths.items():
 section("they all agree on one scratch dir")
 check("one scratch user_files", len({os.path.realpath(p) for p in paths.values()}) == 1,
       str(paths))
-check("the scratch user_files exists", os.path.isdir(curation.USER_FILES))
+check("the scratch user_files exists", os.path.isdir(_settings.user_files()))
 
 raise SystemExit(report())

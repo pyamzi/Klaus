@@ -1,9 +1,9 @@
 {
   "permissions": {
     "deny": [
-      "Edit(klausmate/user_files/**)",
-      "Write(klausmate/user_files/**)",
-      "Read(klausmate/meta.json)"
+      "Edit(klaus_note/user_files/**)",
+      "Write(klaus_note/user_files/**)",
+      "Read(klaus_note/meta.json)"
     ]
   },
   "hooks": {
@@ -13,7 +13,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/klausmate-compile.sh\""
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/klaus-note-compile.sh\""
           }
         ]
       }

@@ -1,9 +1,9 @@
 # ─── Never commit: personal data and secrets ──────────────────────────────
 # 459 MB of real lecture PDFs, annotations, embeddings, and the card index.
-klausmate/user_files/
+klaus_note/user_files/
 # Live addon config — holds claude_api_key / embedding_api_key_* once set.
 # The glob also covers meta.json.bak-* backups, which `**/meta.json` misses.
-klausmate/meta.json*
+klaus_note/meta.json*
 **/meta.json
 
 # ─── Separate projects / vendored reference material ──────────────────────

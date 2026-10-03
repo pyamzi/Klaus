@@ -1,0 +1,3104 @@
+<!-- Klaus pdf.js viewer (K-096 foundation; K-097..K-099 parity).
+
+Loaded by pdfjs_viewer.PdfJsViewer via AnkiWebView.stdHtml after two
+placeholder substitutions — the addon web-export name (the pdf.js
+script/worker URLs near the bottom) and the CSS custom properties
+generated from theme.py tokens (the second :root rule below; single
+source of truth for colours — do not hardcode hex here). Both are
+plain global str.replace, so no comment in this file spells either
+placeholder: a mention gets the replacement spliced into it. They are
+named, safely, in pdfjs_viewer.build_page_html.
+
+Division of labour: this page owns rendering and gestures; PYTHON OWNS
+THE ANNOTATIONS JSON. Every mutation (add/remove highlight, note edit,
+text placement) goes over the bridge as klaus_note_pdfjs:* and Python
+persists via
+pdf_handler.save_annotations + the debounced bake, then pushes the
+canonical records back through window.klausSetAnnotations. The page
+never invents record fields — coordinates are page points, top-left
+origin, matching the native viewer and the bake pipeline exactly
+(CSS px = points x state.scale).
+-->
+<style>
+  @font-face { font-family: "Excalifont"; src: url("/_addons/__ADDON__/web/fonts/Excalifont-Regular.ttf"); }
+  /* --hover-subtle is the findbar/annobar/menu/thumb family's hover
+     fill, and theme.css_vars now emits it from the palette token the
+     Qt-side builders hover with, so both halves match. This neutral
+     midtone stays as a SAFETY NET only — ordered FIRST so the theme
+     substitution below always wins — because an undefined var() would
+     compute those backgrounds to nothing, killing every hover in the
+     family at once. */
+  :root { --hover-subtle: rgba(127, 127, 127, 0.16); }
+  :root { __THEME_VARS__ }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: var(--font); overflow: hidden; height: 100%;
+    font-size: 13px;
+  }
+  #root { position: absolute; inset: 0; display: flex; }
+  /* Hosted inside Anki's stdHtml, whose injected stylesheet reaches for
+     bare element selectors (button chrome, box-sizing, image bounds).
+     Pin everything those rules could bend — sizes here are exact px
+     geometry, not layout hints. */
+  #root, #root * { box-sizing: content-box; }
+  #root button { -webkit-appearance: none; appearance: none; margin: 0; }
+  .page canvas.pg { max-width: none !important; max-height: none !important; }
+  .page { margin: 0; padding: 0; }
+  /* ---- thumbnail strip ---- */
+  #thumbs {
+    width: 170px; flex: 0 0 auto; overflow-y: auto; display: none;
+    background: var(--bg); border-right: 1px solid var(--grey-light);
+    padding: 6px;
+  }
+  #thumbs.visible { display: block; }
+  .thumb {
+    margin: 0 0 8px 0; border: 2px solid transparent; border-radius: 8px;
+    cursor: pointer; padding: 2px; text-align: center;
+  }
+  .thumb:hover { background: var(--hover-subtle); }
+  .thumb.current { border-color: var(--accent); }
+  .thumb canvas { max-width: 100%; border-radius: 4px; display: block;
+                  margin: 0 auto; background: white;
+                  box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+  .thumb .tnum { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+  /* ---- main column ---- */
+  #main { flex: 1 1 auto; display: flex; flex-direction: column;
+          min-width: 0; position: relative; }
+  #findbar {
+    display: none; align-items: center; gap: 4px; padding: 3px 6px;
+    background: var(--surface); border-bottom: 1px solid var(--grey-light);
+  }
+  #findbar.visible { display: flex; }
+  #findbar input {
+    flex: 1; background: var(--bg); color: var(--text);
+    border: 1px solid var(--grey-mid); border-radius: 8px;
+    padding: 3px 8px; font-family: var(--font); font-size: 12px;
+    outline: none;
+  }
+  #findbar input:focus { border-color: var(--accent); }
+  #findcount { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+  #findbar button {
+    background: transparent; color: var(--text-muted); border: none;
+    border-radius: 6px; padding: 1px 6px; font-weight: 600; cursor: pointer;
+    font-size: 13px;
+  }
+  #findbar button:hover { background: var(--hover-subtle); color: var(--text); }
+  /* ---- annotation toolbar (K-116) ----
+     The findbar's family — same vars, same button chrome — floated as
+     a small pill over the page area (in #main, a SIBLING of #scroll,
+     so it never scrolls away and never collides with the findbar row
+     above or the thumbnail column beside). */
+  #annobar {
+    position: absolute; bottom: 10px; left: 50%;
+    transform: translateX(-50%); z-index: 50;
+    display: flex; align-items: center; gap: 2px; padding: 3px 4px;
+    background: var(--surface); border: 1px solid var(--grey-light);
+    border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  }
+  #annobar button {
+    background: transparent; color: var(--text-muted); border: none;
+    border-radius: 6px; padding: 3px 7px; font-weight: 600;
+    cursor: pointer; font-size: 13px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #annobar button:hover { background: var(--hover-subtle); color: var(--text); }
+  #annobar button.active { background: var(--accent); color: white; }
+  #annobar button svg { display: block; }
+  #annobar .absep { width: 1px; height: 16px; background: var(--grey-light);
+                    margin: 0 4px; flex: 0 0 auto; }
+  /* Highlight inks (K-149). The colour comes from theme.py through the
+     --ink-* custom properties — never a hex here — and the button IS
+     its swatch, so the row reads as a marker tray. Only the ring says
+     "selected"; the fills never dim, because they are the ink you get. */
+  #abInks { display: flex; align-items: center; gap: 4px; margin-left: 2px; }
+  #annobar button.inkSw {
+    width: 14px; height: 14px; padding: 0; border-radius: 7px;
+    border: 1px solid var(--grey-mid); flex: 0 0 auto;
+  }
+  /* The generic #annobar button:hover fill would repaint a swatch in
+     the hover neutral and hide the ink; every rule below outranks it
+     (an attribute selector on top of the same id + class), so hover
+     has to speak through the BORDER instead. */
+  #annobar button.inkSw:hover { border-color: var(--text-muted); }
+  #annobar button.inkSw[data-ink="yellow"] { background: var(--ink-yellow); }
+  #annobar button.inkSw[data-ink="green"]  { background: var(--ink-green); }
+  #annobar button.inkSw[data-ink="blue"]   { background: var(--ink-blue); }
+  #annobar button.inkSw[data-ink="pink"]   { background: var(--ink-pink); }
+  #annobar button.inkSw[data-ink="orange"] { background: var(--ink-orange); }
+  #annobar button.inkSw.active {
+    border-color: var(--text); box-shadow: 0 0 0 2px var(--surface),
+                                           0 0 0 3px var(--text);
+  }
+  /* Text inks (K-150). The SAME row, repainted: with the text tool
+     armed (or a box being edited) every swatch shows its opaque text
+     value instead of its highlighter wash, and a black swatch joins
+     at the front. Sharing the row is the point — one marker tray,
+     one selected-swatch cue, one mousedown cancel — but the VALUES
+     cannot be shared: a highlight is read THROUGH at 43% alpha, text
+     is read AS glyphs, and K-149's yellow measures 1.36:1 on white
+     paper as letters — unreadable. (No hex may be spelled anywhere in
+     this block, comments included; a pin enforces it, and it caught
+     this comment's first draft.)
+     pdfjs_viewer.text_inks derives these from the same theme hues.
+     Every rule below outranks its --ink twin (one more class), so the
+     highlight rules stay exactly as K-149 wrote them. */
+  #annobar button.inkSw[data-tink="black"] { display: none; }
+  #abInks.textMode button.inkSw[data-tink="black"] { display: flex; }
+  #abInks.textMode button.inkSw[data-tink="black"]  { background: var(--tink-black); }
+  #abInks.textMode button.inkSw[data-tink="yellow"] { background: var(--tink-yellow); }
+  #abInks.textMode button.inkSw[data-tink="green"]  { background: var(--tink-green); }
+  #abInks.textMode button.inkSw[data-tink="blue"]   { background: var(--tink-blue); }
+  #abInks.textMode button.inkSw[data-tink="pink"]   { background: var(--tink-pink); }
+  #abInks.textMode button.inkSw[data-tink="orange"] { background: var(--tink-orange); }
+  #abZoomPct { font-size: 11px; color: var(--text-muted); min-width: 38px;
+               text-align: center; font-variant-numeric: tabular-nums; }
+  /* Text size stepper (K-150): only meaningful while the text tool is
+     armed or a box is open, so it is absent from the bar the rest of
+     the time rather than sitting there disabled. */
+  #abTsz, #abTszSep { display: none; }
+  #annobar.textMode #abTsz { display: flex; align-items: center; }
+  #annobar.textMode #abTszSep { display: block; }
+  #abTszVal { font-size: 11px; color: var(--text-muted); min-width: 20px;
+              text-align: center; font-variant-numeric: tabular-nums; }
+  /* Text tool armed: the whole page area invites a placement click. */
+  #scroll.textTool, #scroll.textTool .textLayer span { cursor: crosshair; }
+  #scroll { flex: 1 1 auto; overflow: auto; position: relative; }
+  /* width: max-content (min 100%) — a page zoomed WIDER than the
+     scroller must widen #pages so the overflow is scrollable. The old
+     fixed width centered wide pages with the left half at negative
+     offsets, unreachable by any scrollbar (found by the K-116 harness'
+     anchor check; predates the zoom engine). border-box keeps the
+     min-width from adding phantom scroll at fit width. */
+  #pages { display: flex; flex-direction: column; align-items: center;
+           gap: 12px; padding: 12px; box-sizing: border-box;
+           width: max-content; min-width: 100%; }
+  .page {
+    position: relative; background: white;
+    border: 1px solid var(--grey-light); border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+  }
+  .page canvas.pg { display: block; border-radius: 4px; }
+  /* pdf.js text layer: invisible glyph spans over the canvas so native
+     browser selection works. */
+  .textLayer {
+    position: absolute; left: 0; top: 0; overflow: hidden;
+    line-height: 1; opacity: 1; pointer-events: auto; z-index: 3;
+    text-align: initial;
+    -webkit-text-size-adjust: none; text-size-adjust: none;
+    forced-color-adjust: none; transform-origin: 0 0;
+  }
+  .textLayer span {
+    color: transparent; position: absolute; white-space: pre;
+    cursor: text; transform-origin: 0% 0%; margin: 0; padding: 0;
+  }
+  /* Tagged PDFs make pdf.js wrap glyph spans in <span class=
+     "markedContent"> groups (renderTextLayer's beginMarkedContent
+     branch). Upstream viewer.css zeroes them; we shipped without that
+     rule, leaving auto-sized wrappers directly on the selection
+     geometry path. Measured harmless in Blink today (they lay out
+     0x0, and selectionRectMap's sub-pixel guard drops them anyway) —
+     this is upstream parity, so a wrapper that ever DOES get a box
+     cannot contribute a phantom rect to a highlight. */
+  .textLayer span.markedContent { top: 0; height: 0; }
+  .textLayer ::selection { background: var(--accent-selection); }
+  /* Fallback ring only — when the CSS Custom Highlight API is missing,
+     the whole owning span is ringed as before K-100. */
+  .textLayer span.findCurrent {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+    background: var(--accent-selection);
+  }
+  /* Exact-substring find paint (K-100): only background/decoration
+     properties apply inside a highlight pseudo, so the "current" cue
+     is bg + a thick accent underline instead of the span ring. */
+  ::highlight(klaus-find) {
+    background-color: var(--accent-selection);
+    text-decoration: underline;
+    text-decoration-color: var(--accent);
+    text-decoration-thickness: 2px;
+  }
+  /* highlights render UNDER the text layer, above the canvas */
+  .hlLayer { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+  .hlLayer .hl { position: absolute; border-radius: 2px; }
+  /* Hand-drawn highlights: ONE svg per page, drawn in page points (its
+     viewBox) so the seeded wobble scales with the page instead of
+     re-shaping at every zoom. No blend mode: multiply over a dark
+     slide turns any ink dark, so the band is the plain ink at 0.43,
+     exactly as the switch-off divs draw it. */
+  .hlLayer .roughLayer { position: absolute; left: 0; top: 0;
+                         width: 100%; height: 100%; overflow: visible; }
+  /* Text boxes draw in Helvetica, the font the bake writes into the PDF
+     (/Helv) and Preview draws: the UI font runs ~7% wider and made a box
+     look bigger here than in Preview. */
+  .hlLayer .hltext { position: absolute; white-space: pre-wrap;
+                     overflow-wrap: break-word;
+                     font-family: Helvetica, Arial, sans-serif;
+                     line-height: 1.15; overflow: hidden; }
+  /* measureTextBox's hidden twin: the same font, line-height and
+     wrapping as .hltext and .editBody, laid out UNSCALED, so its CSS
+     px are page points. max-width is TEXT_BOX_MAX_W. */
+  #textMeasure { position: absolute; left: 0; top: 0;
+                 visibility: hidden; pointer-events: none;
+                 width: max-content; max-width: 480px;
+                 white-space: pre-wrap; overflow-wrap: break-word;
+                 font-family: Helvetica, Arial, sans-serif;
+                 line-height: 1.15; margin: 0; padding: 0; }
+  /* ---- in-place text editor (K-150) ----
+     Preview's shape: click, and a box appears ON the page that you
+     type into. It is a DIRECT CHILD OF .page, deliberately NOT inside
+     .hlLayer — renderAnnotLayers destroys and rebuilds .hlLayer and
+     .noteLayer from scratch on every pass (four call sites, one of
+     them the push that follows this box's own save), and a
+     contenteditable in there would be obliterated mid-keystroke.
+     Nothing removes .editLayer, so the caret survives zoom, scroll
+     re-render and annotation pushes alike. z above every layer,
+     including the marquee, because it is the thing being interacted
+     with.
+
+     Geometry is POINTS + a transform, never px arithmetic: the box's
+     layout size and font-size are page points, and scale() carries it
+     to the current zoom. Laying it out in px * scale instead would
+     re-wrap the text at every zoom step and jitter on the fractional
+     ones. Its content box is exactly the box that gets committed —
+     the frame is SHADOWS (a halo here, a 1px ring 3px out on ::after),
+     which take no layout space, so the glyphs do not shift when the
+     editor closes and the static .hltext twin takes over.
+
+     The frame is chrome, so it must NOT zoom with the text:
+     positionTextEdit sets --k to 1 / state.scale and every frame
+     length is multiplied by it, which keeps grip, ring and halo at
+     their 100% screen size at any zoom. The ring is a box-shadow
+     rather than an outline because Blink snaps outline widths up to
+     1 layout px BEFORE the scale(): a 1/3 px outline still drew 3 px
+     wide at 300%. */
+  .editLayer {
+    position: absolute; z-index: 7; transform-origin: 0 0;
+    padding: 0; border: none; background: transparent; outline: none;
+    box-shadow: 0 0 0 calc(6px * var(--k, 1)) var(--accent-selection);
+  }
+  .editLayer::after {
+    content: ""; position: absolute; pointer-events: none;
+    inset: calc(-3px * var(--k, 1));
+    box-shadow: 0 0 0 calc(1px * var(--k, 1)) var(--accent);
+  }
+  .editLayer .editBody {
+    outline: none; white-space: pre-wrap; overflow-wrap: break-word;
+    line-height: 1.15; cursor: text; min-height: 1em;
+    font-family: Helvetica, Arial, sans-serif; margin: 0; padding: 0;
+  }
+  /* The grip is the move handle: the interior is a text field, so
+     dragging inside it selects text (Preview behaves the same — you
+     move an annotation by its frame, not its words). Offset ABOVE the
+     content box so it costs no layout either; sized by --k like the
+     rest of the frame. */
+  .editLayer .editGrip {
+    position: absolute; left: 0; right: 0; top: calc(-11px * var(--k, 1));
+    height: calc(6px * var(--k, 1)); border-radius: calc(3px * var(--k, 1));
+    background: var(--accent); cursor: move;
+  }
+  .noteLayer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+  .noteLayer .noteAnchor {
+    position: absolute; pointer-events: auto; cursor: pointer;
+    width: 16px; height: 16px; border-radius: 8px;
+    background: var(--accent); color: white; font-size: 10px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  }
+  /* Note cards (hand-drawn reader): a free-standing note always, and a
+     highlight's note while hand-drawn is on. z 4 like .noteLayer and
+     appended after it, so it paints over the notes and under the kept
+     marquee (5). The layer lets clicks through to the text; a card
+     takes them. Fill comes from the record's ink at runtime, never a
+     hex here; the text is the dark text ink, since the page is white
+     in both themes. */
+  .cardLayer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+  .cardLayer .cardLines { position: absolute; left: 0; top: 0;
+                          width: 100%; height: 100%; overflow: visible; }
+  .noteCard { position: absolute; pointer-events: auto; box-sizing: border-box;
+              border-radius: 4px; color: var(--tink-black); cursor: pointer;
+              font-family: Helvetica, Arial, sans-serif; }
+  .noteCard .cardInk { position: absolute; left: 0; top: 0;
+                       width: 100%; height: 100%; overflow: visible; }
+  .noteCard .cardText { position: relative; white-space: pre-wrap;
+                        overflow-wrap: break-word; line-height: 1.15; }
+  /* The hand-drawn stack, switched by klausSetHandDrawn. One rule for
+     the box, the card, the measuring twin and the editor, so the twin
+     never measures in a font the box does not draw in. After every
+     base rule, so it wins; Excalifont failing falls to sans-serif. */
+  body.handDrawn .hlLayer .hltext,
+  body.handDrawn .noteCard,
+  body.handDrawn #textMeasure,
+  body.handDrawn .editLayer .editBody { font-family: "Excalifont", sans-serif; }
+  /* A text box keeps the box it was measured in, and every box made
+     with the switch off was measured in Helvetica, which Excalifont
+     outruns by 5-23%. Clipping would cut its last line; let it show. */
+  body.handDrawn .hlLayer .hltext { overflow: visible; }
+  #marquee {
+    position: absolute; display: none; z-index: 6; pointer-events: none;
+    background: var(--accent-selection); border: 1px solid var(--accent);
+  }
+  /* Persisted marquee (K-100): the region survives release inside its
+     page div — drag it into a note field, right-click to copy again,
+     click (or click anywhere) to dismiss. z 5: over notes/text, under
+     the live rubber band. */
+  #marqueeKeep {
+    position: absolute; z-index: 5; cursor: grab; box-sizing: border-box;
+    background: var(--accent-selection); border: 1px dashed var(--accent);
+  }
+  /* ---- custom context menu ---- */
+  #ctxmenu {
+    position: fixed; display: none; z-index: 100; min-width: 180px;
+    background: var(--surface); border: 1px solid var(--grey-light);
+    border-radius: 8px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  }
+  #ctxmenu .mi {
+    padding: 5px 10px; border-radius: 6px; cursor: pointer; color: var(--text);
+  }
+  #ctxmenu .mi:hover { background: var(--hover-subtle); }
+  #ctxmenu .mi.off { opacity: 0.45; cursor: default; }
+  #ctxmenu .mi.off:hover { background: none; }
+  #ctxmenu .sep { height: 1px; background: var(--grey-light); margin: 4px 6px; }
+  #error {
+    display: none; margin: 40px auto; max-width: 420px; padding: 20px;
+    background: var(--surface); border: 1px solid var(--grey-light);
+    border-radius: 12px; color: var(--text-muted); font-size: 13px;
+    text-align: center;
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--grey-mid); border-radius: 4px; }
+
+  /* Floating tools preserve context while keeping text on a readable surface. */
+  #annobar {
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+  }
+  #root button { font-optical-sizing: auto; touch-action: manipulation; }
+  #root button:active { filter: brightness(0.92); }
+  #root button:focus-visible, #root input:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    #annobar { background: var(--surface); backdrop-filter: none; }
+  }
+  @media (prefers-contrast: more) {
+    #annobar, #findbar, #ctxmenu { border: 1px solid var(--text); }
+  }
+</style>
+
+<div id="root">
+  <div id="thumbs"></div>
+  <div id="main">
+    <div id="findbar">
+      <input id="findinput" type="text" placeholder="Find in PDF…" />
+      <span id="findcount"></span>
+      <button id="findprev" title="Previous match (Shift+Enter)">&#8249;</button>
+      <button id="findnext" title="Next match (Enter)">&#8250;</button>
+      <button id="findclose" title="Close (Esc)">&#10005;</button>
+    </div>
+    <div id="scroll"><div id="pages"></div><div id="error"></div></div>
+    <div id="annobar">
+      <button id="abHl" title="Highlight" aria-pressed="false">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
+             stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <path d="M8.4 2.2 11.8 5.6 6.6 10.8H3.2V7.4Z"/>
+          <path d="M2.2 13h9.6" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <span id="abInks">
+        <button class="inkSw" data-tink="black" title="Black"
+                aria-pressed="false"></button>
+        <button class="inkSw active" data-ink="yellow" data-tink="yellow"
+                title="Yellow" aria-pressed="true"></button>
+        <button class="inkSw" data-ink="green" data-tink="green"
+                title="Green" aria-pressed="false"></button>
+        <button class="inkSw" data-ink="blue" data-tink="blue"
+                title="Blue" aria-pressed="false"></button>
+        <button class="inkSw" data-ink="pink" data-tink="pink"
+                title="Pink" aria-pressed="false"></button>
+        <button class="inkSw" data-ink="orange" data-tink="orange"
+                title="Orange" aria-pressed="false"></button>
+      </span>
+      <div class="absep"></div>
+      <button id="abText" title="Add Text" aria-pressed="false">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
+             stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+          <path d="M2.8 3.4h8.4M7 3.4v7.8"/>
+        </svg>
+      </button>
+      <button id="abNote" title="Add Note" aria-pressed="false">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
+             stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <path d="M2.2 2.2h9.6v6.2l-3.4 3.4H2.2Z"/>
+          <path d="M11.8 8.4H8.4v3.4"/>
+        </svg>
+      </button>
+      <div class="absep" id="abTszSep"></div>
+      <span id="abTsz">
+        <button id="abTszDown" title="Smaller Text">A&#8722;</button>
+        <span id="abTszVal">12</span>
+        <button id="abTszUp" title="Larger Text">A+</button>
+      </span>
+      <div class="absep"></div>
+      <button id="abZoomOut" title="Zoom Out (&#8984;&#8722;)">&#8722;</button>
+      <span id="abZoomPct">100%</span>
+      <button id="abZoomIn" title="Zoom In (&#8984;+)">+</button>
+      <button id="abZoomFit" title="Actual Size (&#8984;0)">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
+             stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+          <path d="M5 2.5H2.5V5M9 2.5h2.5V5M5 11.5H2.5V9M9 11.5h2.5V9"/>
+        </svg>
+      </button>
+      <div class="absep"></div>
+      <button id="abThumbs" title="Thumbnails" aria-pressed="false">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
+             stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <rect x="1.3" y="1.3" width="4.6" height="6" rx="0.6"/>
+          <rect x="8.1" y="1.3" width="4.6" height="6" rx="0.6"/>
+          <rect x="1.3" y="9.3" width="4.6" height="3.4" rx="0.6"/>
+          <rect x="8.1" y="9.3" width="4.6" height="3.4" rx="0.6"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</div>
+<div id="ctxmenu"></div>
+<div id="marquee"></div>
+
+<script src="/_addons/__ADDON__/web/pdfjs/pdf.min.js"></script>
+<script src="/_addons/__ADDON__/web/pdfjs_pure.js"></script>
+<script src="/_addons/__ADDON__/web/rough.min.js"></script>
+<script>
+"use strict";
+/* global pdfjsLib */
+
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "/_addons/__ADDON__/web/pdfjs/pdf.worker.min.js";
+
+/* One clamp for every zoom writer (fit, ⌘ keys, menu, toolbar, pinch)
+   — a preview that promises a scale the settle refuses would jump. */
+const MIN_SCALE = 0.25, MAX_SCALE = 4.0;
+function clampScale(s) { return Math.max(MIN_SCALE, Math.min(MAX_SCALE, s)); }
+
+const state = {
+  doc: null,
+  scale: 1.0,
+  userZoomed: false,
+  pageDivs: [],
+  rendered: new Map(),   // pageNum -> {canvas, textLayer, spans[]}
+  lru: new Set(),        // rendered pages, least recently visible first
+  inZone: new Set(),     // pages the observer has in its render zone
+  observer: null,
+  thumbObserver: null,
+  currentPage: 0,
+  t0: null,              // performance.now() at load start; first-page timing
+  gen: 0,                // load generation, from Python's klausPdfOpen
+  transport: null,       // KlausRange feeding the open document
+  task: null,            // its getDocument loading task
+  keepZoom: false,       // a reload of the same document keeps a user zoom
+  annots: [],            // canonical records, pushed from Python
+  annotsPrev: null,      // last push's records; null = redraw every page
+  pendingRepaint: new Set(),  // pages awaiting a push to redraw (K-150)
+  pageTexts: null,       // sparse [{str, items:[{start,len}]}] per page0, for find
+  find: { query: "", matches: [], index: -1 },
+  marquee: null,         // {page, x0, y0} while alt-dragging
+  persistMarquee: null,  // {page0,x,y,w,h,dataUrl} kept after release (K-100)
+  occlusionEnabled: false, // an Add/Edit editor exists (klausSetOcclusionEnabled)
+  zoom: null,            // live zoom session — pinch or stepped (zoomTo)
+  prevZoom: 0,           // last committed user zoom: smart zoom's way back
+  tool: null,            // "hl" | "text" | "note" | null — annobar mode
+  ink: "yellow",         // selected highlight ink — a theme --ink-* NAME (notes too)
+  tink: "black",         // selected TEXT ink — a --tink-* NAME (K-150)
+  tsize: 12,             // selected text size in points (K-150)
+  textEdit: null,        // live in-place editor (K-150), see openTextEdit
+  textDrag: null,        // {x0,y0,ax,ay} while the grip is being dragged
+  cardPress: null,       // the last #scroll press, when it landed on a note card
+  handDrawn: true,       // rough.js marks + Excalifont; Python pushes the pref
+  fontsWaited: false,    // the first switch-on has waited for Excalifont
+};
+
+/* rough.js is the hand-drawn path's one dependency. Without it the
+   marks draw as today's divs (the switch's off path) and the console
+   says why; Excalifont alone failing just falls through to sans-serif. */
+if (typeof rough === "undefined") {
+  state.handDrawn = false;
+  console.warn("[klaus_note] rough.js did not load; marks draw in the plain style");
+}
+document.body.classList.toggle("handDrawn", state.handDrawn);
+
+function post(msg) {
+  try { pycmd("klaus_note_pdfjs:" + msg); } catch (e) { /* headless */ }
+}
+
+/* pdf.js 3.x CONTRACT: the text layer sizes its glyph spans with
+   calc(var(--scale-factor) * ...). Without this property the calc() is
+   invalid, every span falls back to the default font size, and the
+   selection layer no longer matches the painted page (the exact
+   misalignment + broken-highlight bug found live). Must track
+   state.scale everywhere it changes. */
+function applyScaleFactor() {
+  document.getElementById("pages").style.setProperty(
+    "--scale-factor", String(state.scale));
+  updateZoomReadout(state.scale);
+}
+
+/* The annobar's live % — fed from applyScaleFactor (every committed
+   scale change funnels through it) and directly during a pinch, whose
+   interim scale exists only as a CSS transform. */
+function updateZoomReadout(scale) {
+  const el = document.getElementById("abZoomPct");
+  if (el) el.textContent = Math.round(scale * 100) + "%";
+}
+function postB64(action, obj) {
+  const json = JSON.stringify(obj);
+  post(action + ":" + btoa(unescape(encodeURIComponent(json))));
+}
+
+/* ==== feed ========================================================= */
+/* PDF reader 2/5: Python sends the length and the first 256 KB; pdf.js
+   asks for every further byte range over the bridge. One bridge call
+   carries at most MAX_RANGE (pdf_source.MAX_RANGE), but pdf.js groups
+   contiguous missing chunks into one request and accepts exactly ONE
+   onDataRange per requested begin, so a request is fetched in slices
+   and delivered whole. */
+const MAX_RANGE = 1048576;
+
+function b64Bytes(b64) {
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function askRange(gen, begin, end) {
+  return new Promise((resolve, reject) => {
+    try {
+      pycmd("klaus_note_pdfjs:range:" + gen + ":" + begin + ":" + end, resolve);
+    } catch (e) { reject(e); }
+  });
+}
+
+class KlausRange extends pdfjsLib.PDFDataRangeTransport {
+  constructor(gen, length, first) {
+    super(length, first);
+    this.gen = gen;
+    this.aborted = false;
+  }
+  async requestDataRange(begin, end) {
+    const parts = [];
+    let pos = begin;
+    try {
+      while (pos < end) {
+        const r = await askRange(this.gen, pos, Math.min(end, pos + MAX_RANGE));
+        if (this.aborted) return;
+        if (r && r.stale) {
+          this.abort();
+          post("stale:" + this.gen);
+          return;
+        }
+        if (!r || typeof r.b64 !== "string") return;   // refused: a newer load owns the bridge
+        const bytes = b64Bytes(r.b64);
+        if (!bytes.length) break;                       // past EOF: never spin
+        parts.push(bytes);
+        pos += bytes.length;
+      }
+    } catch (e) {
+      post("log:range " + begin + "-" + end + " failed: " + e.message);
+      return;
+    }
+    const chunk = new Uint8Array(pos - begin);
+    let off = 0;
+    for (const p of parts) { chunk.set(p, off); off += p.length; }
+    this.onDataRange(begin, chunk);
+  }
+  abort() { this.aborted = true; }
+}
+
+window.klausPdfOpen = function (gen, length, firstB64, _name, keepView) {
+  state.t0 = performance.now();
+  state.gen = gen;
+  state.keepZoom = !!keepView;
+  openDocument(gen, length, b64Bytes(firstB64));
+};
+/* Python closes the document (clear, or a failed load): drop it for good
+   — its ranges are refused from now on, so leaving it up would leave
+   pages blank forever — and show any error where the pages were. */
+window.klausPdfClose = function (gen, text) {
+  state.gen = gen;
+  teardown().then(() => {
+    if (text && state.gen === gen) window.klausPdfError(text);
+  });
+};
+window.klausPdfError = function (text) {
+  const el = document.getElementById("error");
+  el.textContent = text;
+  el.style.display = "block";
+};
+
+async function openDocument(gen, length, first) {
+  await teardown();
+  if (gen !== state.gen) return;            // a newer klausPdfOpen owns the page
+  const transport = new KlausRange(gen, length, first);
+  const task = pdfjsLib.getDocument({
+    range: transport,
+    disableAutoFetch: true,
+    disableStream: true,
+    rangeChunkSize: 262144,
+    // No new Function() for font glyphs: with eval on, a crafted PDF font
+    // runs script in this page (CVE-2024-4367, pdf.js < 4.2.67).
+    isEvalSupported: false,
+  });
+  state.transport = transport;
+  state.task = task;
+  let doc;
+  try {
+    doc = await task.promise;
+  } catch (e) {
+    if (gen !== state.gen) return;          // destroyed by a newer open
+    window.klausPdfError("Could not open this PDF: " + e.message);
+    post("log:open failed: " + e.message);
+    return;
+  }
+  if (gen !== state.gen) return;
+  state.doc = doc;
+  post("count:" + state.doc.numPages);
+  await buildPlaceholders();
+  if (gen !== state.gen) return;
+  buildThumbs();
+  observePages();
+  post("ready");
+}
+
+async function availWidth() {
+  // Host panel may not be laid out yet (caught live: zero width at load
+  // rendered everything at the 0.25 floor). Wait up to ~1s.
+  const el = document.getElementById("scroll");
+  for (let i = 0; i < 60 && el.clientWidth < 60; i++) {
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  return Math.max(60, el.clientWidth) - 24;
+}
+
+async function buildPlaceholders() {
+  const pagesEl = document.getElementById("pages");
+  pagesEl.textContent = "";
+  state.pageDivs = [];
+  const first = await state.doc.getPage(1);
+  const base = first.getViewport({ scale: 1.0 });
+  const avail = await availWidth();
+  if (!(state.keepZoom && state.userZoomed)) {
+    state.scale = clampScale(avail / base.width);
+    state.userZoomed = false;
+    if (!state.keepZoom) state.prevZoom = 0;   // B never smart-zooms to A's zoom
+  }
+  applyScaleFactor();
+  for (let i = 1; i <= state.doc.numPages; i++) {
+    const div = document.createElement("div");
+    div.className = "page";
+    div.dataset.page = String(i);
+    div.style.width = Math.floor(base.width * state.scale) + "px";
+    div.style.height = Math.floor(base.height * state.scale) + "px";
+    pagesEl.appendChild(div);
+    state.pageDivs.push(div);
+  }
+}
+
+new ResizeObserver(async () => {
+  if (!state.doc || state.userZoomed) return;
+  const first = await state.doc.getPage(1);
+  const base = first.getViewport({ scale: 1.0 });
+  const target = clampScale(
+    (document.getElementById("scroll").clientWidth - 24) / base.width
+  );
+  if (Math.abs(target - state.scale) / state.scale > 0.02) {
+    state.scale = target;
+    rezoom(state.currentPage || 1);
+  }
+}).observe(document.getElementById("scroll"));
+
+function observePages() {
+  if (state.observer) state.observer.disconnect();
+  state.observer = new IntersectionObserver(onIntersect, {
+    root: document.getElementById("scroll"),
+    rootMargin: "150% 0px",
+  });
+  for (const d of state.pageDivs) state.observer.observe(d);
+  const scroll = document.getElementById("scroll");
+  scroll.addEventListener("scroll", trackCurrentPage, { passive: true });
+  scroll.addEventListener("scroll", scheduleScrollReport, { passive: true });
+}
+
+/* Pages leaving the zone stay rendered: only the least recently
+   visible beyond KEEP_RENDERED out-of-zone pages are torn down. */
+function onIntersect(entries) {
+  for (const en of entries) {
+    const idx = parseInt(en.target.dataset.page, 10);
+    touchPage(idx);
+    if (en.isIntersecting) {
+      state.inZone.add(idx);
+      renderPage(idx, en.target);
+    } else {
+      state.inZone.delete(idx);
+    }
+  }
+  for (const n of evictable([...state.lru], state.inZone, KEEP_RENDERED)) {
+    teardownPage(n, state.pageDivs[n - 1]);
+  }
+}
+
+function touchPage(num) {
+  if (!state.rendered.has(num)) return;
+  state.lru.delete(num);
+  state.lru.add(num);
+}
+
+async function renderPage(num, div) {
+  if (state.rendered.has(num) || !state.doc) return;
+  state.rendered.set(num, {});   // claim before await (re-entrancy)
+  touchPage(num);
+  try {
+    const page = await state.doc.getPage(num);
+    const viewport = page.getViewport({ scale: state.scale });
+    div.style.width = Math.floor(viewport.width) + "px";
+    div.style.height = Math.floor(viewport.height) + "px";
+    const canvas = document.createElement("canvas");
+    canvas.className = "pg";
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(viewport.width * ratio);
+    canvas.height = Math.floor(viewport.height * ratio);
+    canvas.style.width = Math.floor(viewport.width) + "px";
+    canvas.style.height = Math.floor(viewport.height) + "px";
+    const ctx = canvas.getContext("2d");
+    await page.render({
+      canvasContext: ctx, viewport: viewport,
+      transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null,
+      annotationMode: pdfjsLib.AnnotationMode.DISABLE,
+    }).promise;
+    if (num === 1 && state.t0 !== null) {
+      post("firstpage:" + Math.round(performance.now() - state.t0));
+      state.t0 = null;
+    }
+    const textLayer = document.createElement("div");
+    textLayer.className = "textLayer";
+    textLayer.style.width = Math.floor(viewport.width) + "px";
+    textLayer.style.height = Math.floor(viewport.height) + "px";
+    // Attach BEFORE rendering the text layer: pdf.js measures each
+    // span's real width against its computed style to derive the
+    // per-span scaleX correction, and a detached node has no computed
+    // style — glyphs drift horizontally without this.
+    div.appendChild(canvas);
+    div.appendChild(textLayer);
+    const textContent = await page.getTextContent();
+    const task = pdfjsLib.renderTextLayer({
+      textContentSource: textContent,
+      container: textLayer,
+      viewport: viewport,
+    });
+    if (task && task.promise) { try { await task.promise; } catch (e) {} }
+    const spans = Array.from(textLayer.querySelectorAll("span"));
+    state.rendered.set(num, { canvas, textLayer, spans,
+      ptW: viewport.width / viewport.scale, ptH: viewport.height / viewport.scale });
+    renderAnnotLayers(num, div);
+    if (state.find.matches.length) highlightCurrentMatchIfVisible();
+    if (Math.abs(viewport.scale - state.scale) > 0.0005) {
+      // A zoom settled while this render was in flight — its output
+      // is stale-scale. refreshPage redraws crisp, fixes the div size.
+      refreshPage(num, div);
+    }
+  } catch (e) {
+    state.rendered.delete(num);
+    state.lru.delete(num);
+    post("log:render " + num + " failed: " + e.message);
+  }
+}
+
+function teardownPage(num, div) {
+  const r = state.rendered.get(num);
+  if (!r || !r.canvas || !div) return;   // never tear down a mid-render claim
+  for (const cls of ["canvas.pg", ".textLayer", ".hlLayer", ".noteLayer", ".cardLayer"]) {
+    const el = div.querySelector(cls);
+    if (el) { try { div.removeChild(el); } catch (e) {} }
+  }
+  state.rendered.delete(num);
+  state.lru.delete(num);
+}
+
+async function teardown() {
+  const transport = state.transport, task = state.task;
+  state.transport = null;
+  state.task = null;
+  if (state.observer) state.observer.disconnect();
+  state.rendered.clear();
+  state.lru.clear();
+  state.inZone.clear();
+  state.pageDivs = [];
+  state.annots = [];
+  state.annotsPrev = null;
+  state.pendingRepaint.clear();
+  state.pageTexts = null;
+  state.persistMarquee = null;   // its overlay dies with #pages below
+  state.textEdit = null;         // so does the editor box (K-150)
+  state.textDrag = null;
+  state.find = { query: "", matches: [], index: -1 };
+  document.getElementById("pages").textContent = "";
+  document.getElementById("thumbs").textContent = "";
+  document.getElementById("error").style.display = "none";
+  state.doc = null;
+  state.currentPage = 0;
+  if (transport) transport.abort();
+  /* The loading task, not the doc: doc.destroy() is task.destroy(), and
+     the task also exists while getDocument is still pending. */
+  if (task) { try { await task.destroy(); } catch (e) {} }
+}
+
+function trackCurrentPage() {
+  const scroll = document.getElementById("scroll");
+  const mid = scroll.scrollTop + scroll.clientHeight / 3;
+  let page = 1;
+  for (const d of state.pageDivs) {
+    if (d.offsetTop <= mid) page = parseInt(d.dataset.page, 10);
+    else break;
+  }
+  if (page !== state.currentPage) {
+    state.currentPage = page;
+    post("page:" + page + ":" + (state.doc ? state.doc.numPages : 0));
+    markCurrentThumb(page);
+  }
+}
+
+let scrollReportTimer = null;
+function scheduleScrollReport() {
+  if (scrollReportTimer) clearTimeout(scrollReportTimer);
+  scrollReportTimer = setTimeout(() => {
+    post("scroll:" + Math.round(document.getElementById("scroll").scrollTop));
+  }, 300);
+}
+
+/* ==== annotations (records owned by Python) ======================== */
+/* Only pages whose records changed are redrawn — plus every page on
+   the first push after a load, and any page whose text editor closed
+   waiting for this push (closeTextEdit(false): an untouched box comes
+   back as identical records, yet its static twin must reappear). */
+window.klausSetAnnotations = function (records) {
+  state.annots = Array.isArray(records) ? records : [];
+  const changed = state.annotsPrev
+    ? changedPages(state.annotsPrev, state.annots) : null;
+  state.annotsPrev = state.annots;
+  for (const n of state.pendingRepaint) if (changed) changed.add(n);
+  state.pendingRepaint.clear();
+  for (const [num, r] of state.rendered) {
+    if (r && r.canvas && (!changed || changed.has(num))) {
+      renderAnnotLayers(num, state.pageDivs[num - 1]);
+    }
+  }
+};
+
+/* The "Hand-drawn style" preference, pushed on ready and on Save. A
+   switch repaints every rendered page through the redraw-all path
+   above. The FIRST switch-on waits for Excalifont, once: a highlight's
+   card is measured before it is placed, and measured in the fallback
+   face it would keep the wrong size until some later repaint. Only
+   that repaint waits; measureTextBox stays synchronous, which
+   openTextEdit relies on. fonts.load starts the download — fonts.ready
+   alone resolves at once while nothing has asked for the face yet. */
+window.klausSetHandDrawn = function (on) {
+  state.handDrawn = !!on && typeof rough !== "undefined";
+  document.body.classList.toggle("handDrawn", state.handDrawn);
+  if (state.handDrawn && !state.fontsWaited && document.fonts) {
+    state.fontsWaited = true;
+    document.fonts.load('12px "Excalifont"').catch(() => {})
+      .then(() => document.fonts.ready).then(repaint, repaint);
+    return;
+  }
+  repaint();
+  function repaint() {
+    state.annotsPrev = null;
+    window.klausSetAnnotations(state.annots);
+    sizeTextEdit();   // an open editor re-measures in the new face
+  }
+};
+
+function hexToRgba(hex, alpha) {
+  try {
+    const h = String(hex || "#fadc50").replace("#", "");
+    const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16),
+          b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  } catch (e) { return "rgba(250, 220, 80, " + alpha + ")"; }
+}
+
+/* Hand-drawn reader: a note card's inner margin in page points, the
+   bake's pdf_handler._NOTE_PAD_PT. A card box INCLUDES it on every
+   side — a note's rects[0] is the whole card. */
+const CARD_PAD = 6;
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function renderAnnotLayers(num, div) {
+  if (!div) return;
+  for (const cls of [".hlLayer", ".noteLayer", ".cardLayer"]) {
+    const old = div.querySelector(cls);
+    if (old) div.removeChild(old);
+  }
+  const hlLayer = document.createElement("div");
+  hlLayer.className = "hlLayer";
+  const noteLayer = document.createElement("div");
+  noteLayer.className = "noteLayer";
+  const cardLayer = document.createElement("div");
+  cardLayer.className = "cardLayer";
+  const s = state.scale;
+  const hand = state.handDrawn;
+  /* The page in points, for the rough svgs' viewBox and the card
+     clamp: the render's own unrounded size (the bake clamps against the
+     same), so a card at the edge holds still across zooms. The floored
+     div px are only a fallback. */
+  const rendered = state.rendered.get(num) || {};
+  const pageW = rendered.ptW || (parseFloat(div.style.width) || 0) / s;
+  const pageH = rendered.ptH || (parseFloat(div.style.height) || 0) / s;
+  let bands = null, lines = null;   // this page's rough svgs, made on first use
+  for (const rec of state.annots) {
+    if ((rec.page | 0) !== num - 1) continue;   // records are 0-based
+    const rects = rec.rects || [];
+    if (rec.kind === "text" && rects.length) {
+      /* The record being edited is drawn by its editor, not here: the
+         static twin would ghost underneath the live box, one glyph
+         off, on every pass (K-150). */
+      if (state.textEdit && state.textEdit.id === rec.id) continue;
+      const [x, y, w, h] = rects[0];
+      const t = document.createElement("div");
+      t.className = "hltext";
+      t.textContent = String(rec.text || "");
+      t.style.left = x * s + "px";
+      t.style.top = y * s + "px";
+      t.style.width = w * s + "px";
+      t.style.height = h * s + "px";
+      t.style.color = String(rec.color || "#000000");
+      /* No px floor: the box is sized to its text, so a floor (it was
+         6px) outgrew the box below 50% zoom (fit-width in a narrow
+         dock) and the committed text wrapped and clipped. */
+      t.style.fontSize = (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) * s + "px";
+      hlLayer.appendChild(t);
+    } else if (rec.kind === "note") {
+      /* A free-standing note is a card in either style, never a band:
+         its rects[0] IS the card, so nothing is measured. Its editor
+         draws it while open, like a text box's. */
+      if (state.textEdit && state.textEdit.id === rec.id) continue;
+      if (rects.length) cardLayer.appendChild(noteCardEl(rec, "note", rects[0], s));
+    } else {
+      if (hand) {
+        if (!bands) bands = hlLayer.appendChild(pointSvg("roughLayer", pageW, pageH));
+        roughBands(bands, rec);
+      } else {
+        for (const r of rects) {
+          const [x, y, w, h] = r;
+          const d = document.createElement("div");
+          d.className = "hl";
+          d.style.left = x * s + "px";
+          d.style.top = y * s + "px";
+          d.style.width = w * s + "px";
+          d.style.height = h * s + "px";
+          d.style.background = hexToRgba(rec.color, 0.43);
+          hlLayer.appendChild(d);
+        }
+      }
+      const first = rects[0];
+      const note = String(rec.note || "").trim();
+      if (note && first && hand) {
+        /* The card under edit is drawn by its editor; its line goes too. */
+        if (state.textEdit && state.textEdit.id === rec.id) continue;
+        /* Lines go first in the layer, so every card covers them. */
+        if (!lines) {
+          lines = cardLayer.insertBefore(pointSvg("cardLines", pageW, pageH),
+                                         cardLayer.firstChild);
+        }
+        highlightCard(rec, note, cardLayer, lines, pageW, pageH, s);
+      } else if (note && first) {
+        const a = document.createElement("div");
+        a.className = "noteAnchor";
+        a.textContent = "✎";
+        a.title = note;
+        a.style.left = (first[0] + first[2]) * s - 8 + "px";
+        a.style.top = first[1] * s - 8 + "px";
+        a.dataset.hlid = String(rec.id || "");
+        a.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          postB64("note-edit", { id: a.dataset.hlid });
+        });
+        noteLayer.appendChild(a);
+      }
+    }
+  }
+  div.appendChild(hlLayer);
+  div.appendChild(noteLayer);
+  div.appendChild(cardLayer);
+  /* Every overlay pass (render, refresh, zoom relayout) re-lands the
+     persisted marquee at the new scale (K-100). The open text editor
+     rides the same rule — it is never rebuilt, only re-landed, which
+     is what keeps the caret alive across this pass (K-150). */
+  if (state.persistMarquee && state.persistMarquee.page0 === num - 1) {
+    positionPersistMarquee();
+  }
+  if (state.textEdit && state.textEdit.page0 === num - 1) {
+    positionTextEdit();
+  }
+}
+
+/* An svg drawn in page points: its viewBox is w x h points and CSS
+   stretches it over its box, so whatever rough.js draws in it scales
+   with the zoom and keeps its seeded shape at every step. */
+function pointSvg(cls, w, h) {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", cls);
+  svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+  svg.setAttribute("preserveAspectRatio", "none");
+  return svg;
+}
+
+/* A highlight as marker bands: per rect, a seeded rough polygon 2 pt
+   taller than the rect (1 pt each side), in the record's ink at the
+   .hl alpha. rough's corner jitter is what roughens the ends; the
+   seed is the record's, so a repaint never re-wobbles it. */
+function roughBands(svg, rec) {
+  const rc = rough.svg(svg);
+  for (const [x, y, w, h] of rec.rects || []) {
+    const g = rc.polygon(
+      [[x, y - 1], [x + w, y - 1], [x + w, y + h + 1], [x, y + h + 1]],
+      { fill: rec.color, fillStyle: "solid", roughness: 1,
+        seed: seedFor(rec.id), stroke: "none" });
+    g.setAttribute("fill-opacity", "0.43");
+    svg.appendChild(g);
+  }
+}
+
+/* One note card at box [x, y, w, h] page points, px = pt * scale like
+   .hltext. kind is "note" (a free-standing note) or "hl" (a
+   highlight's note); data-id and data-kind are how the card editor
+   finds it. Hand-drawn: a seeded rough rounded rectangle in the
+   record's ink, filled at 0.85. Off: a plain rounded card in the same
+   ink. */
+function noteCardEl(rec, kind, box, s) {
+  const [x, y, w, h] = box;
+  const c = document.createElement("div");
+  c.className = "noteCard";
+  c.dataset.id = String(rec.id || "");
+  c.dataset.kind = kind;
+  c.cardBox = box;   /* page points, for cardAt: the drag and the editor start here */
+  c.style.left = x * s + "px";
+  c.style.top = y * s + "px";
+  c.style.width = w * s + "px";
+  c.style.height = h * s + "px";
+  c.style.padding = CARD_PAD * s + "px";
+  /* Inline: "#root *" sets content-box and outranks .noteCard's rule,
+     which drew every card 2*CARD_PAD wider and taller than its box. */
+  c.style.boxSizing = "border-box";
+  c.style.fontSize = (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) * s + "px";
+  if (state.handDrawn) {
+    const svg = pointSvg("cardInk", w, h);
+    const r = Math.min(6, w / 4, h / 4);
+    const g = rough.svg(svg).path(
+      `M${r} 0H${w - r}Q${w} 0 ${w} ${r}V${h - r}Q${w} ${h} ${w - r} ${h}` +
+      `H${r}Q0 ${h} 0 ${h - r}V${r}Q0 0 ${r} 0Z`,
+      { fill: rec.color, fillStyle: "solid", stroke: rec.color,
+        strokeWidth: 1, roughness: 1, seed: seedFor(rec.id) });
+    g.setAttribute("fill-opacity", "0.85");
+    svg.appendChild(g);
+    c.appendChild(svg);
+  } else {
+    c.style.background = hexToRgba(rec.color, 0.85);
+  }
+  const t = document.createElement("div");
+  t.className = "cardText";
+  t.textContent = String((kind === "note" ? rec.text : rec.note) || "");
+  c.appendChild(t);
+  return c;
+}
+
+/* A highlight's note as a card (hand-drawn on). Measured first — its
+   text plus CARD_PAD a side, capped like a text box — then placed by
+   cardSpot: the record's saved offset, else 8 pt right of the
+   highlight, kept in the page. A seeded rough line joins the card's
+   corner nearest the highlight to the nearest point of the highlight's
+   union. */
+function highlightCard(rec, note, layer, lines, pageW, pageH, s) {
+  const size = parseFloat(rec.size) || TEXT_SIZE_DEFAULT;
+  const [tw, th] = measureTextBox(note, size, TEXT_BOX_MAX_W - 2 * CARD_PAD,
+                               TEXT_BOX_MAX_H - 2 * CARD_PAD);
+  const cw = tw + 2 * CARD_PAD;
+  const ch = th + 2 * CARD_PAD;
+  const spot = cardSpot(rec, pageW, pageH, cw, ch);
+  layer.appendChild(noteCardEl(rec, "hl", [spot.x, spot.y, cw, ch], s));
+  let ux0 = Infinity, uy0 = Infinity, ux1 = -Infinity, uy1 = -Infinity;
+  for (const [x, y, w, h] of rec.rects || []) {
+    ux0 = Math.min(ux0, x); uy0 = Math.min(uy0, y);
+    ux1 = Math.max(ux1, x + w); uy1 = Math.max(uy1, y + h);
+  }
+  let best = null;
+  for (const [cx, cy] of [[spot.x, spot.y], [spot.x + cw, spot.y],
+                          [spot.x, spot.y + ch], [spot.x + cw, spot.y + ch]]) {
+    const px = Math.max(ux0, Math.min(cx, ux1));
+    const py = Math.max(uy0, Math.min(cy, uy1));
+    const d = Math.hypot(cx - px, cy - py);
+    if (!best || d < best[0]) best = [d, cx, cy, px, py];
+  }
+  if (!best || !(best[0] > 0)) return;   // the card sits on its highlight
+  lines.appendChild(rough.svg(lines).line(best[1], best[2], best[3], best[4], {
+    stroke: rec.color, strokeWidth: 1.5, roughness: 1, seed: seedFor(rec.id) }));
+}
+
+/* Rects on one line, folded into one rect per run (K-149).
+
+   Range.getClientRects() returns BOTH a span's border box AND its text
+   node's quad whenever the range covers that span completely — and
+   pdf.js's text layer is exactly one shrink-wrapped span per text
+   item, so an ordinary three-line drag returns SIX rects. Both clear
+   the sub-pixel guard below, both used to become .hl divs, and two
+   layers of the 43%-alpha paint composite to 67.5%: that was the
+   "double-highlighted" look, from one drag. Measured in Blink: the
+   border box [21,21,110.28,16] nested inside the quad
+   [21,19.5,110.28,18.5].
+
+   Same-line rects that overlap horizontally (or sit within GAP of each
+   other, stitching a line's several spans into one box) union into
+   their outer box; duplicates and containment fall out of that.
+
+   Where the fix actually BITES is pdfjs_viewer.merge_rects, running the
+   same rule on the Python side: the page never paints a highlight
+   optimistically — state.annots only ever arrives through
+   klausSetAnnotations — so what you see is always the canonical record.
+   This half keeps the PAYLOAD honest (one rect per line instead of two
+   on the wire, for selections that can run to dozens of lines) and
+   gives that rule a second implementation the tests pin against the
+   first, so neither can drift. JS is never trusted; Python re-merges
+   whatever arrives. */
+function mergeRects(rects) {
+  const GAP = 0.75;
+  const sameLine = (a, b) => {
+    const top = Math.max(a[1], b[1]);
+    const bottom = Math.min(a[1] + a[3], b[1] + b[3]);
+    const shorter = Math.min(a[3], b[3]);
+    return shorter > 0 && (bottom - top) > shorter * 0.5;
+  };
+  let cur = rects.slice(), merged = true;
+  while (merged) {
+    merged = false;
+    cur.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+    const out = [];
+    for (const r of cur) {
+      let host = null;
+      for (const c of out) {
+        if (sameLine(c, r) &&
+            r[0] <= c[0] + c[2] + GAP && c[0] <= r[0] + r[2] + GAP) {
+          host = c; break;
+        }
+      }
+      if (!host) { out.push(r); continue; }
+      const x0 = Math.min(host[0], r[0]), y0 = Math.min(host[1], r[1]);
+      const x1 = Math.max(host[0] + host[2], r[0] + r[2]);
+      const y1 = Math.max(host[1] + host[3], r[1] + r[3]);
+      host[0] = x0; host[1] = y0; host[2] = x1 - x0; host[3] = y1 - y0;
+      merged = true;
+    }
+    cur = out;
+  }
+  cur.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+  return cur;
+}
+
+/* Selection -> {pageIndex0: [[x,y,w,h] page pts]}. A rect belongs to
+   the page containing its CENTER (full containment was too strict —
+   sub-pixel span overhang silently dropped rects), then gets clamped
+   into that page's box. Each page's rects are then merged (above) so
+   one drag mints one layer of paint. */
+function selectionRectMap() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const map = {};
+  const s = state.scale;
+  for (let i = 0; i < sel.rangeCount; i++) {
+    for (const cr of sel.getRangeAt(i).getClientRects()) {
+      if (cr.width < 1 || cr.height < 1) continue;
+      const cx = cr.left + cr.width / 2, cy = cr.top + cr.height / 2;
+      for (const div of state.pageDivs) {
+        const pr = div.getBoundingClientRect();
+        if (cx >= pr.left && cx <= pr.right && cy >= pr.top && cy <= pr.bottom) {
+          const page = parseInt(div.dataset.page, 10) - 1;
+          const x0 = Math.max(cr.left, pr.left), y0 = Math.max(cr.top, pr.top);
+          const x1 = Math.min(cr.right, pr.right), y1 = Math.min(cr.bottom, pr.bottom);
+          if (x1 - x0 >= 1 && y1 - y0 >= 1) {
+            (map[page] = map[page] || []).push([
+              (x0 - pr.left) / s, (y0 - pr.top) / s,
+              (x1 - x0) / s, (y1 - y0) / s,
+            ]);
+          }
+          break;
+        }
+      }
+    }
+  }
+  for (const page of Object.keys(map)) map[page] = mergeRects(map[page]);
+  return Object.keys(map).length ? map : null;
+}
+
+/* The selected ink's hex, read back out of the theme custom property
+   that painted its swatch (theme.css_vars emits --ink-<name>) — so the
+   colour the user sees IS the colour that reaches the record, and no
+   hex is spelled in this file. An unresolvable var sends nothing and
+   Python falls back to its default yellow. */
+function currentInk() {
+  try {
+    const v = getComputedStyle(document.documentElement)
+      .getPropertyValue("--ink-" + state.ink).trim();
+    return v || null;
+  } catch (e) { return null; }
+}
+
+function addHighlightFromSelection() {
+  const map = selectionRectMap();
+  if (!map) { post("toast:" + btoa("KlausNote: select text first, then highlight")); return; }
+  postB64("hl-add", { pages: map, color: currentInk() });
+  window.getSelection().removeAllRanges();
+}
+
+/* Task 10 (K-196): report the live text selection to Python so
+   viewer_context (and the assistant dock reading it) knows what the
+   user has highlighted with the mouse, not just what they've inked.
+   Debounced — the DOM event this listens for below fires on every
+   caret move during a drag. */
+let _selT = null;
+document.addEventListener("selectionchange", () => {
+  clearTimeout(_selT);
+  _selT = setTimeout(() => postB64("sel", { text: String(window.getSelection() || "") }), 150);
+});
+
+/* Topmost highlight record under (page0, xPt, yPt), like _highlight_at.
+   A note is a card, hit by cardAt (asked first), never a highlight. */
+function highlightAt(page0, xPt, yPt, tol) {
+  tol = tol || 3;
+  for (let i = state.annots.length - 1; i >= 0; i--) {
+    const rec = state.annots[i];
+    if ((rec.page | 0) !== page0 || rec.kind === "note") continue;
+    for (const r of rec.rects || []) {
+      const [x, y, w, h] = r;
+      if (x - tol <= xPt && xPt <= x + w + tol &&
+          y - tol <= yPt && yPt <= y + h + tol) return rec;
+    }
+  }
+  return null;
+}
+
+/* The note card under a client point: {el, rec, kind, page0, box}, or
+   null. Cards take pointer events over the text, so the topmost element
+   there is the card (an open editor above one is not). box is the card
+   in page points as drawn (noteCardEl's cardBox). Every press, click
+   and context menu asks this before highlightAt. */
+function cardAt(clientX, clientY) {
+  const hit = document.elementFromPoint(clientX, clientY);
+  const el = hit && hit.closest ? hit.closest(".noteCard") : null;
+  if (!el || !el.cardBox) return null;
+  const rec = state.annots.find((r) => String(r.id || "") === el.dataset.id);
+  if (!rec) return null;
+  return { el, rec, kind: el.dataset.kind, page0: rec.page | 0,
+           box: el.cardBox.slice() };
+}
+
+/* A page's size in points: the render's unrounded size, else the div's
+   (renderAnnotLayers' rule). */
+function pagePts(page0) {
+  const r = state.rendered.get(page0 + 1) || {};
+  const div = state.pageDivs[page0];
+  const s = state.scale || 1;
+  return [r.ptW || (div ? (parseFloat(div.style.width) || 0) / s : 0),
+          r.ptH || (div ? (parseFloat(div.style.height) || 0) / s : 0)];
+}
+
+/* A w x h card at (x, y) kept inside its page with cardSpot's bounds:
+   0..ptW-w, 0..ptH-h. A page of unknown size leaves it be. */
+function clampCard(page0, x, y, w, h) {
+  const [W, H] = pagePts(page0);
+  if (!W || !H) return [x, y];
+  const clamp = (v, hi) => Math.max(0, Math.min(v, Math.max(0, hi)));
+  return [clamp(x, W - w), clamp(y, H - h)];
+}
+
+/* Where highlightCard draws rec's card (an empty one, for a highlight
+   with no note yet): the menu opens the card editor there. */
+function hlCardSpot(rec) {
+  const size = parseFloat(rec.size) || TEXT_SIZE_DEFAULT;
+  const [tw, th] = measureTextBox(String(rec.note || "").trim(), size,
+                                  TEXT_BOX_MAX_W - 2 * CARD_PAD,
+                                  TEXT_BOX_MAX_H - 2 * CARD_PAD);
+  const [W, H] = pagePts(rec.page | 0);
+  return cardSpot(rec, W, H, tw + 2 * CARD_PAD, th + 2 * CARD_PAD);
+}
+
+/* ==== clipboard helpers ============================================ */
+function pageAndPoint(clientX, clientY) {
+  for (const div of state.pageDivs) {
+    const pr = div.getBoundingClientRect();
+    if (clientX >= pr.left && clientX <= pr.right &&
+        clientY >= pr.top && clientY <= pr.bottom) {
+      return {
+        div, page0: parseInt(div.dataset.page, 10) - 1,
+        xPt: (clientX - pr.left) / state.scale,
+        yPt: (clientY - pr.top) / state.scale,
+      };
+    }
+  }
+  return null;
+}
+
+async function copyPageImage(page0) {
+  // Render offscreen at a fixed quality scale so the copy doesn't
+  // depend on the current zoom (matches the native slide copy).
+  try {
+    const page = await state.doc.getPage(page0 + 1);
+    const viewport = page.getViewport({ scale: 2.0 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
+    post("copy-image:" + canvas.toDataURL("image/png").split(",", 2)[1]);
+  } catch (e) { post("log:copy page image failed: " + e.message); }
+}
+
+/* Offscreen render of one page region at fixed quality — shared by the
+   clipboard copy and the persisted marquee's drag-out cache (K-100). */
+async function renderRegionCanvas(page0, xPt, yPt, wPt, hPt) {
+  const page = await state.doc.getPage(page0 + 1);
+  const q = 2.0;
+  const viewport = page.getViewport({ scale: q });
+  const full = document.createElement("canvas");
+  full.width = Math.floor(viewport.width);
+  full.height = Math.floor(viewport.height);
+  await page.render({ canvasContext: full.getContext("2d"), viewport, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
+  const out = document.createElement("canvas");
+  out.width = Math.max(1, Math.floor(wPt * q));
+  out.height = Math.max(1, Math.floor(hPt * q));
+  out.getContext("2d").drawImage(
+    full, xPt * q, yPt * q, wPt * q, hPt * q,
+    0, 0, out.width, out.height);
+  return out;
+}
+
+async function copyRegionImage(page0, xPt, yPt, wPt, hPt) {
+  try {
+    const out = await renderRegionCanvas(page0, xPt, yPt, wPt, hPt);
+    post("copy-image:" + out.toDataURL("image/png").split(",", 2)[1]);
+  } catch (e) { post("log:copy region failed: " + e.message); }
+}
+
+/* ==== Image Occlusion (2/3) ======================================== */
+/* Same offscreen render (scale 2) as the image copies; Python writes the
+   PNG and opens the mask editor. page0 is 0-based, pm the frozen marquee
+   ({page0,x,y,w,h}) for "this region", null for the whole page. */
+async function occludeImage(page0, pm) {
+  try {
+    let out;
+    if (pm) {
+      out = await renderRegionCanvas(pm.page0, pm.x, pm.y, pm.w, pm.h);
+    } else {
+      const page = await state.doc.getPage(page0 + 1);
+      const vp = page.getViewport({ scale: 1 });
+      out = await renderRegionCanvas(page0, 0, 0, vp.width, vp.height);
+    }
+    postB64("occlude-image", {
+      png: out.toDataURL("image/png").split(",", 2)[1],
+      page: pm ? pm.page0 : page0,
+      region: !!pm,
+    });
+  } catch (e) {
+    post("log:occlude failed: " + e.message);
+    post("toast:" + btoa("KlausNote: couldn't render that page"));
+  }
+}
+
+/* Python's pdfjs_viewer.NO_EDITOR_TIP, the same string. */
+const NO_EDITOR_TIP = "Open Add or Edit to make an occlusion note";
+window.klausSetOcclusionEnabled = function (on) { state.occlusionEnabled = !!on; };
+
+/* occlusion-items:start */
+/* [label, action, disabled] rows for the context menu; the region item
+   exists only while a marquee stands. "Draw a diagram…" (3/3) opens the
+   occlusion editor on its Draw tab; it renders nothing from the page.
+   Disabled without an editor. */
+function occlusionItems(page0, pm, enabled) {
+  const off = !enabled;
+  const items = [["Occlude this page", () => occludeImage(page0, null), off]];
+  if (pm) items.push(["Occlude this region", () => occludeImage(pm.page0, pm), off]);
+  items.push(["Draw a diagram…", () => post("draw-diagram"), off]);
+  return items;
+}
+/* occlusion-items:end */
+
+async function copyPageText(page0) {
+  const text = await pageText(page0);
+  const t = (text && text.str) || "";
+  /* toast: menu-driven page capture confirms like the native viewer;
+     plain selection copy stays silent (Preview-style). */
+  postB64("copy-text", { text: t, toast: true });
+}
+
+/* ==== context menu ================================================= */
+const ctxmenu = document.getElementById("ctxmenu");
+function hideMenu() { ctxmenu.style.display = "none"; }
+/* Cancel mousedown anywhere in the menu so the text selection SURVIVES
+   until the click handler runs. Blink collapses the selection on a
+   trusted mousedown over a non-editable element, and it does so BEFORE
+   click fires — so every selection-dependent item ("Highlight", "Copy",
+   "Copy Selection as Image") saw an empty selection and behaved as
+   though nothing had been selected. "Highlight" reported "select text
+   first" on a selection the menu had just used to decide to offer the
+   item at all, which is what made highlighting look completely broken.
+   Verified in a real Blink engine with actual mouse input: click-only
+   wiring reads the selection as collapsed, this listener keeps it alive.
+   preventDefault on mousedown suppresses only the focus/collapse default
+   — click still fires, and the items are plain divs with nothing to
+   focus. */
+ctxmenu.addEventListener("mousedown", (ev) => ev.preventDefault());
+document.addEventListener("click", hideMenu);
+document.addEventListener("scroll", hideMenu, true);
+
+document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
+  const hit = pageAndPoint(ev.clientX, ev.clientY);
+  if (!hit) return;
+  ev.preventDefault();
+  const sel = window.getSelection();
+  const hasSel = sel && !sel.isCollapsed && String(sel).trim().length > 0;
+  /* A card first: it sits over the text and the highlight it belongs to.
+     Its two items lead; the page/occlusion/zoom tail follows as ever. */
+  const card = cardAt(ev.clientX, ev.clientY);
+  const rec = card ? null : highlightAt(hit.page0, hit.xPt, hit.yPt);
+  const items = [];
+  if (card) {
+    items.push(["Edit Note", () => openTextEdit(
+      card.page0, card.box[0], card.box[1], card.rec, card.kind)]);
+    /* A highlight keeps itself: only its note (and so its card) goes. */
+    items.push(["Remove Note", () => (card.kind === "hl"
+      ? postB64("note-text", { id: card.rec.id, text: "" })
+      : postB64("note-remove", { id: card.rec.id }))]);
+    items.push(null);
+  } else if (hasSel) {
+    items.push(["Copy", () => postB64("copy-text", { text: String(sel) })]);
+    items.push(["Copy Selection as Image", () => {
+      const map = selectionRectMap();
+      if (!map) return;
+      const page0 = parseInt(Object.keys(map)[0], 10);
+      let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      for (const [x, y, w, h] of map[page0]) {
+        x0 = Math.min(x0, x); y0 = Math.min(y0, y);
+        x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h);
+      }
+      copyRegionImage(page0, x0, y0, x1 - x0, y1 - y0);
+    }]);
+    items.push(["Highlight", addHighlightFromSelection]);
+    items.push(null);
+  } else if (state.persistMarquee) {
+    /* Native parity (K-100): while a marquee stands, the menu re-offers
+       its copy — the native menu's marquee_act, same label. The region
+       is frozen into the closure so the menu press clearing state (it
+       cannot: ctxmenu lives outside #scroll) could never blank it. */
+    const pm = state.persistMarquee;
+    items.push(["Copy Selection as Image",
+                () => copyRegionImage(pm.page0, pm.x, pm.y, pm.w, pm.h)]);
+    items.push(null);
+  }
+  if (rec) {
+    if (rec.kind === "text") {
+      /* The menu's twin of double-clicking the box (K-150). */
+      items.push(["Edit Text…", () => openTextEdit(
+        rec.page | 0, rec.rects[0][0], rec.rects[0][1], rec)]);
+      items.push(["Remove Text", () => postB64("hl-remove", { id: rec.id })]);
+    } else {
+      const hasNote = String(rec.note || "").trim().length > 0;
+      items.push([hasNote ? "Edit note…" : "Add note…", () => {
+        /* Hand-drawn: the note is a card, typed in place. Off: today's
+           dialog, the only path that still posts note-edit. */
+        if (state.handDrawn) {
+          const spot = hlCardSpot(rec);
+          openTextEdit(rec.page | 0, spot.x, spot.y, rec, "hl");
+        } else {
+          postB64("note-edit", { id: rec.id });
+        }
+      }]);
+      items.push(["Remove Highlight", () => postB64("hl-remove", { id: rec.id })]);
+    }
+    items.push(null);
+  }
+  items.push(["Copy Page Text", () => copyPageText(hit.page0)]);
+  items.push(["Copy Slide as Image", () => copyPageImage(hit.page0)]);
+  items.push(null);
+  items.push(...occlusionItems(
+    hit.page0, state.persistMarquee, state.occlusionEnabled));
+  items.push(null);
+  /* Zoom lived only on ⌘+/−/0 with no visible affordance anywhere
+     (critique P3) — the menu is its discoverable twin. */
+  items.push(["Zoom In\u2002\u2318+", () => window.klausSetZoom(1.1)]);
+  items.push(["Zoom Out\u2002\u2318\u2212", () => window.klausSetZoom(1 / 1.1)]);
+  items.push(["Actual Size\u2002\u23180", () => window.klausZoomReset()]);
+  ctxmenu.textContent = "";
+  for (const it of items) {
+    if (it === null) {
+      const s = document.createElement("div"); s.className = "sep";
+      ctxmenu.appendChild(s); continue;
+    }
+    const mi = document.createElement("div");
+    mi.className = "mi"; mi.textContent = it[0];
+    if (it[2]) {
+      /* Disabled: says why on hover, and again on click. */
+      mi.classList.add("off");
+      mi.title = NO_EDITOR_TIP;
+      mi.addEventListener("click", (e) => {
+        e.stopPropagation(); hideMenu(); post("toast:" + btoa(NO_EDITOR_TIP));
+      });
+      ctxmenu.appendChild(mi);
+      continue;
+    }
+    mi.addEventListener("click", (e) => { e.stopPropagation(); hideMenu(); it[1](); });
+    ctxmenu.appendChild(mi);
+  }
+  ctxmenu.style.display = "block";
+  const mw = ctxmenu.offsetWidth, mh = ctxmenu.offsetHeight;
+  ctxmenu.style.left = Math.min(ev.clientX, window.innerWidth - mw - 4) + "px";
+  ctxmenu.style.top = Math.min(ev.clientY, window.innerHeight - mh - 4) + "px";
+});
+
+/* ==== page image copy: Cmd/Ctrl + double-click (K-100) ============= */
+/* The native viewer's slide-copy gesture, reproduced: Cmd (macOS) /
+   Ctrl (Windows) + double-click copies the page as an image through
+   the SAME copy-image bridge the context menu uses — clipboard, then
+   paste into the note field, so the editor-side path stays shared.
+   Plain double-click stays the browser's word selection. */
+document.getElementById("scroll").addEventListener("dblclick", (ev) => {
+  if (!(ev.metaKey || ev.ctrlKey)) return;
+  const hit = pageAndPoint(ev.clientX, ev.clientY);
+  if (!hit) return;
+  ev.preventDefault();
+  const sel = window.getSelection();
+  if (sel) { try { sel.removeAllRanges(); } catch (e) {} }
+  copyPageImage(hit.page0);
+});
+
+/* ==== marquee (Option/Alt+drag copy-as-image) ====================== */
+const marqueeEl = document.getElementById("marquee");
+
+/* ---- persisted marquee (K-100): the region survives release ------- */
+/* Semantics kept from the deleted native viewer: the rect is kept after
+   the creation drag (like Preview); a plain left press anywhere else
+   collapses it; press-and-move INSIDE it drags the region image out;
+   a click inside that never becomes a drag clears it on release; the
+   context menu re-offers "Copy Selection as Image" while it stands. */
+function clearPersistMarquee() {
+  state.persistMarquee = null;
+  const el = document.getElementById("marqueeKeep");
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+
+function positionPersistMarquee() {
+  const pm = state.persistMarquee;
+  if (!pm) return;
+  const div = state.pageDivs[pm.page0];
+  if (!div) return;
+  let el = document.getElementById("marqueeKeep");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "marqueeKeep";
+    el.draggable = true;
+    el.title = "Drag into a note field · right-click to copy again";
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      clearPersistMarquee();   /* click that never became a drag */
+    });
+    el.addEventListener("dragstart", (ev) => {
+      const cur = state.persistMarquee;
+      if (!cur || !cur.dataUrl) { ev.preventDefault(); return; }
+      /* Drag-out, webview edition: the page cannot start a native
+         QDrag+QMimeData image drag, so the region
+         travels as HTML carrying a data: URI image — what Anki's
+         editor webview accepts on drop and inlines through its own
+         paste pipeline. Rendered/cached at persist time because
+         setData must be synchronous. */
+      try {
+        ev.dataTransfer.effectAllowed = "copy";
+        ev.dataTransfer.setData(
+          "text/html", '<img src="' + cur.dataUrl + '">');
+      } catch (e) { post("log:marquee dragstart failed: " + e.message); }
+    });
+  }
+  if (el.parentNode !== div) {
+    if (el.parentNode) el.parentNode.removeChild(el);
+    div.appendChild(el);
+  }
+  const s = state.scale;
+  el.style.left = pm.x * s + "px";
+  el.style.top = pm.y * s + "px";
+  el.style.width = pm.w * s + "px";
+  el.style.height = pm.h * s + "px";
+}
+
+function persistMarquee(page0, x, y, w, h) {
+  clearPersistMarquee();
+  const pm = { page0, x, y, w, h, dataUrl: null };
+  state.persistMarquee = pm;
+  positionPersistMarquee();
+  renderRegionCanvas(page0, x, y, w, h).then((out) => {
+    /* Cache the PNG for the synchronous dragstart. Stale results (a
+       newer marquee, a dismissal) drop on the floor. */
+    if (state.persistMarquee === pm) pm.dataUrl = out.toDataURL("image/png");
+  }).catch((e) => post("log:marquee cache failed: " + e.message));
+}
+
+document.getElementById("scroll").addEventListener("mousedown", (ev) => {
+  state.cardPress = null;
+  if (ev.button !== 0) return;
+  if (ev.altKey) {
+    /* Alt+press starts a NEW marquee — collapse the persisted one
+       first, exactly like the native press handler does. */
+    clearPersistMarquee();
+    const hit = pageAndPoint(ev.clientX, ev.clientY);
+    if (!hit) return;
+    ev.preventDefault();
+    state.marquee = { page0: hit.page0, x0: ev.clientX, y0: ev.clientY };
+    return;
+  }
+  /* ANY plain left press outside the kept region clears it, like
+     Preview collapsing the old selection (native rule). A press ON
+     the region is the drag-out arm and must not. */
+  if (ev.target && ev.target.id === "marqueeKeep") return;
+  clearPersistMarquee();
+  /* A press on a note card is the card's: released in place it opens
+     the editor, moved it drags the card (the card-drag handlers below).
+     preventDefault: no text selection starts under the card, and an
+     open editor keeps focus, so no blur repaint detaches this card
+     mid-press. */
+  const card = cardAt(ev.clientX, ev.clientY);
+  if (card) {
+    ev.preventDefault();
+    state.cardPress = { card, x0: ev.clientX, y0: ev.clientY,
+                        x: card.box[0], y: card.box[1], moved: false, live: true };
+  }
+});
+
+/* Card drag. Nothing crosses the bridge while moving: the card's own
+   element follows the pointer (clamped like cardSpot), and the drop
+   sends ONE message — card-move with the highlight card's new offset
+   from the union's top-right (what rec.card stores), or note-update
+   carrying the note's record as it is, at its new spot. A press that
+   never wandered past CARD_SLOP is a click: it opens the editor. The
+   press stays in state.cardPress (not live) until the next press, so
+   the click that follows this mouseup places no text box or note. */
+const CARD_SLOP = 3;   // px
+
+/* The card element drawn for record id on page0 now. A push rebuilds
+   .cardLayer, so the element a press found may be gone by the drop. */
+function cardEl(page0, id) {
+  const div = state.pageDivs[page0];
+  if (!div) return null;
+  for (const c of div.querySelectorAll(".cardLayer .noteCard")) {
+    if (c.dataset.id === String(id || "")) return c;
+  }
+  return null;
+}
+
+document.addEventListener("mousemove", (ev) => {
+  /* card-drag:move */
+  const p = state.cardPress;
+  if (!p || !p.live) return;
+  if (!(ev.buttons & 1)) {
+    /* The mouseup went elsewhere (outside the window): end the press,
+       post nothing, and put a moved card back where its record says. */
+    p.live = false;
+    if (p.moved) repaintAnnotPage(p.card.page0);
+    return;
+  }
+  const dx = ev.clientX - p.x0, dy = ev.clientY - p.y0;
+  if (!p.moved && Math.hypot(dx, dy) < CARD_SLOP) return;
+  p.moved = true;
+  const s = state.scale || 1;
+  const b = p.card.box;
+  [p.x, p.y] = clampCard(p.card.page0, b[0] + dx / s, b[1] + dy / s, b[2], b[3]);
+  const el = cardEl(p.card.page0, p.card.rec.id);
+  if (el) {
+    el.style.left = p.x * s + "px";
+    el.style.top = p.y * s + "px";
+  }
+});
+document.addEventListener("mouseup", () => {
+  /* card-drag:up */
+  const p = state.cardPress;
+  if (!p || !p.live) return;
+  p.live = false;
+  /* The record and its card as they are NOW: a push mid-drag may have
+     changed the note's text or ink, or removed it. Gone: nothing. */
+  const id = p.card.rec.id, kind = p.card.kind;
+  const rec = state.annots.find((r) => r.id === id);
+  const el = cardEl(p.card.page0, id);
+  if (!rec || !el) return;
+  const box = el.cardBox;
+  if (!p.moved) {
+    openTextEdit(p.card.page0, box[0], box[1], rec, kind);
+    return;
+  }
+  if (kind === "hl") {
+    let right = 0, top = Infinity;   /* cardSpot's anchor, exactly */
+    for (const [x, y, w] of rec.rects || []) {
+      right = Math.max(right, x + w);
+      top = Math.min(top, y);
+    }
+    if (!isFinite(top)) top = 0;
+    postB64("card-move", { id: rec.id, dx: p.x - right, dy: p.y - top });
+  } else {
+    postB64("note-update", {
+      id: rec.id, x: p.x, y: p.y, text: String(rec.text || ""),
+      color: rec.color, size: parseFloat(rec.size) || TEXT_SIZE_DEFAULT,
+      w: box[2], h: box[3],
+    });
+  }
+});
+document.addEventListener("mousemove", (ev) => {
+  if (!state.marquee) return;
+  const m = state.marquee;
+  marqueeEl.style.display = "block";
+  marqueeEl.style.left = Math.min(m.x0, ev.clientX) + "px";
+  marqueeEl.style.top = Math.min(m.y0, ev.clientY) + "px";
+  marqueeEl.style.width = Math.abs(ev.clientX - m.x0) + "px";
+  marqueeEl.style.height = Math.abs(ev.clientY - m.y0) + "px";
+});
+document.addEventListener("mouseup", (ev) => {
+  if (!state.marquee) return;
+  const m = state.marquee;
+  state.marquee = null;
+  marqueeEl.style.display = "none";
+  const div = state.pageDivs[m.page0];
+  if (!div) return;
+  const pr = div.getBoundingClientRect();
+  const s = state.scale;
+  const x0 = (Math.min(m.x0, ev.clientX) - pr.left) / s;
+  const y0 = (Math.min(m.y0, ev.clientY) - pr.top) / s;
+  const w = Math.abs(ev.clientX - m.x0) / s;
+  const h = Math.abs(ev.clientY - m.y0) / s;
+  if (w > 4 && h > 4) {
+    copyRegionImage(m.page0, x0, y0, w, h);
+    persistMarquee(m.page0, x0, y0, w, h);  /* kept, like Preview (K-100) */
+  }
+});
+
+/* ==== zoom engine (K-116) ========================================== */
+/* EVERY zoom path — trackpad pinch, \u2318+/\u2212/0, the context menu, the
+   annobar buttons — funnels through one session (zoomTo), because the
+   old direct path (a synchronous full rezoom per step) tore every
+   canvas down and re-rendered from blank: the "zoom renders slowly"
+   complaint, live.
+
+   A session gives instant feedback for ~free: the first call captures
+   an anchor (the document point to hold still — the cursor for a
+   pinch, the viewport centre for stepped zoom) and every call after
+   only updates a compositor transform on #pages, origined at that
+   anchor. ZOOM_SETTLE_MS after the last input the session settles:
+   the transform comes off, softRelayout() resizes the layout and
+   CSS-stretches the ALREADY-RENDERED canvases into the new geometry
+   (soft, never blank), scroll is corrected so the anchored point
+   stays under the pointer exactly, and refreshVisibleFirst()
+   re-renders crisp bitmaps — viewport pages first — each swapped in
+   only once fully drawn.
+
+   Chromium delivers macOS trackpad pinch to the page as wheel events
+   with ctrlKey:true (Ctrl+scroll on a mouse arrives identically).
+   Un-handled, QtWebEngine pinch-zooms the whole FRAME — page, sidebar
+   and all — fighting the Python-side setZoomFactor(1.0) pin, so every
+   ctrl-wheel is preventDefault()ed document-wide and only becomes PDF
+   zoom over the page area. */
+const PINCH_K = 0.01;          // exp response: factor = e^(-deltaY * k)
+const ZOOM_SETTLE_MS = 160;    // quiet time that commits a zoom session
+let zoomGen = 0;               // bumped per settle; stale renders discard
+
+/* The scale the user is LOOKING at: the live session target while one
+   is open, the committed scale otherwise. Stepped zoom compounds on
+   this, so three fast \u2318+ presses mean three steps, not one. */
+function sessionTarget() {
+  return state.zoom ? state.zoom.baseScale * state.zoom.factor : state.scale;
+}
+
+function viewportCenter() {
+  const sr = document.getElementById("scroll").getBoundingClientRect();
+  return [sr.left + sr.width / 2, sr.top + sr.height / 2];
+}
+
+function zoomTo(target, clientX, clientY, fit) {
+  if (!state.doc) return;
+  const scrollEl = document.getElementById("scroll");
+  const pagesEl = document.getElementById("pages");
+  if (!state.zoom) {
+    const sr = scrollEl.getBoundingClientRect();
+    const pr = pagesEl.getBoundingClientRect();   // transform-free here
+    state.zoom = {
+      baseScale: state.scale,
+      factor: 1.0,
+      hit: pageAndPoint(clientX, clientY),  // exact settle anchor
+      vx: clientX - sr.left, vy: clientY - sr.top,
+      cx0: scrollEl.scrollLeft + (clientX - sr.left),
+      cy0: scrollEl.scrollTop + (clientY - sr.top),
+      scrollLeft0: scrollEl.scrollLeft, scrollTop0: scrollEl.scrollTop,
+      originX: clientX - pr.left, originY: clientY - pr.top,
+      timer: null, fit: false,
+    };
+  }
+  const p = state.zoom;
+  p.fit = !!fit;
+  const t = clampScale(target);
+  p.factor = t / p.baseScale;
+  pagesEl.style.transformOrigin = p.originX + "px " + p.originY + "px";
+  pagesEl.style.transform = "scale(" + p.factor + ")";
+  updateZoomReadout(t);
+  if (p.timer) clearTimeout(p.timer);
+  p.timer = setTimeout(zoomSettle, ZOOM_SETTLE_MS);
+}
+
+async function zoomSettle() {
+  const p = state.zoom;
+  if (!p) return;
+  state.zoom = null;
+  const pagesEl = document.getElementById("pages");
+  pagesEl.style.transform = "";
+  pagesEl.style.transformOrigin = "";
+  if (!state.doc) return;                       // torn down mid-session
+  const scrollEl = document.getElementById("scroll");
+  // The user (or an overflow clamp) may have scrolled since capture:
+  // the anchor's CURRENT viewport offset is the captured one shifted
+  // by that delta — correct against where the point is NOW.
+  const vx = p.vx - (scrollEl.scrollLeft - p.scrollLeft0);
+  const vy = p.vy - (scrollEl.scrollTop - p.scrollTop0);
+  const target = clampScale(p.baseScale * p.factor);
+  if (Math.abs(target - state.scale) < 0.0005) {
+    updateZoomReadout(state.scale);
+    return;
+  }
+  state.userZoomed = !p.fit;
+  state.scale = target;
+  if (state.userZoomed) state.prevZoom = target;
+  // Python keeps it, so a page reload (vv-scale) can restore it.
+  post("zoom:" + (state.userZoomed ? state.scale : 0));
+  zoomGen++;
+  await softRelayout();
+  const div = p.hit ? state.pageDivs[p.hit.page0] : null;
+  if (div) {
+    // The anchored PDF point, in the NEW layout, back under the anchor.
+    scrollEl.scrollLeft = div.offsetLeft + p.hit.xPt * state.scale - vx;
+    scrollEl.scrollTop = div.offsetTop + p.hit.yPt * state.scale - vy;
+  } else {
+    // Anchor was over a gap: proportional correction is close enough.
+    const r = target / p.baseScale;
+    scrollEl.scrollLeft = p.cx0 * r - vx;
+    scrollEl.scrollTop = p.cy0 * r - vy;
+  }
+  refreshVisibleFirst();
+}
+
+/* Resize the layout to state.scale WITHOUT dropping a pixel:
+   placeholders just resize; rendered pages keep their old canvas,
+   CSS-stretched into the new geometry (soft until refreshed), the
+   text layer resized with it (spans track --scale-factor), and the
+   annotation layers redrawn (cheap DOM). relayout() stays the
+   teardown twin for panel RESIZES; zoom must never blank. */
+async function softRelayout() {
+  applyScaleFactor();
+  const first = await state.doc.getPage(1);
+  const base = first.getViewport({ scale: 1.0 });
+  for (const d of state.pageDivs) {
+    const num = parseInt(d.dataset.page, 10);
+    const w = Math.floor(base.width * state.scale);
+    const h = Math.floor(base.height * state.scale);
+    d.style.width = w + "px";
+    d.style.height = h + "px";
+    const r = state.rendered.get(num);
+    if (r && r.canvas) {
+      r.canvas.style.width = w + "px";
+      r.canvas.style.height = h + "px";
+      if (r.textLayer) {
+        r.textLayer.style.width = w + "px";
+        r.textLayer.style.height = h + "px";
+      }
+      renderAnnotLayers(num, d);
+    }
+  }
+  /* The marquee's page may be outside the rendered set — its div was
+     just resized above regardless, so re-land the overlay (K-100).
+     The text editor rides the same unconditional pass (K-150): this
+     is the zoom settle, and the box has to land at the new scale
+     whether or not its page happened to be rendered. */
+  positionPersistMarquee();
+  positionTextEdit();
+}
+
+/* Crisp replacement render for one already-rendered page, swapped in
+   ONLY when fully drawn — the stretched old canvas keeps showing
+   meanwhile (never blank-then-redraw). Superseded work (a newer
+   settle, a scroll-away teardown) discards itself. */
+async function refreshPage(num, div) {
+  const gen = zoomGen;
+  const entry = state.rendered.get(num);
+  if (!entry || !entry.canvas || entry.refreshing || !div) return;
+  entry.refreshing = true;
+  let textLayer = null;
+  try {
+    const page = await state.doc.getPage(num);
+    const viewport = page.getViewport({ scale: state.scale });
+    const canvas = document.createElement("canvas");
+    canvas.className = "pg";
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(viewport.width * ratio);
+    canvas.height = Math.floor(viewport.height * ratio);
+    canvas.style.width = Math.floor(viewport.width) + "px";
+    canvas.style.height = Math.floor(viewport.height) + "px";
+    await page.render({
+      canvasContext: canvas.getContext("2d"), viewport: viewport,
+      transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null,
+      annotationMode: pdfjsLib.AnnotationMode.DISABLE,
+    }).promise;
+    // The replacement text layer renders attached-but-hidden: pdf.js
+    // measures spans against computed style, and a detached node has
+    // none (renderPage's documented rule).
+    textLayer = document.createElement("div");
+    textLayer.className = "textLayer";
+    textLayer.style.width = Math.floor(viewport.width) + "px";
+    textLayer.style.height = Math.floor(viewport.height) + "px";
+    textLayer.style.visibility = "hidden";
+    div.appendChild(textLayer);
+    const textContent = await page.getTextContent();
+    const task = pdfjsLib.renderTextLayer({
+      textContentSource: textContent,
+      container: textLayer,
+      viewport: viewport,
+    });
+    if (task && task.promise) { try { await task.promise; } catch (e) {} }
+    if (gen !== zoomGen || state.rendered.get(num) !== entry
+        || !div.isConnected) {
+      try { div.removeChild(textLayer); } catch (e) {}
+      return;   // superseded — a newer settle or a teardown owns it now
+    }
+    div.style.width = Math.floor(viewport.width) + "px";
+    div.style.height = Math.floor(viewport.height) + "px";
+    try { div.replaceChild(canvas, entry.canvas); }
+    catch (e) { div.appendChild(canvas); }
+    if (entry.textLayer) {
+      try { div.removeChild(entry.textLayer); } catch (e) {}
+    }
+    textLayer.style.visibility = "";
+    const spans = Array.from(textLayer.querySelectorAll("span"));
+    state.rendered.set(num, { canvas, textLayer, spans,
+      ptW: viewport.width / viewport.scale, ptH: viewport.height / viewport.scale });
+    renderAnnotLayers(num, div);
+    if (state.find.matches.length) highlightCurrentMatchIfVisible();
+  } catch (e) {
+    if (textLayer) { try { div.removeChild(textLayer); } catch (e2) {} }
+    post("log:refresh " + num + " failed: " + e.message);
+  } finally {
+    entry.refreshing = false;
+  }
+}
+
+function refreshVisibleFirst() {
+  const scrollEl = document.getElementById("scroll");
+  const top = scrollEl.scrollTop, bot = top + scrollEl.clientHeight;
+  const visible = [], rest = [];
+  for (const num of state.rendered.keys()) {
+    const d = state.pageDivs[num - 1];
+    if (!d) continue;
+    const inView = d.offsetTop < bot && d.offsetTop + d.offsetHeight > top;
+    (inView ? visible : rest).push(num);
+  }
+  visible.sort((a, b) => a - b);
+  (async () => {
+    for (const n of visible) await refreshPage(n, state.pageDivs[n - 1]);
+    for (const n of rest) await refreshPage(n, state.pageDivs[n - 1]);
+  })();
+}
+
+document.addEventListener("wheel", (ev) => {
+  if (!ev.ctrlKey) return;    // plain two-finger scroll stays untouched
+  ev.preventDefault();        // the frame never zooms, anywhere on it
+  if (!state.doc) return;
+  if (!document.getElementById("scroll").contains(ev.target)) return;
+  zoomTo(sessionTarget() * Math.exp(-ev.deltaY * PINCH_K),
+         ev.clientX, ev.clientY, false);
+}, { passive: false });
+
+/* Backstop: if Chromium ever zooms the visual viewport anyway (a gesture
+   neither Python's native-gesture filter nor the wheel listener above
+   caught), nothing in the page can undo it; only a new page resets it.
+   Report it once — Python reloads the page and re-opens the document at
+   the same scroll and zoom. Re-armed by a fresh page, by the scale
+   coming back to 1, or by Python's end-of-gap retry (klausVvRearm).
+   Checked at boot too: a pinch that landed before this script ran. */
+let vvPosted = false, vvTimer = null;
+function vvCheck() {
+  clearTimeout(vvTimer);
+  vvTimer = setTimeout(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    if (Math.abs(vv.scale - 1) <= 0.01) { vvPosted = false; return; }
+    if (vvPosted) return;
+    vvPosted = true;
+    post("vv-scale:" + vv.scale);
+  }, 200);
+}
+window.klausVvRearm = function () { vvPosted = false; vvCheck(); };
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", vvCheck);
+  window.visualViewport.addEventListener("scroll", vvCheck);
+}
+vvCheck();
+
+/* WebKit-lineage gesture events: if the engine ever synthesizes them,
+   cancelling keeps a second zoom path from double-firing. */
+for (const g of ["gesturestart", "gesturechange", "gestureend"]) {
+  document.addEventListener(g, (ev) => ev.preventDefault());
+}
+
+/* ==== annotation toolbar (K-116) =================================== */
+/* Highlight and Add Text lived only in the context menu — invisible
+   until right-clicked (the live complaint). The annobar is their
+   always-visible twin; the menu items stay.
+
+   Same selection rule as the context menu (documented there): a
+   trusted mousedown over non-editable UI collapses the selection
+   BEFORE click fires, so the bar cancels mousedown — clicking
+   Highlight can then consume the selection it was aimed at, and the
+   buttons never steal focus from the page. */
+document.getElementById("annobar").addEventListener(
+  "mousedown", (ev) => ev.preventDefault());
+
+function setTool(tool) {
+  state.tool = state.tool === tool ? null : tool;
+  for (const [id, name] of [["abHl", "hl"], ["abText", "text"], ["abNote", "note"]]) {
+    const b = document.getElementById(id);
+    b.classList.toggle("active", state.tool === name);
+    b.setAttribute("aria-pressed", String(state.tool === name));
+  }
+  document.getElementById("scroll").classList.toggle(
+    "textTool", state.tool === "text" || state.tool === "note");
+  syncAnnobarMode();   /* K-150: the ink row follows the armed tool */
+}
+
+document.getElementById("abHl").addEventListener("click", () => {
+  const arming = state.tool !== "hl";
+  setTool("hl");
+  // Preview's move: arming with a live selection highlights it now.
+  // The tool STAYS armed afterwards (K-159) — see the mouseup handler
+  // for why that is safe. Clicking this button again disarms, because
+  // setTool toggles.
+  if (arming && selectionRectMap()) addHighlightFromSelection();
+});
+document.getElementById("abText").addEventListener(
+  "click", () => setTool("text"));
+document.getElementById("abNote").addEventListener(
+  "click", () => setTool("note"));
+
+/* Ink swatches: pick the colour the next highlight is minted in. The
+   pressed swatch is the only "selected" cue — the fills stay at full
+   strength because each one IS its ink. Like arming Highlight, picking
+   a colour with a live selection highlights it immediately (the bar
+   cancels mousedown above, so that selection is still there). These
+   live INSIDE #annobar precisely so they inherit that cancel. */
+for (const sw of document.querySelectorAll("#abInks .inkSw")) {
+  sw.addEventListener("click", () => {
+    if (textMode()) {
+      /* Same row, text values (K-150). Picking while a box is open
+         recolours it live and the caret never moves — that is exactly
+         what the bar's mousedown cancel above buys. */
+      if (!sw.dataset.tink) return;
+      state.tink = sw.dataset.tink;
+      const te = state.textEdit;
+      if (te) {
+        te.color = tinkHex(state.tink) || te.color;
+        te.body.style.color = te.color;
+      }
+      syncAnnobarMode();
+      return;
+    }
+    if (!sw.dataset.ink) return;   /* black is text-only */
+    state.ink = sw.dataset.ink;
+    if (noteMode()) {
+      /* A note's ink is a highlight ink. An open note card recolours
+         live; nothing is highlighted from a selection here. */
+      const te = state.textEdit;
+      if (te) {
+        te.color = currentInk() || te.color;
+        te.el.style.background = hexToRgba(te.color, 0.85);
+      }
+      syncAnnobarMode();
+      return;
+    }
+    syncAnnobarMode();
+    if (selectionRectMap()) addHighlightFromSelection();
+  });
+}
+document.getElementById("abZoomOut").addEventListener(
+  "click", () => window.klausSetZoom(1 / 1.2));
+document.getElementById("abZoomIn").addEventListener(
+  "click", () => window.klausSetZoom(1.2));
+document.getElementById("abZoomFit").addEventListener(
+  "click", () => window.klausZoomReset());
+
+/* Thumbnails (K-154): the strip's only affordance used to be the editor
+   panel's own tab-header button, so the Library and the Lecture dock —
+   the other two hosts this renderer runs in — had no way to show or
+   hide it at all. Living inside #annobar (already host-agnostic, per
+   K-116) makes it reachable everywhere the bar itself renders, through
+   the SAME klausToggleThumbs the header button already called — no
+   second toggle path. */
+document.getElementById("abThumbs").addEventListener("click", () => {
+  window.klausToggleThumbs();
+  const on = document.getElementById("thumbs").classList.contains("visible");
+  const btn = document.getElementById("abThumbs");
+  btn.classList.toggle("active", on);
+  btn.setAttribute("aria-pressed", String(on));
+});
+
+/* Highlight tool: releasing a selection highlights it immediately, and
+   the tool STAYS ARMED for the next drag (K-159: "I want to stay in
+   that mode"). Only the Highlight button and Escape disarm.
+
+   K-149 made this one-shot as "cause 2" of the double-highlight bug,
+   so reversing it needs a reason, and the reason is that the one-shot
+   was never the load-bearing half. The real cause was
+   Range.getClientRects() returning a fully covered span's border box
+   AND its text quad, so ONE drag minted two coincident rects that
+   composited at the 43% paint alpha. merge_rects fixed that at mint
+   time, and merge_highlight_records makes a SECOND drag over the same
+   text idempotent as well: same-ink rects an existing record already
+   covers are dropped, the rest union into the record they touch, and
+   a mint that changes nothing never even reaches the JSON
+   (_bridge_hl_add returns early on `merged == self._highlights`).
+   Pinned by re-minting the same drag three times in
+   tests/test_pdfjs_viewer.py.
+
+   selectionRectMap() gates the call — a bare click while armed must
+   never fire the "select text first" toast — and
+   addHighlightFromSelection collapses the selection, so a stray
+   mouseup afterwards has nothing to re-mint. The 0-timeout lets Blink
+   finalize the selection after mouseup. */
+document.addEventListener("mouseup", () => {
+  if (state.tool !== "hl") return;
+  setTimeout(() => {
+    if (state.tool === "hl" && selectionRectMap()) {
+      addHighlightFromSelection();
+    }
+  }, 0);
+});
+
+/* Text tool: the click opens an editor box ON the page at that point,
+   and the tool STAYS ARMED (K-159) so the next click places the next
+   box — clicking away from an open box commits it (blur) and the same
+   click starts the next one. Only the Add Text button and Escape
+   disarm. Nothing is posted here (K-150): the record is minted from
+   text that does not exist yet, so the bridge call happens at COMMIT.
+
+   Clicks that land INSIDE the open editor are swallowed by the box
+   itself (openTextEdit's click listener) — without that, a sticky
+   tool would treat every caret placement inside your own box as a
+   request to commit it and open another one on top. */
+document.getElementById("scroll").addEventListener("click", (ev) => {
+  if (state.tool !== "text" || ev.button !== 0) return;
+  if (state.cardPress) return;   /* the press was a card's (its mouseup acted) */
+  const hit = pageAndPoint(ev.clientX, ev.clientY);
+  if (!hit) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  /* A click ON an existing box re-edits it instead of dropping an
+     empty one over it. The double-click editor below is unreachable
+     while the tool is armed (this handler opens a box on the first of
+     the two clicks, and its `state.textEdit` gate then returns), so a
+     sticky tool has to do that job itself — which is Preview's rule
+     anyway. */
+  const rec = textRecordAt(hit.page0, hit.xPt, hit.yPt);
+  if (rec) {
+    openTextEdit(rec.page | 0, rec.rects[0][0], rec.rects[0][1], rec);
+    return;
+  }
+  openTextEdit(hit.page0, hit.xPt, hit.yPt, null);
+});
+
+/* Note tool: the text tool's twin. A click places an empty card at
+   that point (its top-left) and opens its editor; the tool stays
+   armed; nothing is posted until the commit, and an empty card posts
+   nothing at all. */
+document.getElementById("scroll").addEventListener("click", (ev) => {
+  if (state.tool !== "note" || ev.button !== 0) return;
+  if (state.cardPress) return;   /* the press was a card's (its mouseup acted) */
+  const hit = pageAndPoint(ev.clientX, ev.clientY);
+  if (!hit) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  openTextEdit(hit.page0, hit.xPt, hit.yPt, null, "note");
+});
+
+/* ==== in-place text editor (K-150) ================================= */
+/* "The text adding system is so ugly … make it look the way Preview
+   has it on macOS" — it used to be a modal QInputDialog over a PDF you
+   could no longer see. Preview instead puts the box on the page: click,
+   type where you clicked, drag it by its frame, pick colour and size
+   from the toolbar, click away to commit.
+
+   WHAT MAKES THIS HARD is that renderAnnotLayers DESTROYS .hlLayer and
+   .noteLayer and rebuilds them from scratch, from four call sites —
+   renderPage, klausSetAnnotations, the zoom settle's softRelayout, and
+   refreshPage's crisp swap — plus teardownPage when a page leaves the
+   observer window. A contenteditable living in .hlLayer is obliterated
+   mid-keystroke by any of them, and worst of all by the push that
+   follows its OWN save. So the editor is a DIRECT CHILD OF .page that
+   renderAnnotLayers does not own, re-landed (never rebuilt) on every
+   overlay pass — exactly the contract positionPersistMarquee has kept
+   for the persisted marquee since K-100. Nothing removes it, so the
+   caret and the selection survive zoom, scroll and pushes.
+
+   The other rule is that its LAYOUT is in page points and only its
+   transform is scaled. Sizing it in px = pt * scale would re-wrap the
+   text on every zoom step and jitter on the fractional ones; this way
+   the wrap points are the same at 25% and at 400%, and they are the
+   ones that get committed. */
+const TEXT_SIZES = [8, 10, 12, 14, 18, 24, 36, 48];
+const MAX_TEXT_CHARS = 4000;
+/* pdfjs_viewer.TEXT_SIZE_DEFAULT: the size a record WITHOUT one (adopted
+   from Preview) is drawn, opened and stored at — one number on both
+   sides, or opening it at the stepper's size reads as a resize. */
+const TEXT_SIZE_DEFAULT = 12;
+const TEXT_BOX_MAX_W = 480;   // pdfjs_viewer.TEXT_BOX_MAX_W, pt
+const TEXT_BOX_MAX_H = 720;   // pdfjs_viewer.TEXT_BOX_MAX_H, pt
+
+/* Mirror of pdfjs_viewer.sanitize_text — same normalization, so the
+   text this box MEASURES itself against is the text Python stores.
+   Python re-runs its own copy on arrival; JS is never trusted. */
+function sanitizeEditText(value) {
+  return String(value == null ? "" : value)
+    .replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\t/g, " ")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .slice(0, MAX_TEXT_CHARS).trim();
+}
+
+/* The box *text* needs at *size*, in page points, MEASURED by the
+   browser in the font the box draws in (it used to be a 0.6-em-per-char
+   guess, which drew a one-line box rows tall and wider than its text).
+   Width is the widest line plus 1 pt, so a zoomed .hltext cannot wrap
+   a line the editor did not. Height comes from the same layout: lines
+   break identically at any width from the widest line up to the cap,
+   and the box's width is always in that range. Whole points, so the
+   same text always measures the same and a click-away is a no-op.
+   An empty box is one line tall. */
+let textMeasurer = null;
+function measureTextBox(text, size, maxW, maxH) {
+  const cap = maxW || TEXT_BOX_MAX_W;   // a card measures inside its margin
+  let m = textMeasurer;
+  if (!m || !m.isConnected) {
+    m = textMeasurer = document.createElement("div");
+    m.id = "textMeasure";
+    document.getElementById("root").appendChild(m);
+  }
+  m.style.fontSize = size + "px";
+  m.style.maxWidth = cap + "px";
+  m.textContent = text || "\u200b";
+  const r = m.getBoundingClientRect();
+  return [Math.min(Math.ceil(r.width + 1), cap),
+          Math.min(Math.ceil(r.height), maxH || TEXT_BOX_MAX_H)];
+}
+
+/* The box the editor shows and the commit sends. A re-opened record
+   keeps its STORED box until its text or size changes, so old records
+   (sized by the old estimate, or by Preview) are never re-measured
+   just by opening them; Python applies the same rule. */
+function textBoxFor(te, text) {
+  if (te.kept && text === te.kept.text && te.size === te.kept.size) {
+    return te.kept.box;
+  }
+  /* A card's text measures inside its CARD_PAD margin, as highlightCard. */
+  return te.card
+    ? measureTextBox(text, te.size,
+                     TEXT_BOX_MAX_W - 2 * CARD_PAD, TEXT_BOX_MAX_H - 2 * CARD_PAD)
+    : measureTextBox(text, te.size);
+}
+
+/* currentInk()'s sibling for the text row: the swatch's own theme
+   custom property, so the colour seen is the colour recorded and this
+   file still spells no hex. Kept separate rather than folded into one
+   helper because the two prefixes name genuinely different palettes —
+   a highlight is read THROUGH at 43% alpha, text is read AS glyphs. */
+function tinkHex(name) {
+  try {
+    const v = getComputedStyle(document.documentElement)
+      .getPropertyValue("--tink-" + name).trim();
+    return v || null;
+  } catch (e) { return null; }
+}
+
+function currentTextInk() { return tinkHex(state.tink); }
+
+function tinkNameFor(hex) {
+  const want = String(hex || "").trim().toLowerCase();
+  if (!want) return null;
+  for (const sw of document.querySelectorAll("#abInks .inkSw")) {
+    const name = sw.dataset.tink;
+    if (name && String(tinkHex(name) || "").toLowerCase() === want) {
+      return name;
+    }
+  }
+  return null;   // an adopted box in some colour the row does not offer
+}
+
+/* tinkNameFor's twin for a note card's highlight ink. */
+function inkNameFor(hex) {
+  const want = String(hex || "").trim().toLowerCase();
+  if (!want) return null;
+  const css = getComputedStyle(document.documentElement);
+  for (const sw of document.querySelectorAll("#abInks .inkSw")) {
+    const name = sw.dataset.ink;
+    if (name && css.getPropertyValue("--ink-" + name).trim().toLowerCase() === want) {
+      return name;
+    }
+  }
+  return null;
+}
+
+/* The annobar is in text mode while the tool is armed OR a box is
+   open: the swatch row repaints to the text inks, a black swatch
+   joins it, and the size stepper appears. */
+function textMode() {
+  const te = state.textEdit;
+  return (state.tool === "text" || state.textEdit !== null) && !(te && te.card);
+}
+
+/* Note mode: the Note tool armed, or a note card open. The row keeps
+   the five highlight inks (a note's ink is one) and the size stepper
+   shows. A highlight's card is neither mode: note-text carries only
+   text, so its ink and size are not the editor's to change. */
+function noteMode() {
+  const te = state.textEdit;
+  return te ? te.card === "note" : state.tool === "note";
+}
+
+function syncAnnobarMode() {
+  const on = textMode();
+  const nm = noteMode();
+  const te = state.textEdit;
+  /* annobar.textMode is what shows the size stepper; abInks.textMode
+     is what turns the row over to the text inks. */
+  document.getElementById("annobar").classList.toggle("textMode", on || nm);
+  document.getElementById("abInks").classList.toggle("textMode", on);
+  const selected = on
+    ? (te ? tinkNameFor(te.color) : state.tink)
+    : (nm && te) ? inkNameFor(te.color) : state.ink;
+  for (const sw of document.querySelectorAll("#abInks .inkSw")) {
+    const name = on ? sw.dataset.tink : sw.dataset.ink;
+    const active = !!name && name === selected;
+    sw.classList.toggle("active", active);
+    sw.setAttribute("aria-pressed", String(active));
+  }
+  document.getElementById("abTszVal").textContent =
+    String(te ? te.size : state.tsize);
+}
+
+function textRecordAt(page0, xPt, yPt) {
+  for (let i = state.annots.length - 1; i >= 0; i--) {
+    const rec = state.annots[i];
+    if ((rec.page | 0) !== page0 || rec.kind !== "text") continue;
+    const r = (rec.rects || [])[0];
+    if (!r) continue;
+    if (r[0] <= xPt && xPt <= r[0] + r[2] &&
+        r[1] <= yPt && yPt <= r[1] + r[3]) return rec;
+  }
+  return null;
+}
+
+/* Open the editor at (xPt, yPt) page points. rec === null places a NEW
+   box; passing a record re-edits it in place (its static twin is
+   skipped in renderAnnotLayers meanwhile, so nothing ghosts under the
+   live one). Committing an already-open box first means the "one at a
+   time" rule needs no singleton bookkeeping.
+
+   card === "note" | "hl" opens the same editor on a note card at its
+   top-left (xPt, yPt): a free-standing note (rec null = a new one), or
+   a highlight's note (rec is the highlight). It looks like its card —
+   the ink at 0.85 under dark text, CARD_PAD a side — and its text
+   measures inside that margin, so the box it commits is the card. */
+function openTextEdit(page0, xPt, yPt, rec, card) {
+  if (state.textEdit) commitTextEdit();
+  const div = state.pageDivs[page0];
+  if (!div) return;
+  const el = document.createElement("div");
+  el.id = "textEdit";
+  el.className = "editLayer";
+  const grip = document.createElement("div");
+  grip.className = "editGrip";
+  grip.title = "Drag to move";
+  const body = document.createElement("div");
+  body.className = "editBody";
+  try { body.contentEditable = "plaintext-only"; } catch (e) {}
+  if (!body.isContentEditable) body.contentEditable = "true";
+  body.spellcheck = false;
+  body.textContent = rec
+    ? String((card === "hl" ? rec.note : rec.text) || "") : "";
+  /* A highlight's card moves by dragging the card itself: note-text
+     carries no position, so a grip move would be thrown away. */
+  if (card !== "hl") el.appendChild(grip);
+  el.appendChild(body);
+  const color = (rec && rec.color)
+    ? String(rec.color) : ((card ? currentInk() : currentTextInk()) || "");
+  const size = rec
+    ? (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) : state.tsize;
+  if (card) {
+    el.style.padding = CARD_PAD + "px";   // POINTS, like the box
+    el.style.background = hexToRgba(color, 0.85);
+    el.style.borderRadius = "4px";
+    body.style.color = "var(--tink-black)";
+  } else {
+    body.style.color = color;
+  }
+  body.style.fontSize = size + "px";   // POINTS — scale() carries it
+  /* A highlight's rects[0] is its text, not its card: nothing kept. */
+  const r0 = card !== "hl" && rec && (rec.rects || [])[0];
+  const pad = card ? 2 * CARD_PAD : 0;
+  state.textEdit = {
+    id: rec ? String(rec.id || "") : null,
+    card: card || null,
+    page0: page0, x: xPt, y: yPt, color: color, size: size,
+    el: el, body: body,
+    text0: sanitizeEditText(body.textContent),
+    kept: r0 ? { text: String(rec.text || ""), size: size,
+                 box: [r0[2] - pad, r0[3] - pad] } : null,
+  };
+  /* Swallow mousedown so the press belongs to the caret: #scroll's
+     handler would otherwise collapse a persisted marquee, and an
+     Alt-press would preventDefault into a rubber band. CLICK is
+     swallowed for a different reason (K-159): the text tool stays
+     armed now, and #scroll's placement handler would read a click
+     inside this box as "place another box here" — committing what is
+     being typed and reopening an empty one on top of it. Both are
+     needed; stopping mousedown does not stop the click that follows. */
+  el.addEventListener("mousedown", (ev) => ev.stopPropagation());
+  el.addEventListener("click", (ev) => ev.stopPropagation());
+  grip.addEventListener("mousedown", startTextDrag);
+  body.addEventListener("input", sizeTextEdit);
+  body.addEventListener("blur", () => {
+    if (state.textEdit && state.textEdit.body === body) commitTextEdit();
+  });
+  body.addEventListener("keydown", (ev) => {
+    /* Escape commits, like clicking away — Preview keeps what you
+       typed. stopPropagation so the document handler does not also
+       clear a tool or the find bar out from under it: with the tool
+       sticky (K-159) that makes Escape a two-step — the first commits
+       the box, the second disarms Add Text. Enter is a newline; the
+       mod chord is the keyboard's "click away". */
+    if (ev.key === "Escape"
+        || ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter")) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      commitTextEdit();
+    }
+  });
+  div.appendChild(el);
+  sizeTextEdit();
+  positionTextEdit();
+  repaintAnnotPage(page0);   /* drop the static twin, if this edits one */
+  syncAnnobarMode();
+  try {
+    body.focus();
+    const range = document.createRange();
+    range.selectNodeContents(body);
+    range.collapse(false);              // caret at the end, like Preview
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch (e) { post("log:text editor focus failed: " + e.message); }
+}
+
+/* Repaint ONE page's annotation layers so renderAnnotLayers' hltext
+   skip takes effect NOW. Opening the editor on an existing record
+   does not otherwise re-run that function, and its static twin went
+   on sitting under the live box, a glyph offset apart — caught in an
+   offscreen render, invisible to every source pin. Closing is the
+   mirror: the twin has to come back, and on the paths where no push
+   will bring it back this is what does. */
+function repaintAnnotPage(page0) {
+  const div = state.pageDivs[page0];
+  const r = state.rendered.get(page0 + 1);
+  if (div && r && r.canvas) renderAnnotLayers(page0 + 1, div);
+}
+
+function sizeTextEdit() {
+  const te = state.textEdit;
+  if (!te) return;
+  /* RAW text, not the sanitized form: Enter at the end puts the caret
+     on a new line, and the box grows by that one line (Blink adds the
+     placeholder newline the caret sits on, and the twin measures it). */
+  const box = textBoxFor(te, te.body.innerText || "");
+  te.el.style.width = box[0] + "px";
+  te.el.style.minHeight = box[1] + "px";
+}
+
+/* positionPersistMarquee's contract, for the editor: page-point
+   geometry re-landed at the CURRENT scale, on every overlay pass and
+   every zoom settle. The element itself is never rebuilt — that is the
+   whole reason the caret survives. */
+function positionTextEdit() {
+  const te = state.textEdit;
+  if (!te || !te.el) return;
+  const div = state.pageDivs[te.page0];
+  if (!div) return;
+  if (te.el.parentNode !== div) div.appendChild(te.el);
+  const s = state.scale;
+  te.el.style.left = te.x * s + "px";
+  te.el.style.top = te.y * s + "px";
+  te.el.style.transform = "scale(" + s + ")";
+  /* The frame is chrome, not content: --k undoes the zoom on the grip,
+     ring and halo (see .editLayer), so they keep their 100% size. */
+  te.el.style.setProperty("--k", String(1 / s));
+}
+
+/* repaint === false only when a bridge call is already on its way for
+   this record: the canonical push that answers it repaints anyway, and
+   repainting HERE would flash the pre-edit text for one round trip.
+   Everywhere else it restores the twin immediately. */
+function closeTextEdit(repaint) {
+  const te = state.textEdit;
+  state.textEdit = null;
+  state.textDrag = null;
+  if (te && te.el && te.el.parentNode) {
+    try { te.el.parentNode.removeChild(te.el); } catch (e) {}
+  }
+  if (te && repaint !== false) repaintAnnotPage(te.page0);
+  else if (te) state.pendingRepaint.add(te.page0 + 1);
+  syncAnnobarMode();
+}
+
+/* Commit: the ONLY place a text record crosses the bridge. Closing
+   first means the canonical records that come back are rendered by
+   renderAnnotLayers with nothing to skip. An empty new box mints
+   nothing; emptying an EXISTING one deletes it through hl-remove,
+   which already tombstones an adopted record (K-081) — that path is
+   not worth forking into the update handler. */
+function commitTextEdit() {
+  const te = state.textEdit;
+  if (!te) return;
+  const text = sanitizeEditText(te.body.innerText || "");
+  /* Measured for the text as stored (trailing newlines trimmed), and
+     sent: Python stores this box, so the .hltext that replaces the
+     editor is the box the text was laid out in. */
+  const box = textBoxFor(te, text);
+  if (te.card === "hl") {
+    /* A highlight's note: "" clears it, and Python drops the card with
+       it. note-text saves on every post, so an unchanged note posts
+       nothing and its card comes straight back. */
+    const same = text === te.text0;
+    closeTextEdit(same);
+    if (!same) postB64("note-text", { id: te.id, text: text });
+    return;
+  }
+  closeTextEdit(!te.id);   /* an existing record: let the push repaint */
+  if (te.card) {
+    /* A note: rects[0] is the whole card, CARD_PAD a side included,
+       kept inside the page. A new one left empty posts nothing; an
+       existing one emptied is removed. */
+    const w = box[0] + 2 * CARD_PAD, h = box[1] + 2 * CARD_PAD;
+    const [x, y] = clampCard(te.page0, te.x, te.y, w, h);
+    if (!te.id) {
+      if (!text) return;
+      postB64("note-add", {
+        page: te.page0, x: x, y: y,
+        text: text, color: te.color, size: te.size, w: w, h: h,
+      });
+      return;
+    }
+    if (!text) { postB64("note-remove", { id: te.id }); return; }
+    postB64("note-update", {
+      id: te.id, x: x, y: y,
+      text: text, color: te.color, size: te.size, w: w, h: h,
+    });
+    return;
+  }
+  if (!te.id) {
+    if (!text) return;
+    postB64("text-add", {
+      page: te.page0, x: te.x, y: te.y,
+      text: text, color: te.color, size: te.size,
+      w: box[0], h: box[1],
+    });
+    return;
+  }
+  if (!text) { postB64("hl-remove", { id: te.id }); return; }
+  postB64("text-update", {
+    id: te.id, x: te.x, y: te.y,
+    text: text, color: te.color, size: te.size,
+    w: box[0], h: box[1],
+  });
+}
+
+/* A reload from disk tears the page down, which would drop an open box:
+   Python asks for the commit first and reloads on the reply, which this
+   posts after the commit's own message on the same channel. */
+window.klausCommitEdit = function (seq) {
+  if (state.textEdit) commitTextEdit();
+  post("edit-done:" + seq);
+};
+
+/* Drag by the grip only: the interior is a text field, so a press
+   there places the caret (Preview moves an annotation by its frame
+   too). preventDefault keeps focus — and therefore the caret and the
+   un-committed text — exactly where it was. */
+function startTextDrag(ev) {
+  const te = state.textEdit;
+  if (!te || ev.button !== 0) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  state.textDrag = { x0: ev.clientX, y0: ev.clientY, ax: te.x, ay: te.y };
+}
+
+document.addEventListener("mousemove", (ev) => {
+  const d = state.textDrag, te = state.textEdit;
+  if (!d || !te) return;
+  const s = state.scale || 1;
+  const div = state.pageDivs[te.page0];
+  const maxX = div ? Math.max(0, div.offsetWidth / s - 8) : 0;
+  const maxY = div ? Math.max(0, div.offsetHeight / s - 8) : 0;
+  te.x = Math.min(Math.max(d.ax + (ev.clientX - d.x0) / s, 0), maxX);
+  te.y = Math.min(Math.max(d.ay + (ev.clientY - d.y0) / s, 0), maxY);
+  positionTextEdit();
+});
+document.addEventListener("mouseup", () => { state.textDrag = null; });
+
+/* Double-click an existing text box to edit it in place. Registered
+   AFTER the Cmd/Ctrl slide-copy handler and gated on the absence of
+   that modifier, so the two double-click gestures never overlap. */
+document.getElementById("scroll").addEventListener("dblclick", (ev) => {
+  if (ev.metaKey || ev.ctrlKey || state.textEdit) return;
+  const hit = pageAndPoint(ev.clientX, ev.clientY);
+  if (!hit) return;
+  const rec = textRecordAt(hit.page0, hit.xPt, hit.yPt);
+  if (!rec) return;
+  ev.preventDefault();
+  const sel = window.getSelection();
+  if (sel) { try { sel.removeAllRanges(); } catch (e) {} }
+  openTextEdit(rec.page | 0, rec.rects[0][0], rec.rects[0][1], rec);
+});
+
+function stepTextSize(dir) {
+  const cur = state.textEdit ? state.textEdit.size : state.tsize;
+  let idx = 0;
+  for (let i = 0; i < TEXT_SIZES.length; i++) {
+    if (TEXT_SIZES[i] <= cur) idx = i;
+  }
+  const size = TEXT_SIZES[
+    Math.min(Math.max(idx + dir, 0), TEXT_SIZES.length - 1)];
+  state.tsize = size;
+  const te = state.textEdit;
+  if (te) {
+    te.size = size;
+    te.body.style.fontSize = size + "px";
+    sizeTextEdit();
+  }
+  syncAnnobarMode();
+}
+document.getElementById("abTszDown").addEventListener(
+  "click", () => stepTextSize(-1));
+document.getElementById("abTszUp").addEventListener(
+  "click", () => stepTextSize(1));
+
+/* ==== find ========================================================= */
+/* One page's find text, extracted once per document (teardown drops
+   the cache). null when the document went away meanwhile or the page's
+   text could not be read (logged); never throws. */
+async function pageText(page0) {
+  const doc = state.doc;
+  if (!doc) return null;
+  if (state.pageTexts && state.pageTexts[page0]) return state.pageTexts[page0];
+  let tc;
+  try {
+    const page = await doc.getPage(page0 + 1);
+    tc = await page.getTextContent();
+  } catch (e) {
+    if (state.doc === doc) post("log:text of page " + (page0 + 1) + " failed: " + e.message);
+    return null;
+  }
+  if (state.doc !== doc) return null;
+  let str = "";
+  const items = [];
+  for (const it of tc.items) {
+    items.push({ start: str.length, len: it.str.length });
+    str += it.str;
+    if (it.hasEOL) str += "\n";
+  }
+  if (!state.pageTexts) state.pageTexts = [];
+  state.pageTexts[page0] = { str, items };
+  return state.pageTexts[page0];
+}
+
+/* Pages intersecting the scroll viewport, top to bottom. */
+function visiblePages() {
+  const scrollEl = document.getElementById("scroll");
+  const top = scrollEl.scrollTop, bot = top + scrollEl.clientHeight;
+  return state.pageDivs
+    .filter((d) => d.offsetTop < bot && d.offsetTop + d.offsetHeight > top)
+    .map((d) => parseInt(d.dataset.page, 10));
+}
+
+function showFindBar() {
+  document.getElementById("findbar").classList.add("visible");
+  const inp = document.getElementById("findinput");
+  inp.focus(); inp.select();
+}
+function hideFindBar() {
+  document.getElementById("findbar").classList.remove("visible");
+  clearFindHighlight();
+  state.find = { query: "", matches: [], index: -1 };
+  document.getElementById("findcount").textContent = "";
+}
+
+let findTimer = null;
+document.getElementById("findinput").addEventListener("input", () => {
+  if (findTimer) clearTimeout(findTimer);
+  findTimer = setTimeout(runFind, 250);
+});
+document.getElementById("findnext").addEventListener("click", () => stepFind(1));
+document.getElementById("findprev").addEventListener("click", () => stepFind(-1));
+document.getElementById("findclose").addEventListener("click", hideFindBar);
+document.getElementById("findinput").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { ev.preventDefault(); stepFind(ev.shiftKey ? -1 : 1); }
+  else if (ev.key === "Escape") { ev.preventDefault(); hideFindBar(); }
+});
+
+/* Visible pages are searched first, the rest in batches of 5 that yield
+   to idle time only after extracting text or spending FIND_BUDGET_MS
+   (cached text is searched in one go). Matches are inserted in
+   document order as found, the current one staying current, and the
+   first found is shown at once. A new search, hideFindBar or a
+   teardown replaces state.find, which stops the running one. */
+const FIND_BATCH = 5;
+const idle = window.requestIdleCallback
+  ? (cb) => window.requestIdleCallback(cb, { timeout: 250 })  // busy scrolling never starves find
+  : (cb) => setTimeout(cb, 0);
+
+async function runFind() {
+  const q = document.getElementById("findinput").value.trim().toLowerCase();
+  clearFindHighlight();
+  const f = state.find = { query: q, matches: [], index: -1 };
+  const countEl = document.getElementById("findcount");
+  countEl.textContent = "";
+  if (!q || !state.doc) return;
+  const order = findOrder(visiblePages(), state.doc.numPages);
+  let since = performance.now(), extracted = 0;
+  for (let i = 0; i < order.length; i += FIND_BATCH) {
+    for (const num of order.slice(i, i + FIND_BATCH)) {
+      if (state.find !== f) return;
+      if (!(state.pageTexts && state.pageTexts[num - 1])) extracted++;
+      const text = await pageText(num - 1);
+      if (state.find !== f) return;
+      if (!text) continue;   // unreadable page: skipped, logged by pageText
+      const found = pageMatches(num - 1, text, q);
+      for (const m of found) f.index = insertMatch(f.matches, m, f.index);
+      if (f.index < 0 && found.length) {
+        f.index = f.matches.indexOf(found[0]);
+        jumpToMatch();
+      }
+    }
+    if (f.matches.length) countEl.textContent = `${f.index + 1} / ${f.matches.length}`;
+    if (shouldYield(extracted, performance.now() - since)) {
+      await new Promise((r) => idle(r));
+      since = performance.now();
+      extracted = 0;
+    }
+  }
+  if (state.find === f && !f.matches.length) countEl.textContent = "0 matches";
+}
+
+function pageMatches(p, text, q) {
+  const matches = [];
+  const hay = text.str.toLowerCase();
+  let at = hay.indexOf(q);
+  while (at !== -1) {
+    // owning text item = the one whose range contains the match start
+    let itemIdx = 0;
+    const items = text.items;
+    for (let k = 0; k < items.length; k++) {
+      if (items[k].start <= at && at < items[k].start + Math.max(1, items[k].len)) {
+        itemIdx = k; break;
+      }
+      if (items[k].start > at) break;
+      itemIdx = k;
+    }
+    /* start/len (page-string coords) drive the exact-substring paint
+       (K-100); itemIdx stays the scroll anchor + ring fallback. */
+    matches.push({ page0: p, itemIdx, start: at, len: q.length });
+    at = hay.indexOf(q, at + Math.max(1, q.length));
+  }
+  return matches;
+}
+
+function stepFind(dir) {
+  const f = state.find;
+  if (!f.matches.length) return;
+  f.index = (f.index + dir + f.matches.length) % f.matches.length;
+  document.getElementById("findcount").textContent =
+      `${f.index + 1} / ${f.matches.length}`;
+  jumpToMatch();
+}
+
+function clearFindHighlight() {
+  try {
+    if (typeof CSS !== "undefined" && CSS.highlights) {
+      CSS.highlights.delete("klaus-find");
+    }
+  } catch (e) {}
+  for (const el of document.querySelectorAll(".findCurrent")) {
+    el.classList.remove("findCurrent");
+  }
+}
+
+/* The per-span slices covering one match (K-100). A page's find string
+   is the concatenation of its text items (plus "\n" joiners that live
+   in NO item), and items map 1:1 onto the rendered text-layer spans —
+   so a match crossing item boundaries becomes one [a,b) slice per
+   owning span, each in that span's own character coordinates. */
+function matchSegments(m) {
+  const texts = state.pageTexts;
+  if (!texts || !texts[m.page0]) return [];
+  const items = texts[m.page0].items;
+  const end = m.start + m.len;
+  const segs = [];
+  for (let k = 0; k < items.length; k++) {
+    const it = items[k];
+    if (it.start >= end) break;
+    const a = Math.max(m.start, it.start);
+    const b = Math.min(end, it.start + it.len);
+    if (b > a) segs.push({ itemIdx: k, a: a - it.start, b: b - it.start });
+  }
+  return segs;
+}
+
+async function jumpToMatch() {
+  const m = state.find.matches[state.find.index];
+  if (!m) return;
+  const div = state.pageDivs[m.page0];
+  if (!div) return;
+  const r = state.rendered.get(m.page0 + 1);
+  if (!r || !r.spans) {
+    div.scrollIntoView({ block: "center" });
+    await renderPage(m.page0 + 1, div);
+  }
+  highlightCurrentMatchIfVisible(true);
+}
+
+function highlightCurrentMatchIfVisible(scrollTo) {
+  clearFindHighlight();
+  const m = state.find.matches[state.find.index];
+  if (!m) return;
+  const r = state.rendered.get(m.page0 + 1);
+  if (!r || !r.spans || !r.spans.length) return;
+  const anchor = r.spans[Math.min(m.itemIdx, r.spans.length - 1)];
+  if (!anchor) return;
+  /* Exact-substring paint (K-100) via the CSS Custom Highlight API —
+     Range objects over the text-layer spans' text nodes, so nothing
+     mutates pdf.js's DOM (a <mark> wrap would shift its measured span
+     widths). Guarded: no API, or empty ranges (an old match shape, a
+     span without a text node) fall back to ringing the owning span. */
+  let painted = false;
+  try {
+    if (typeof Highlight !== "undefined"
+        && typeof CSS !== "undefined" && CSS.highlights
+        && m.len && state.pageTexts) {
+      const ranges = [];
+      for (const seg of matchSegments(m)) {
+        const span = r.spans[seg.itemIdx];
+        const node = span && span.firstChild;
+        if (!node || node.nodeType !== Node.TEXT_NODE) continue;
+        const max = node.data.length;
+        const a = Math.min(seg.a, max), b = Math.min(seg.b, max);
+        if (b <= a) continue;
+        const range = document.createRange();
+        range.setStart(node, a);
+        range.setEnd(node, b);
+        ranges.push(range);
+      }
+      if (ranges.length) {
+        CSS.highlights.set("klaus-find", new Highlight(...ranges));
+        painted = true;
+      }
+    }
+  } catch (e) { post("log:find highlight failed: " + e.message); }
+  if (!painted) anchor.classList.add("findCurrent");
+  if (scrollTo) anchor.scrollIntoView({ block: "center" });
+}
+
+/* ==== thumbnails =================================================== */
+function buildThumbs() {
+  const el = document.getElementById("thumbs");
+  el.textContent = "";
+  if (!state.doc) return;
+  if (state.thumbObserver) state.thumbObserver.disconnect();
+  state.thumbObserver = new IntersectionObserver((entries) => {
+    for (const en of entries) {
+      if (en.isIntersecting) renderThumb(parseInt(en.target.dataset.page, 10));
+    }
+  }, { root: el, rootMargin: "100% 0px" });
+  for (let i = 1; i <= state.doc.numPages; i++) {
+    const t = document.createElement("div");
+    t.className = "thumb";
+    t.dataset.page = String(i);
+    const num = document.createElement("div");
+    num.className = "tnum";
+    num.textContent = String(i);
+    t.appendChild(num);
+    t.addEventListener("click", () => window.klausGoToPage(i));
+    el.appendChild(t);
+    state.thumbObserver.observe(t);
+  }
+  markCurrentThumb(state.currentPage || 1);
+}
+
+async function renderThumb(num) {
+  const t = document.querySelector(`.thumb[data-page="${num}"]`);
+  if (!t || t.querySelector("canvas") || !state.doc) return;
+  try {
+    const page = await state.doc.getPage(num);
+    const base = page.getViewport({ scale: 1.0 });
+    const scale = 140 / base.width;
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
+    t.insertBefore(canvas, t.firstChild);
+  } catch (e) { post("log:thumb " + num + " failed: " + e.message); }
+}
+
+function markCurrentThumb(page) {
+  for (const el of document.querySelectorAll(".thumb.current")) {
+    el.classList.remove("current");
+  }
+  const t = document.querySelector(`.thumb[data-page="${page}"]`);
+  if (t) t.classList.add("current");
+}
+
+window.klausToggleThumbs = function () {
+  const el = document.getElementById("thumbs");
+  el.classList.toggle("visible");
+  if (el.classList.contains("visible")) markCurrentThumb(state.currentPage || 1);
+};
+
+/* ==== keyboard ===================================================== */
+document.addEventListener("keydown", (ev) => {
+  const mod = ev.metaKey || ev.ctrlKey;
+  if (mod && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === "f") {
+    ev.preventDefault(); showFindBar();
+  } else if (mod && ev.shiftKey && ["h", "a"].includes(ev.key.toLowerCase())) {
+    ev.preventDefault(); addHighlightFromSelection();
+  } else if (mod && ev.altKey && ev.key.toLowerCase() === "g") {
+    ev.preventDefault(); post("goto-request");
+  } else if (mod && !ev.shiftKey && ev.key.toLowerCase() === "g") {
+    ev.preventDefault(); stepFind(1);
+  } else if (mod && ev.shiftKey && ev.key.toLowerCase() === "g") {
+    ev.preventDefault(); stepFind(-1);
+  } else if (mod && (ev.key === "=" || ev.key === "+")) {
+    ev.preventDefault(); window.klausSetZoom(1.2);
+  } else if (mod && ev.key === "-") {
+    ev.preventDefault(); window.klausSetZoom(1 / 1.2);
+  } else if (mod && ev.key === "0") {
+    ev.preventDefault(); window.klausZoomReset();
+  } else if (ev.key === "Escape") {
+    hideMenu();
+    if (state.tool) setTool(null);
+    if (document.getElementById("findbar").classList.contains("visible")) {
+      hideFindBar();
+    }
+  }
+});
+
+/* ==== API called from Python ======================================= */
+window.klausGoToPage = function (num) {
+  const d = state.pageDivs[num - 1];
+  if (d) d.scrollIntoView({ block: "start" });
+};
+
+window.klausSetZoom = function (factor) {
+  if (!state.doc) return;
+  // Through the zoom session: instant transform feedback, one settled
+  // re-render behind rapid steps, anchored at the viewport centre.
+  // userZoomed is committed by the settle.
+  const c = viewportCenter();
+  zoomTo(sessionTarget() * factor, c[0], c[1], false);
+};
+
+async function fitScale() {
+  const first = await state.doc.getPage(1);
+  const base = first.getViewport({ scale: 1.0 });
+  return clampScale(
+    (document.getElementById("scroll").clientWidth - 24) / base.width
+  );
+}
+
+window.klausZoomReset = async function () {
+  if (!state.doc) return;
+  const fit = await fitScale();
+  const c = viewportCenter();
+  zoomTo(fit, c[0], c[1], true);   // fit: settle clears userZoomed
+};
+
+/* Native trackpad gestures, forwarded by Python's eventFilter before
+   Chromium sees them (macOS pinch no longer arrives as a ctrl-wheel;
+   ctrl + mouse wheel still does). x/y: CSS px in the page viewport. */
+window.klausPinch = function (factor, x, y) {
+  if (!state.doc) return;
+  const el = document.elementFromPoint(x, y);
+  if (!el || !document.getElementById("scroll").contains(el)) return;
+  zoomTo(sessionTarget() * factor, x, y, false);
+};
+
+/* Two-finger double-tap: fit width <-> the previous user zoom (2x fit
+   if there is none), centred. */
+window.klausSmartZoom = async function () {
+  if (!state.doc) return;
+  const fit = await fitScale();
+  if (!state.doc) return;
+  const c = viewportCenter();
+  if (state.userZoomed) zoomTo(fit, c[0], c[1], true);
+  else zoomTo(state.prevZoom || fit * 2, c[0], c[1], false);
+};
+
+/* Python re-feeds the user zoom across a page reload, before
+   klausPdfOpen(..., keepView), which then keeps it instead of fitting. */
+window.klausKeepZoom = function (s) {
+  state.scale = clampScale(s);
+  state.userZoomed = true;
+  state.prevZoom = state.scale;
+};
+
+async function rezoom(keepPage) {
+  await relayout();
+  window.klausGoToPage(keepPage);
+}
+
+/* Teardown re-layout at state.scale, scroll untouched — the width
+   REFIT path (ResizeObserver -> rezoom). Zoom never comes here: its
+   settle rides softRelayout + refreshPage so pages are never blanked. */
+async function relayout() {
+  applyScaleFactor();
+  const first = await state.doc.getPage(1);
+  const base = first.getViewport({ scale: 1.0 });
+  for (const d of state.pageDivs) {
+    teardownPage(parseInt(d.dataset.page, 10), d);
+    d.style.width = Math.floor(base.width * state.scale) + "px";
+    d.style.height = Math.floor(base.height * state.scale) + "px";
+  }
+  state.rendered.clear();
+  state.lru.clear();
+  /* teardownPage never touches the editor (it is not one of the four
+     layers it removes), so a panel resize mid-sentence leaves the box
+     alive — at the OLD scale until this lands it again (K-150). */
+  positionTextEdit();
+}
+
+window.klausScrollTo = function (y) {
+  document.getElementById("scroll").scrollTop = y;
+};
+
+window.klausScrollPosition = function () {
+  return document.getElementById("scroll").scrollTop;
+};
+
+post("boot");
+</script>

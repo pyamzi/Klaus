@@ -15,7 +15,7 @@ import tokenize
 import types
 
 ADDON = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klausmate"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klaus_note"
 )
 
 # The harness's package stub, so every USER_FILES lands in scratch, never
@@ -24,12 +24,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(ADDON), ".claude", "skills", "kl
 from anki_stubs import install_package_stub  # noqa: E402
 
 install_package_stub()
-pkg = sys.modules["klausmate"]
+
+import klaus_note.settings as _settings  # noqa: E402
+pkg = sys.modules["klaus_note"]
 
 import importlib
 
-drive_store = importlib.import_module("klausmate.drive_store")
-viewer_context = importlib.import_module("klausmate.viewer_context")
+drive_store = importlib.import_module("klaus_note.drive_store")
+viewer_context = importlib.import_module("klaus_note.viewer_context")
 
 PASS = FAIL = 0
 
@@ -48,7 +50,7 @@ tmp = tempfile.mkdtemp(prefix="klaus_drive_")
 
 print("== drive_store basics ==")
 check("empty load is default-shaped",
-      drive_store.load(tmp) == {"version": 1, "folders": [], "pdfs": {}, "window": {}})
+      drive_store.load(tmp) == {"version": 1, "folders": [], "pdfs": {}, "window": {}, "excluded": {"pdfs": [], "folders": []}})
 
 drive_store.record_import(tmp, "Renal_Phys", "Renal Physiology (Dr. K).pdf")
 d = drive_store.load(tmp)
@@ -152,7 +154,7 @@ check("version mismatch -> default", drive_store.load(tmp)["pdfs"] == {})
 with open(os.path.join(tmp, "drive.json"), "w") as f:
     json.dump({"version": 1, "folders": "nope", "pdfs": [1, 2]}, f)
 check("wrong types -> default-shaped",
-      drive_store.load(tmp) == {"version": 1, "folders": [], "pdfs": {}, "window": {}})
+      drive_store.load(tmp) == {"version": 1, "folders": [], "pdfs": {}, "window": {}, "excluded": {"pdfs": [], "folders": []}})
 check("write after corruption recovers",
       (drive_store.record_import(tmp, "A", "a.pdf") or True)
       and drive_store.display_name(tmp, "A") == "a.pdf")
@@ -302,7 +304,7 @@ stub("aqt.editor", Editor=_Any)
 stub("anki")
 stub("anki.collection", AddNoteRequest=_Any)
 
-for mod in ("klausmate.pdf_drop", "klausmate.pdf_drive"):
+for mod in ("klaus_note.pdf_drop", "klaus_note.pdf_drive"):
     try:
         importlib.import_module(mod)
         check(f"{mod.split('.')[-1]} imports", True)
@@ -311,11 +313,11 @@ for mod in ("klausmate.pdf_drop", "klausmate.pdf_drive"):
 
 # pdf_drop pure surface
 try:
-    dp = sys.modules["klausmate.pdf_drop"]
+    dp = sys.modules["klaus_note.pdf_drop"]
     check("the ONE surviving command is underscore-namespaced (a colon "
           "name is swallowed by the editor bridge's non-Editor guard)",
-          dp.BROWSE_CMD == "klausmate_browse"
-          and not dp.BROWSE_CMD.startswith("klausmate:"))
+          dp.BROWSE_CMD == "klaus_note_browse"
+          and not dp.BROWSE_CMD.startswith("klaus_note:"))
     # Every message check below passes a VALID deck context (DeckBrowser
     # is stubbed as _Any above, so an _Any() instance satisfies the
     # handler's own isinstance gate). That is load-bearing: with
@@ -343,7 +345,7 @@ try:
         check("and the K-151-retired disarm command falls through it "
               "too; a handler that claimed-and-ignored the name would "
               "silently eat an identical message from anyone else",
-              dp.on_deck_js_message((False, None), "klausmate_disarm",
+              dp.on_deck_js_message((False, None), "klaus_note_disarm",
                                     _Any()) == (False, None))
     finally:
         del _Any.singleShot
@@ -412,7 +414,7 @@ check("last_run is gone with the search that wrote it — a module global "
 # ...but the drop machinery it was tangled with SURVIVES: this wrapper is
 # the only thing stopping Anki's own importer choking on a dropped PDF.
 for _sym in ("_install_drop_wrap", "_import_pdfs", "_browse_for_pdfs",
-             "BROWSE_CMD", "_drop_square_html"):
+             "BROWSE_CMD"):
     check(f"pdf_drop keeps {_sym} (the import surface, not the "
           f"ceremony)", _sym in _DP_SRC)
 
@@ -507,29 +509,35 @@ _DP_GLOBALS = sorted(
     for t in ([node.target] if isinstance(node, ast.AnnAssign) else node.targets)
     if isinstance(t, ast.Name)
 )
-check("the module holds exactly ONE module-level name, BROWSE_CMD — the "
+check("the module holds only its two constants, BROWSE_CMD and ADD_LABEL — the "
       "armed PDF was session state, and with it gone there is nothing "
       "left for setup() to reset on profile_will_close",
-      _DP_GLOBALS == ["BROWSE_CMD"], repr(_DP_GLOBALS))
+      _DP_GLOBALS == ["ADD_LABEL", "BROWSE_CMD"], repr(_DP_GLOBALS))
 check("and no function rebinds a module global (the `global` statement "
       "went with the state it wrote)",
       not [n for n in ast.walk(_DP_TREE) if isinstance(n, ast.Global)])
 
-try:
-    _SQUARE = sys.modules["klausmate.pdf_drop"]._drop_square_html()
-    check("the square renders ONE state — the invitation and its "
-          "Browse… anchor; no armed variant, no × dismiss link, and no "
-          "copy naming an imported file",
-          "Drop a lecture PDF" in _SQUARE
-          and "Browse&hellip;" in _SQUARE
-          and "&times;" not in _SQUARE
-          and "Imported:" not in _SQUARE
-          and "Armed:" not in _SQUARE, repr(_SQUARE[-260:]))
-    check("with exactly one pycmd in it, the Browse command",
-          _SQUARE.count("pycmd(") == 1
-          and 'pycmd("klausmate_browse")' in _SQUARE)
-except Exception as e:
-    check("K-151 drop-square render", False, f"{type(e).__name__}: {e}")
+print("== the drop square is gone; Add to Library joins Anki's bottom row ==")
+# Pouya: "remove the PDF drop thing and just add 'Add to Library' for that
+# instead". The row's buttons live in the status bar (status_bar parses
+# Anki's own bottom-bar HTML), so the button goes where Anki's are.
+for _sym in ("_drop_square_html", "on_deck_browser_content", "on_overview_content"):
+    check(f"pdf_drop carries no {_sym}", _sym not in _DP_IDENTS)
+_dp = sys.modules["klaus_note.pdf_drop"]
+_links = [["", "shared", "Get Shared"]]
+_dp.add_library_link(_links)
+_dp.add_library_link(_links)
+check("the deck list's row gains Add to Library, once however often setup runs",
+      _links == [["", "shared", "Get Shared"], ["", "klaus_note_browse", "Add to Library"]], repr(_links))
+_handler = object()
+_ov = [["O", "opts", "Options"]]
+check("the overview's row gains it too, and the filter hands back Anki's link handler",
+      _dp.on_overview_will_render_bottom(_handler, _ov) is _handler
+      and _ov[-1] == ["", "klaus_note_browse", "Add to Library"], repr(_ov))
+check("setup installs both", _calls_in_func(_DP_SRC, "setup", "add_library_link")
+      and "overview_will_render_bottom.append(on_overview_will_render_bottom)" in _DP_SRC)
+check("a click from the overview's row is claimed too (OverviewBottomBar context)",
+      "OverviewBottomBar" in _DP_CODE)
 
 check("pdf_drive's delete path no longer reaches into the armed state — "
       "it held the last disarm_if caller, and the module import went "
@@ -545,7 +553,7 @@ print("== pdf_handler.list_by_recency (last_used missing for some pdfs) ==")
 # bar's ＋ menu reads it), so the coverage moved down to the function
 # instead of leaving with the caller.
 try:
-    _ph_rec = importlib.import_module("klausmate.pdf_handler")
+    _ph_rec = importlib.import_module("klaus_note.pdf_handler")
     tmp_dc = tempfile.mkdtemp(prefix="klaus_drive_")
     ctx_dir = os.path.join(tmp_dc, "contexts")
     os.makedirs(ctx_dir, exist_ok=True)
@@ -575,7 +583,7 @@ except Exception as e:
 
 shutil.rmtree(tmp, ignore_errors=True)
 
-pdf_drive = importlib.import_module("klausmate.pdf_drive")
+pdf_drive = importlib.import_module("klaus_note.pdf_drive")
 
 print("== no Trash never means a permanent delete (Codex on PR #9) ==")
 _qt = sys.modules["aqt.qt"]
@@ -608,8 +616,8 @@ print("== rescan_library_root glue runs end-to-end (K-075 regression trap) ==")
 _g_uf = tempfile.mkdtemp(prefix="drive_glue_uf_")
 _g_root = tempfile.mkdtemp(prefix="drive_glue_root_")
 os.makedirs(os.path.join(_g_uf, "contexts"))
-pkg.USER_FILES = _g_uf
-_ph = importlib.import_module("klausmate.pdf_handler")
+_settings.user_files_dir = _g_uf
+_ph = importlib.import_module("klaus_note.pdf_handler")
 _orig_llr = _ph._live_library_root
 _ph._live_library_root = lambda: _g_root
 try:
@@ -623,7 +631,7 @@ check(
 )
 check(
     "empty root -> quiet summary",
-    bool(_g_summary) and _g_summary.get("moved") == [] and _g_summary.get("ingested") == [],
+    bool(_g_summary) and _g_summary.get("moved") == {} and _g_summary.get("ingested") == [],
     repr(_g_summary),
 )
 
@@ -632,7 +640,7 @@ print("== K-076: apply_folder_change moves the disk dir with the tree ==")
 _k_uf = tempfile.mkdtemp(prefix="drive_k76_uf_")
 _k_root = tempfile.mkdtemp(prefix="drive_k76_root_")
 try:
-    _ph = importlib.import_module("klausmate.pdf_handler")
+    _ph = importlib.import_module("klaus_note.pdf_handler")
     os.makedirs(os.path.join(_k_uf, "contexts"))
     os.makedirs(os.path.join(_k_root, "Bootcamp"))
     with open(os.path.join(_k_root, "Bootcamp", "Biostats.pdf"), "wb") as fh:
@@ -661,7 +669,7 @@ try:
     # next pass — live, that read as "my folder move snapped back".
     _k_sum = _ph.rescan_root(_k_uf, _k_root, drive_store.load(_k_uf).get("pdfs", {}))
     check("rescan is quiet after the move",
-          _k_sum.get("moved") == [] and _k_sum.get("tree_changed") == [],
+          _k_sum.get("moved") == {} and _k_sum.get("tree_changed") == [],
           repr(_k_sum))
     check("folder assignment SURVIVES the rescan",
           drive_store.load(_k_uf)["pdfs"]["Biostats"]["folder"] == "Archive/Bootcamp",
@@ -722,9 +730,40 @@ check("no toolbar Library link, no Library window, no Library screen",
       and "class DriveWindow" not in _srcs["pdf_drive.py"]
       and not os.path.exists(os.path.join(ADDON, "library_tab.py")))
 check("every dialog in library_actions is an instance opened with open()",
-      _code_only(_srcs["library_actions.py"]).count(".open()") == 3)  # text prompt, sensitivity, file picker
+      _code_only(_srcs["library_actions.py"]).count(".open()") == 4)  # text prompt, sensitivity, file picker, exclude confirm
 check("Preferences' refresh hook still exists (manage_models calls it)",
       hasattr(pdf_drive, "refresh_open_library"))
+
+
+print("== exclusion (manual indexing) ==")
+ds = drive_store
+uf = tempfile.mkdtemp(prefix="klaus_excl_")
+ds.record_import(uf, "Hemo", "Hemo.pdf"); ds.add_folder(uf, "Exam 1/Week 1"); ds.set_folder(uf, "CBC", "Exam 1/Week 1")
+check("a file without the key loads as nothing excluded", ds.load(uf)["excluded"] == {"pdfs": [], "folders": []})
+check("set_excluded pdf round-trips", ds.set_excluded(uf, "pdf", "Hemo", True) and ds.is_excluded(ds.load(uf), "Hemo"))
+ds.set_excluded(uf, "folder", "Exam 1", True)
+check("a folder covers nested folders' PDFs",
+      ds.is_excluded(ds.load(uf), "CBC") and ds.folder_excluded(ds.load(uf), "Exam 1/Week 1"))
+ds.record_import(uf, "Later", "Later.pdf"); ds.set_folder(uf, "Later", "Exam 1")
+check("...and PDFs added later", ds.is_excluded(ds.load(uf), "Later"))
+check("a sibling folder is not covered", not ds.folder_excluded(ds.load(uf), "Exam 10"))
+check("excluded_safes picks the covered ones", ds.excluded_safes(ds.load(uf), ["Hemo", "CBC", "Later", "Other"]) == {"Hemo", "CBC", "Later"})
+ds.rename_folder(uf, "Exam 1", "Exam A")
+check("rename carries the exclusion",
+      ds.load(uf)["excluded"]["folders"] == ["Exam A"] and ds.is_excluded(ds.load(uf), "CBC"), str(ds.load(uf)["excluded"]))
+ds.remove_folder(uf, "Exam A")
+check("removing the folder drops it", ds.load(uf)["excluded"]["folders"] == [] and not ds.is_excluded(ds.load(uf), "CBC"),
+      str(ds.load(uf)["excluded"]))
+ds.remove_pdf(uf, "Hemo")
+check("removing the PDF drops it", ds.load(uf)["excluded"]["pdfs"] == [])
+ds.set_excluded(uf, "pdf", "X", True); ds.set_excluded(uf, "pdf", "X", False)
+check("include removes it", ds.load(uf)["excluded"]["pdfs"] == [])
+ds.set_excluded(uf, "pdf", "Y", True); ds.set_excluded(uf, "pdf", "Y", True)
+check("excluding twice stores it once", ds.load(uf)["excluded"]["pdfs"] == ["Y"])
+check("an unknown kind is refused", ds.set_excluded(uf, "page", "Y", True) is False)
+open(ds._drive_path(uf), "w").write("{corrupt")
+check("a corrupt file reads as nothing excluded",
+      not ds.is_excluded(ds.load(uf), "CBC") and ds.excluded_safes(ds.load(uf), {"CBC"}) == set())
 
 
 print(f"\n{PASS} passed, {FAIL} failed")

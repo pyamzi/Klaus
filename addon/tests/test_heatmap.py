@@ -1,4 +1,4 @@
-"""Headless tests for klausmate.heatmap — the review heatmap.
+"""Headless tests for klaus_note.heatmap — the review heatmap.
 
 Three kinds of check live here:
 
@@ -21,9 +21,9 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-heatmap = importlib.import_module("klausmate.heatmap")
-theme = importlib.import_module("klausmate.theme")
-background = importlib.import_module("klausmate.background")
+heatmap = importlib.import_module("klaus_note.heatmap")
+theme = importlib.import_module("klaus_note.theme")
+background = importlib.import_module("klaus_note.background")
 
 DAY = heatmap.SECS_PER_DAY
 
@@ -262,10 +262,10 @@ _html = heatmap.heatmap_html({99: 40, 98: 0}, {101: 6}, 100, _stats,
                              history_days=14, forecast_days=7)
 check("the panel wears the .klaus-hm hook background.panel_css frosts",
       '<div class="klaus-hm">' in _html)
-check("a day with reviews is clickable", "klausmate:heatmap:99" in _html)
+check("a day with reviews is clickable", "klaus_note:heatmap:99" in _html)
 check("a day with NOTHING on it is not — an empty Browse reads as a "
-      "broken link", "klausmate:heatmap:98" not in _html)
-check("a scheduled day is clickable too", "klausmate:heatmap:101" in _html)
+      "broken link", "klaus_note:heatmap:98" not in _html)
+check("a scheduled day is clickable too", "klaus_note:heatmap:101" in _html)
 check("future cells are drawn from the future ramp",
       "f1" in _html or "f2" in _html or "f3" in _html or "f4" in _html)
 check("tooltips use the reference's phrasing — cards reviewed / cards "
@@ -383,6 +383,42 @@ check("the bar under the grid is gone in BOTH engines (Pouya, "
       and "::-webkit-scrollbar { display: none; }" in _css
       and "overflow-x: auto" in _css
       and "scrollbar { height" not in _css)
+check("a range wider than its box opens on the NEWEST weeks (the scroller runs "
+      "opposite to the plot, so it starts at the plot's end), mirrored for RTL pages",
+      " .klaus-hm-scroll { direction: rtl; }" in _css
+      and " .klaus-hm-scroll > .klaus-hm-plot { direction: ltr; }" in _css
+      and " [dir=rtl] .klaus-hm-scroll { direction: ltr; }" in _css
+      and " [dir=rtl] .klaus-hm-scroll > .klaus-hm-plot { direction: rtl; }" in _css)
+check("the weekday letters are pinned: their column sits BESIDE the scroller, not in it, "
+      "and drops by the month strip plus the row gap so the letters meet their rows",
+      re.search(r'<div class="klaus-hm-body"><div class="klaus-hm-wd">.*?</div>'
+                r'<div class="klaus-hm-scroll"><div class="klaus-hm-plot">'
+                r'<div class="klaus-hm-months">', _html) is not None
+      and "klaus-hm-corner" not in _html
+      and "padding-top: 15px; flex: none;" in _css.split(" .klaus-hm-wd {")[1].split("}")[0]
+      and " .klaus-hm-body > .klaus-hm-scroll { flex: 0 1 auto; min-width: 0; }" in _css)
+_late = heatmap.heatmap_html({99: 40}, {100 + d: 3 for d in range(1, 12)}, 100, _stats,
+                             history_days=40, forecast_days=11)
+_late_cols = heatmap.build_columns({99: 40}, {100 + d: 3 for d in range(1, 12)}, 100, 40, 11)
+_late_labels = heatmap.month_labels(_late_cols)
+_shown = re.findall(r'<span class="klaus-hm-m(?: ms)?">([^<]*)</span>', _late)
+_n = len(_late_labels)
+check("a month starting in the last column keeps its gap but not its name (it was cut "
+      "to 'No' by the plot's edge); every other month keeps its name",
+      _shown == [l if _n - i >= 2 else "" for i, l in enumerate(_late_labels)]
+      and _late.count('klaus-hm-m ms') == sum(1 for l in _late_labels if l),
+      f"{_shown} vs {_late_labels}")
+# A forecast whose very last column opens a new month — the case that drew "No".
+for _fd in range(1, 60):
+    _cols = heatmap.build_columns({99: 40}, {}, 100, 40, _fd)
+    if heatmap.month_labels(_cols)[-1]:
+        break
+_edge = heatmap.heatmap_html({99: 40}, {100 + _fd: 1}, 100, _stats, history_days=40, forecast_days=_fd)
+_edge_shown = re.findall(r'<span class="klaus-hm-m(?: ms)?">([^<]*)</span>', _edge)
+check("…pinned on a range whose LAST column opens a month: that name is dropped",
+      heatmap.month_labels(_cols)[-1] != "" and _edge_shown[-1] == ""
+      and _edge.rstrip().count("klaus-hm-m ms") == sum(1 for l in heatmap.month_labels(_cols) if l),
+      str(_fd))
 check("both palettes ship, keyed on Anki's own night-mode class — Anki "
       "flips that class with JS and never re-runs the hook that "
       "injected this, so baking one palette would freeze the heatmap "
@@ -617,10 +653,10 @@ check("the klausday token, its resolver hook and its query helper are "
       and not hasattr(heatmap, "cards_reviewed_on")
       and not hasattr(heatmap, "_on_browser_will_search")
       and "browser_will_search"
-      not in open("klausmate/heatmap.py", encoding="utf8").read())
+      not in open("klaus_note/heatmap.py", encoding="utf8").read())
 
 section("the KlausBook design gate")
-_HM_SRC = open("klausmate/heatmap.py", encoding="utf8").read()
+_HM_SRC = open("klaus_note/heatmap.py", encoding="utf8").read()
 _render_slice = _HM_SRC.split("def _on_deck_browser_content")[1].split(
     "def _on_webview_will_set_content")[0]
 _css_slice = _HM_SRC.split("def _on_webview_will_set_content")[1].split(
@@ -692,12 +728,12 @@ finally:
 
 section("bridge")
 check("a click is deferred, never run inside the webchannel handler",
-      "QTimer.singleShot" in open("klausmate/heatmap.py", encoding="utf8").read())
+      "QTimer.singleShot" in open("klaus_note/heatmap.py", encoding="utf8").read())
 check("a foreign message is passed straight through untouched",
-      heatmap._on_js_message(("sentinel",), "klausmate:settings", None)
+      heatmap._on_js_message(("sentinel",), "klaus_note:settings", None)
       == ("sentinel",))
 check("a malformed day is swallowed rather than raising into Anki",
-      heatmap._on_js_message((False, None), "klausmate:heatmap:xyz", None)
+      heatmap._on_js_message((False, None), "klaus_note:heatmap:xyz", None)
       == (True, None))
 # The two bridge sites worker-K could not reach from its own claim
 # (K-142). Returning (False, None) re-opens the message to the rest of
@@ -722,7 +758,7 @@ sys.modules["aqt.qt"] = _fake_qt
 check("a day click is answered as handled AND deferred off the bridge "
       "— running Browse inside the webchannel call is the reentrancy "
       "hazard tests/test_bridge_reentrancy.py exists for",
-      heatmap._on_js_message((False, None), "klausmate:heatmap:20000", None)
+      heatmap._on_js_message((False, None), "klaus_note:heatmap:20000", None)
       == (True, None)
       and len(_timer_calls) == 1 and _timer_calls[0][0] == 0)
 

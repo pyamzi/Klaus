@@ -22,7 +22,7 @@ from anki_stubs import check, code_only, install, report, section
 install()
 import importlib
 
-at = importlib.import_module("klausmate.anki_tools")
+at = importlib.import_module("klaus_note.anki_tools")
 
 
 class Note:
@@ -154,7 +154,7 @@ check("results carry the source PDF and the page, so an answer can cite "
 # Raw source, not code_only: the capability is looked up by a STRING key
 # and code_only strips string literals along with comments. Third time that
 # has caught me today.
-_TOOL_SRC = open("klausmate/anki_tools.py").read()
+_TOOL_SRC = open("klaus_note/anki_tools.py").read()
 _H_SRC = _TOOL_SRC.split("def _h_search_lecture_pdfs", 1)[1].split("\ndef ", 1)[0]
 check("the handler pulls the searcher out of ctx rather than importing an "
       "embedding provider itself — that is what lets it run here with no "
@@ -181,16 +181,10 @@ section("the real PDF search: pdf_index v2 + page_store (K-225 fix)")
 # one row per page: best_page/.pages) without any test noticing. These
 # pins drive the real function end to end, no injected fake, against a
 # real v2 index and real page_store records in a scratch user_files.
-page_store = importlib.import_module("klausmate.page_store")
-pdf_index = importlib.import_module("klausmate.pdf_index")
-pdf_handler = importlib.import_module("klausmate.pdf_handler")
-embeddings = importlib.import_module("klausmate.embeddings")
-# install() gives klausmate a synthetic __init__ (so importing submodules
-# never has to run the real, aqt-heavy klausmate/__init__.py) — it has no
-# get_config of its own, same gap test_tag_migrate.py's own hand-rolled
-# stub package fills the same way.
-importlib.import_module("klausmate").get_config = lambda: {}
-
+page_store = importlib.import_module("klaus_note.page_store")
+pdf_index = importlib.import_module("klaus_note.pdf_index")
+pdf_handler = importlib.import_module("klaus_note.pdf_handler")
+embeddings = importlib.import_module("klaus_note.embeddings")
 _sp_dir = tempfile.mkdtemp(prefix="klaus_test_ap_")
 
 
@@ -395,7 +389,7 @@ section("no write without an explicit approval")
 check("default_ctx's confirm refuses: the only writer, anki_endpoint, "
       "passes its own approval, so a write reached without one must fail "
       "closed (the app-modal exec() dialog it replaced is gone, K-305)",
-      at.default_ctx()["confirm"]("Klaus wants to create a note", []) is False)
+      at.default_ctx()["confirm"]("KlausNote wants to create a note", []) is False)
 for _gone in ("execute_tool", "add_reviewed_cards", "_confirm_write_dialog"):
     check(f"dead {_gone} stays deleted", not hasattr(at, _gone))
 

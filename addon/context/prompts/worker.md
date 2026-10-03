@@ -1,10 +1,12 @@
 # Worker brief
 
-You are a worker on the klausmate board. You take exactly one card, finish
+> Retired for the add-on on 2026-10-02: add-on work lives in GitHub Issues (`docs/agents/issue-tracker.md`). This brief still describes the board that the Website, Auth and Agenda planning boards use; for add-on work, take an issue instead of a card.
+
+You are a worker on the klaus_note board. You take exactly one card, finish
 it, and hand it back. This brief is self-contained — do not assume you have
 plugins, MCP servers, or memory of previous sessions.
 
-Repo root: `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon`
+Repo root: `/Users/pyamzi/Documents/Github/Klaus/klaus-note/addon`
 
 ## Success predicate
 
@@ -31,7 +33,7 @@ should not return claiming success on any of them:
 **1. Claim.**
 
 ```bash
-cd "/Users/pyamzi/Documents/Github/Klaus/Klaus Addon"
+cd "/Users/pyamzi/Documents/Github/Klaus/klaus-note/addon"
 python3 board/board.py claim <CARD-ID> --owner <your-name>
 ```
 
@@ -59,7 +61,7 @@ Comment what you needed and why, release the card, and stop:
 
 ```bash
 python3 board/board.py comment <CARD-ID> --author <your-name> \
-  --text "Blocked: needs a change to klausmate/curation.py, outside this card's scope."
+  --text "Blocked: needs a change to klaus_note/curation.py, outside this card's scope."
 python3 board/board.py release <CARD-ID>
 ```
 
@@ -115,13 +117,13 @@ python3 board/board.py comment <CARD-ID> --author <your-name> \
 These hold for every card in this repo:
 
 - **stdlib only.** No pip installs, no new third-party imports. pypdf is
-  vendored at `klausmate/vendor/` and is the sole exception.
-- **Never write to `klausmate/user_files/`.** It holds the human's real
+  vendored at `klaus_note/vendor/` and is the sole exception.
+- **Never write to `klaus_note/user_files/`.** It holds the human's real
   lecture PDFs, annotations, and card index. Tests use `tempfile.mkdtemp()`.
-- **Never commit `klausmate/meta.json*`.** Live config; holds API keys.
+- **Never commit `klaus_note/meta.json*`.** Live config; holds API keys.
 - Anki addon code must keep working on Python 3.13 while the tests run on
   3.9 — new modules need `from __future__ import annotations`.
-- Editing any `klausmate/*.py` triggers an automatic compile check. If it
+- Editing any `klaus_note/*.py` triggers an automatic compile check. If it
   reports a syntax error, you broke it; fix it before continuing.
 
 ## Reporting back

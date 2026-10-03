@@ -5,16 +5,16 @@ from pathlib import Path
 from enum import IntEnum
 from unittest.mock import patch
 sys.path.insert(0, '.claude/skills/klaus-test/scripts')
-from anki_stubs import install, exec_klausmate_under_qt, check, report
+from anki_stubs import install, exec_klaus_note_under_qt, check, report, LiveStore
 install()
+import klaus_note.settings as _settings  # noqa: E402
 from PyQt6 import QtWidgets
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 with tempfile.TemporaryDirectory(prefix='external clients ') as root:
-    K = exec_klausmate_under_qt(root)
-    cfg = json.loads(Path('klausmate/config.json').read_text())
-    K.get_config = lambda: dict(cfg)
+    K = exec_klaus_note_under_qt(root)
+    cfg = json.loads(Path('klaus_note/config.json').read_text())
     writes = []
-    K.write_config = lambda c: writes.append(c)
+    _settings.store = LiveStore(cfg, writes)
     mw = QtWidgets.QMainWindow()
     mw.taskman = types.SimpleNamespace(run_on_main=lambda fn: None)
     mw.reset = lambda: None
@@ -27,7 +27,7 @@ with tempfile.TemporaryDirectory(prefix='external clients ') as root:
     sys.modules['aqt.theme'] = theme
     mw.pm = types.SimpleNamespace(theme=lambda: Theme.SYSTEM)
     K.mw = sys.modules['aqt'].mw = mw
-    mm = importlib.import_module('klausmate.manage_models'); mm.mw = mw
+    mm = importlib.import_module('klaus_note.manage_models'); mm.mw = mw
     pending_ops = []
     class Op:
         def __init__(self, parent, op, success):
@@ -40,8 +40,8 @@ with tempfile.TemporaryDirectory(prefix='external clients ') as root:
             check('interpreter lookup collection-free', self.free)
             pending_ops.append(self)
     mm.QueryOp = Op
-    importlib.import_module('klausmate.curation').index_stats = lambda: {'exists': False}
-    bridge = importlib.import_module('klausmate.scripts.mcp_stdio_bridge')
+    importlib.import_module('klaus_note.curation').index_stats = lambda: {'exists': False}
+    bridge = importlib.import_module('klaus_note.scripts.mcp_stdio_bridge')
     script = str(Path(root)/'addon space/scripts/mcp_stdio_bridge.py')
     discovery = str(Path(root)/'user files/mcp_connection.json')
     interpreter = str(Path(root)/'Python 3/python3')
@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix='external clients ') as root:
     check('real clipboard exact JSON', app.clipboard().text() == field.toPlainText())
     actual = json.loads(field.toPlainText())['mcpServers']['klaus']
     check('actual runtime paths absolute', all(os.path.isabs(p) for p in (actual['command'],actual['args'][0],actual['args'][2])))
-    check('discovery belongs to scratch user files', actual['args'][2] == str(Path(K.USER_FILES)/'mcp_connection.json'))
+    check('discovery belongs to scratch user files', actual['args'][2] == str(Path(_settings.user_files())/'mcp_connection.json'))
     check('no configuration writes', not writes and before == sorted(str(p.relative_to(root)) for p in Path(root).rglob('*')))
     tester = dlg.findChild(QtWidgets.QPushButton, 'test_external_client_connection')
     status = next((label for label in dlg.findChildren(QtWidgets.QLabel) if label.property('mcp_status')), None)

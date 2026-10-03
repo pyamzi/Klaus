@@ -1,10 +1,10 @@
-// Behavioural test for klausmate/web/dashboard.js — the dashboard's
+// Behavioural test for klaus_note/web/dashboard.js — the dashboard's
 // entire DOM half (wrapping, ordering, Control-Center edit mode),
 // where a source pin proves nothing.
 //
 // Run by tests/test_dashboard.py when `node` is present (and honestly
 // reported as skipped when it is not). Usage:
-//     node tests/dashboard_js_dom_test.js klausmate/web/dashboard.js
+//     node tests/dashboard_js_dom_test.js klaus_note/web/dashboard.js
 //
 // The fake DOM models Anki's deck-browser shapes, verified against
 // aqt/deckbrowser.pyc:
@@ -12,7 +12,9 @@
 //                  [#studiedToday]></table><div.klaus-hm></center>
 //   theme mode:    <center><table><tr.deck>…</table><br>
 //                  <div id=studiedToday><div.klaus-hm></center>
-// plus foreign addon content that must never be touched.
+// plus other add-ons' blocks, which Python (dashboard.wrap_foreign)
+// already wrapped in the HTML. Custom elements count their connects:
+// AMBOSS's re-renders on every one, so the page must never move them.
 "use strict";
 const fs = require("fs");
 
@@ -31,6 +33,24 @@ function matches(n, sel) {
 }
 const hasClass = (n, c) => (n.className || "").split(/\s+/).includes(c);
 
+// Every insertion (re)connects the subtree's custom elements, as in a
+// browser: a move is a disconnect + connect.
+function connected(c) {
+  let root = c;
+  while (root.parentNode) root = root.parentNode;
+  if (root.tag !== "body" && root.tag !== "document") return; // detached: no connect
+  for (const n of [c, ...c.all()]) if (n.tag.includes("-")) n.connects = (n.connects || 0) + 1;
+}
+// What dashboard.wrap_foreign writes around an add-on block.
+function pw(id, child) {
+  const w = el("div", "klaus-widget");
+  w.setAttribute("data-w", id);
+  w.appendChild(el("div", "klaus-w-body")).appendChild(child);
+  return w;
+}
+// style.order as a number (CSS order is how the page reorders).
+const ord = (w) => Number(w.style.order || 0);
+
 let SEQ = 0;
 function el(tag, cls, id) {
   const node = {
@@ -39,7 +59,7 @@ function el(tag, cls, id) {
     tagName: tag.toUpperCase(),
     className: cls || "",
     id: id || "",
-    style: {},
+    style: { setProperty(k, v) { this[k] = String(v); } },
     textContent: "",
     attrs: {},
     children: [],
@@ -49,7 +69,7 @@ function el(tag, cls, id) {
     getAttribute(k) { return k in node.attrs ? node.attrs[k] : null; },
     appendChild(c) {
       if (c.parentNode) c.parentNode.removeChild(c);
-      c.parentNode = node; node.children.push(c); return c;
+      c.parentNode = node; node.children.push(c); connected(c); return c;
     },
     insertBefore(c, ref) {
       if (c.parentNode) c.parentNode.removeChild(c);
@@ -57,6 +77,7 @@ function el(tag, cls, id) {
       const i = ref ? node.children.indexOf(ref) : -1;
       if (i >= 0) node.children.splice(i, 0, c);
       else node.children.push(c);
+      connected(c);
       return c;
     },
     removeChild(c) {
@@ -137,10 +158,10 @@ function build(opts) {
     // one and fails the theme-trio case.
     banner = el("div", "foreign-banner");
     banner.appendChild(el("br"));
-    center.insertBefore(banner, table);
-    foreign = center.appendChild(el("div", "ankihub-thing"));
+    center.insertBefore(pw("x:.foreign-banner", banner), table);
+    foreign = el("div", "ankihub-thing");
     foreignBr = foreign.appendChild(el("br")); // a br the wrap must NOT take
-    center.appendChild(el("div", "klaus-curate-drop")); // pdf_drop's square
+    center.appendChild(pw("x:.ankihub-thing", foreign));
   }
   let hm = null;
   if (opts.heatmap !== false) hm = center.appendChild(el("div", "klaus-hm"));
@@ -158,6 +179,7 @@ function build(opts) {
   // fire() consults DOC._ls; keep them the same object.
   DOC._ls = document._ls;
   global.window = { innerWidth: 1200, innerHeight: 900 };
+  center.appendChild(el("script")); // never a widget
   global.pycmd = (msg) => SENT.push(msg);
   SENT.length = 0;
   return { body, center, table, studied, hm, foreign, foreignBr, banner };
@@ -166,8 +188,8 @@ function build(opts) {
 const SENT = [];
 const decoded = (i) => {
   const msg = SENT[i];
-  if (!msg || !msg.startsWith("klausmate:dash:")) return null;
-  return JSON.parse(Buffer.from(msg.slice("klausmate:dash:".length), "base64").toString("utf8"));
+  if (!msg || !msg.startsWith("klaus_note:dash:")) return null;
+  return JSON.parse(Buffer.from(msg.slice("klaus_note:dash:".length), "base64").toString("utf8"));
 };
 
 const src = fs.readFileSync(process.argv[2], "utf8");
@@ -191,8 +213,9 @@ ok("heatmap lands inside its own widget",
    d.hm.closest(".klaus-widget") === widget("heatmap"));
 ok("wrappers live in <center>, order decks-then-heatmap",
    widget("decks").parentNode === d.center
-   && d.center.children.indexOf(widget("decks"))
-      < d.center.children.indexOf(widget("heatmap")));
+   && ord(widget("decks")) < ord(widget("heatmap")));
+ok("<center> becomes the flex column CSS order works in",
+   hasClass(d.center, "klaus-dash-col"));
 ok("wrappers never carry Anki's drag classes (deck / top-level-drag-row)",
    document.querySelectorAll(".klaus-widget").every(
      (w) => !hasClass(w, "deck") && !hasClass(w, "top-level-drag-row")));
@@ -207,24 +230,68 @@ ok("theme mode: only the table's own <br> moved — foreign <br>s stay "
    + "put, including one EARLIER in document order",
    d.foreignBr.parentNode === d.foreign
    && d.banner.querySelectorAll("br").length === 1
-   && d.banner.closest(".klaus-widget") === null
+   && d.banner.closest(".klaus-widget") !== widget("decks")
    && widget("decks").querySelectorAll("br").length === 1);
 
 // 3. Saved order applied: heatmap above decks.
 d = build({});
 boot(Object.assign({}, STATE, { order: ["heatmap", "decks"] }));
 ok("saved order is applied — heatmap widget precedes decks",
-   d.center.children.indexOf(widget("heatmap"))
-   < d.center.children.indexOf(widget("decks")));
+   ord(widget("heatmap")) < ord(widget("decks")));
 
-// 4. Foreign content: present, never wrapped, never removed.
+// 4. Other add-ons' blocks, pre-wrapped by Python: ordered with the
+//    rest by CSS order, and NEVER moved — a custom element re-renders
+//    on every connect (AMBOSS drew three cards when the page moved it).
 d = build({ foreign: true });
-boot(Object.assign({}, STATE, { order: ["heatmap", "decks"] }));
-ok("foreign addon content survives wrap + reorder, outside any widget",
-   d.foreign.parentNode === d.center
-   && d.foreign.closest(".klaus-widget") === null
-   && d.banner.parentNode === d.center
-   && document.querySelectorAll(".klaus-curate-drop").length === 1);
+const amb = el("amboss-component-wrapper", "", "amboss-qbank-widget");
+d.center.appendChild(pw("x:amboss-qbank-widget", amb));
+const before4 = d.center.children.slice();
+boot(Object.assign({}, STATE, { order: ["x:amboss-qbank-widget", "heatmap", "decks"] }));
+ok("an add-on's block is ordered with Klaus's widgets",
+   ord(widget("x:amboss-qbank-widget")) < ord(widget("heatmap"))
+   && ord(widget("heatmap")) < ord(widget("decks")), [ord(widget("x:amboss-qbank-widget")), ord(widget("heatmap"))]);
+ok("...without moving it: connected once, and the add-on wrappers keep their DOM slots",
+   amb.connects === 1
+   && d.center.children.indexOf(widget("x:amboss-qbank-widget")) === before4.indexOf(widget("x:amboss-qbank-widget")),
+   String(amb.connects));
+ok("its insides are untouched", d.foreignBr.parentNode === d.foreign);
+ok("each is named after its id",
+   window.klausDash.label("x:amboss-qbank-widget") === "Amboss Qbank"
+   && window.klausDash.label("x:.ankihub-thing") === "Ankihub Thing");
+
+// 4a. Dragging it in edit mode swaps CSS order, never the DOM.
+d = build({});
+const amb2 = el("amboss-component-wrapper", "", "amboss-qbank-widget");
+d.center.appendChild(pw("x:amboss-qbank-widget", amb2));
+boot(Object.assign({}, STATE, { edit: true, order: ["decks", "heatmap", "x:amboss-qbank-widget"] }));
+// Layout slots stacked by CSS order (the drag measures slots with its
+// own transform removed, so the mock ignores transforms).
+for (const id of ["decks", "heatmap", "x:amboss-qbank-widget"]) {
+  const w = widget(id);
+  w.getBoundingClientRect = () => {
+    const top = (ord(w) - 1) * 100;
+    return { top, bottom: top + 50, height: 50, left: 0, right: 1000, width: 1000 };
+  };
+}
+const sh = widget("x:amboss-qbank-widget").querySelector(".klaus-w-shield");
+fire(sh, "pointerdown", { clientY: 225, button: 0, pointerId: 1 });
+fire(sh, "pointermove", { clientY: 145, pointerId: 1 });
+fire(sh, "pointerup", { clientY: 145, pointerId: 1 });
+ok("the drop reports the new order",
+   JSON.stringify(decoded(SENT.length - 1)) === '{"action":"order","order":["decks","x:amboss-qbank-widget","heatmap"]}',
+   JSON.stringify(decoded(SENT.length - 1)));
+ok("...and the dragged block was never re-connected", amb2.connects === 1, String(amb2.connects));
+
+// 4b. A hidden one stays hidden, and ＋ offers it back.
+d = build({ foreign: true });
+boot(Object.assign({}, STATE, { edit: true, hiddenForeign: ["x:.ankihub-thing"] }));
+ok("a removed add-on block boots hidden",
+   widget("x:.ankihub-thing").style.display === "none");
+fire(document.querySelectorAll(".klaus-dash-bar")[0]
+  .children.find((c) => c.id === "klaus-dash-add"), "click");
+ok("...and ＋ names it", document.querySelectorAll(".klaus-dash-menu")[0]
+  .children.some((c) => c.textContent === "Ankihub Thing"));
+ok("its ⊖ is there in edit mode", widget("x:.foreign-banner").querySelectorAll(".klaus-w-remove").length === 1);
 
 // 5. Idempotency: Anki rebuilds via stdHtml, but a double eval on one
 //    document must not double-wrap.
@@ -298,9 +365,9 @@ const evCtx = fire(d.table, "contextmenu", { clientX: 40, clientY: 40 });
 ok("right-click on a widget is consumed (native menu suppressed)",
    evCtx._prevented);
 const ctxMenu = document.querySelectorAll(".klaus-dash-menu")[0];
-ok("…and opens the menu with Edit Widgets…",
-   ctxMenu && ctxMenu.children.some((c) => c.textContent === "Edit Widgets…"));
-fire(ctxMenu.children.find((c) => c.textContent === "Edit Widgets…"), "click");
+ok("…and opens the menu with Edit Widgets",
+   ctxMenu && ctxMenu.children.some((c) => c.textContent === "Edit Widgets"));
+fire(ctxMenu.children.find((c) => c.textContent === "Edit Widgets"), "click");
 ok("picking Edit enters edit mode and reports {edit-on}",
    document.body.classList.contains("klaus-dash-editing")
    && JSON.stringify(decoded(0)) === '{"action":"edit-on"}');
@@ -318,6 +385,199 @@ const evOff = fire(document.body, "contextmenu", {});
 ok("right-click outside the widgets is left to Anki",
    !evOff._prevented
    && document.querySelectorAll(".klaus-dash-menu").length === 0);
+
+// 14. Sizes: each widget takes Klaus's fixed COLUMNS x ROWS box,
+//     clamped to the columns the window has.
+d = build({ foreign: true });
+d.center.clientWidth = 16 + 3 * 176; // room for exactly 3 columns
+const SIZED = Object.assign({}, STATE, {
+  sizes: { decks: "2x2", heatmap: "4x1" }, foreignSize: "2x2", grid: { cell: 160, gap: 16 },
+});
+boot(SIZED);
+ok("a widget takes its own box",
+   widget("decks").getAttribute("data-size") === "2x2"
+   && widget("decks").style["--kw-cols"] === "2" && widget("decks").style["--kw-rows"] === "2");
+ok("a 4-wide widget in a 3-column window takes 3 columns (no overflow)",
+   widget("heatmap").getAttribute("data-size") === "4x1" && widget("heatmap").style["--kw-cols"] === "3",
+   widget("heatmap").style["--kw-cols"]);
+ok("an add-on block Klaus has no size for gets the shared box",
+   widget("x:.ankihub-thing").getAttribute("data-size") === "2x2");
+ok("Anki's table sits in the decks box's scroll body, not the grid item itself",
+   d.table.parentNode.className === "klaus-w-body" && d.table.parentNode.parentNode === widget("decks"));
+
+// 14b. An own-height widget (the deck list) takes one auto-height row,
+//      capped at its size's rows by max-height; the others keep their box.
+d = build({});
+boot(Object.assign({}, SIZED, { sizes: { decks: "4x3", heatmap: "4x1" }, ownHeight: ["decks"] }));
+const deckBody = widget("decks").children.find((c) => c.className === "klaus-w-body");
+ok("the deck list sizes its own row, at most 3 cells tall",
+   hasClass(widget("decks"), "klaus-w-own") && widget("decks").style["--kw-rows"] === "1"
+   && deckBody.style.maxHeight === "512px", deckBody.style.maxHeight);
+ok("…and the heatmap keeps its fixed box",
+   !hasClass(widget("heatmap"), "klaus-w-own") && widget("heatmap").style["--kw-rows"] === "1");
+
+// 14c. Edit mode draws a slot per cell of the REAL tracks (an own-height
+//      row is taller than a cell), before the widgets, and clears them.
+d = build({});
+d.center.clientWidth = 16 + 3 * 176;
+window.getComputedStyle = () => ({ gridTemplateRows: "189px 160px" });
+boot(Object.assign({}, SIZED, { edit: true, sizes: { decks: "4x3", heatmap: "4x1" }, ownHeight: ["decks"] }));
+const cells = d.center.querySelectorAll(".klaus-dash-cell");
+ok("3 columns x 2 rows of slots, the first row as tall as the deck list",
+   cells.length === 6 && cells.filter((c) => c.style.height === "189px").length === 3
+   && cells.some((c) => c.style.top === "221px" && c.style.height === "160px"),
+   cells.map((c) => c.style.top + "/" + c.style.height).join(","));
+ok("…painted under the widgets (they come first in the grid's children)",
+   d.center.children.slice(0, 6).every((c) => hasClass(c, "klaus-dash-cell")));
+window.klausDash.exitEdit();
+ok("…and gone when editing ends", d.center.querySelectorAll(".klaus-dash-cell").length === 0);
+delete window.getComputedStyle;
+
+// 14d. Slots only where no widget sits: a translucent card let the
+//      dashed lines run through its text.
+d = build({});
+d.center.clientWidth = 16 + 3 * 176;
+window.getComputedStyle = () => ({ gridTemplateRows: "160px 160px" });
+const place = (w, left, top, wd, ht) => Object.assign(w, { offsetLeft: left, offsetTop: top, offsetWidth: wd, offsetHeight: ht });
+boot(Object.assign({}, SIZED, { sizes: { decks: "2x1", heatmap: "1x1" } }));
+place(widget("decks"), 16, 16, 336, 160);   // row 1, columns 1-2
+place(widget("heatmap"), 368, 16, 160, 160); // row 1, column 3
+window.klausDash.enterEdit();
+const freeCells = d.center.querySelectorAll(".klaus-dash-cell");
+ok("only the 3 empty cells of row 2 get a slot; the 3 under widgets do not",
+   freeCells.length === 3 && freeCells.every((c) => c.style.top === "192px"),
+   freeCells.map((c) => c.style.left + "/" + c.style.top).join(","));
+window.klausDash.exitEdit();
+delete window.getComputedStyle;
+
+// 14e. Keyboard: Shift+F10 (or the Menu key) opens the same menu at the
+//      first widget, its item focused; Enter picks it.
+d = build({});
+boot(STATE);
+const kbEv = fire(document, "keydown", { key: "F10", shiftKey: true });
+const kbMenu = document.querySelectorAll(".klaus-dash-menu")[0];
+const kbItem = kbMenu && kbMenu.children[0];
+ok("Shift+F10 opens the Edit Widgets menu without a right-click",
+   kbEv._prevented && kbItem && kbItem.textContent === "Edit Widgets"
+   && kbItem.getAttribute("role") === "menuitem" && kbItem.getAttribute("tabindex") === "0");
+fire(kbItem, "keydown", { key: "Enter" });
+ok("…and Enter on its item enters edit mode",
+   document.body.classList.contains("klaus-dash-editing")
+   && JSON.stringify(decoded(SENT.length - 1)) === '{"action":"edit-on"}');
+const shields = ["decks", "heatmap"].map((id) => widget(id).querySelector(".klaus-w-shield"));
+ok("every widget's shield is a focusable button named for the move",
+   shields.every((sh) => sh.getAttribute("tabindex") === "0" && sh.getAttribute("role") === "button")
+   && /^Move Review Heatmap/.test(shields[1].getAttribute("aria-label")), shields[1].getAttribute("aria-label"));
+const upEv = fire(shields[1], "keydown", { key: "ArrowUp" });
+ok("an arrow key moves the focused widget one place and saves the order",
+   upEv._prevented && ord(widget("heatmap")) < ord(widget("decks"))
+   && JSON.stringify(decoded(SENT.length - 1)) === '{"action":"order","order":["heatmap","decks"]}',
+   JSON.stringify(decoded(SENT.length - 1)));
+const sentAtEdge = SENT.length;
+fire(shields[1], "keydown", { key: "ArrowLeft" });
+ok("…and at the first place it stays put, saving nothing", SENT.length === sentAtEdge);
+window.klausDash.exitEdit();
+
+// 15. Edit mode offers no size control: sizes are Klaus's.
+d = build({});
+boot(Object.assign({}, SIZED, { edit: true }));
+ok("no widget grows a size chip in edit mode",
+   document.querySelectorAll(".klaus-w-size").length === 0
+   && widget("heatmap").getAttribute("data-size") === "4x1");
+
+// 16. Shake: every widget gets its own phase and speed, cleared on exit.
+const phases = ["decks", "heatmap"].map((id) => widget(id).style.animationDelay);
+ok("each widget shakes from its own point in the cycle",
+   phases.every((p) => /^-0\.\d{3}s$/.test(p)) && widget("decks").style.animationDuration, phases.join(","));
+
+// 17. Same Look: a chip in the bar toggles one card on every widget.
+const same = document.querySelectorAll(".klaus-dash-bar")[0].children.find((c) => c.id === "klaus-dash-uniform");
+ok("the bar carries Same Look, off by default",
+   same && same.getAttribute("aria-pressed") === "false" && !document.body.classList.contains("klaus-dash-uniform"));
+fire(same, "click");
+ok("…turning it on dresses every widget alike and reports {uniform: true}",
+   document.body.classList.contains("klaus-dash-uniform") && same.getAttribute("aria-pressed") === "true"
+   && JSON.stringify(decoded(SENT.length - 1)) === '{"action":"uniform","on":true}');
+ok("…and it stays in edit mode (a chip click is not an outside click)",
+   document.body.classList.contains("klaus-dash-editing"));
+fire(document.querySelectorAll(".klaus-dash-bar")[0].children.find((c) => c.id === "klaus-dash-done"), "click");
+ok("Done clears the badges and the shake phases",
+   document.querySelectorAll(".klaus-w-remove").length === 0 && widget("decks").style.animationDelay === "");
+d = build({});
+boot(Object.assign({}, SIZED, { uniform: true }));
+ok("a saved Same Look boots on", document.body.classList.contains("klaus-dash-uniform"));
+
+// 17b. Widget size: a slider in the bar, on top of Anki's interface size.
+d = build({});
+boot(Object.assign({}, SIZED, { edit: true, scale: 110, scaleRange: [70, 150, 5], ankiScale: 125 }));
+const sizeChip = document.querySelectorAll(".klaus-dash-bar")[0].children.find((c) => c.id === "klaus-dash-scale");
+const slider = sizeChip && sizeChip.children.find((c) => c.tag === "input");
+const pct = sizeChip && sizeChip.children.find((c) => c.className === "klaus-dash-pct");
+ok("the slider is labelled Size on the bar, not only in its tooltip",
+   sizeChip && sizeChip.children[0].textContent === "Size");
+ok("the bar has a 70-150% slider in 5% steps at the saved size, with a % readout",
+   slider && slider.type === "range" && slider.min === "70" && slider.max === "150" && slider.step === "5"
+   && slider.value === "110" && pct.textContent === "110%"
+   && document.body.style["--klaus-dash-scale"] === "1.1");
+ok("…and it names Anki's own interface size, which it sits on top of",
+   /Anki's interface size \(125%/.test(sizeChip.getAttribute("title")), sizeChip.getAttribute("title"));
+const sentBefore = SENT.length;
+slider.value = "135";
+fire(slider, "input");
+ok("dragging it resizes the widgets live without saving",
+   document.body.style["--klaus-dash-scale"] === "1.35" && pct.textContent === "135%" && SENT.length === sentBefore);
+fire(slider, "change");
+ok("letting go saves it", JSON.stringify(decoded(SENT.length - 1)) === '{"action":"scale","value":135}',
+   JSON.stringify(decoded(SENT.length - 1)));
+window.klausDash.exitEdit();
+
+// 18. Drag works across the grid too: drop beside, not just above.
+d = build({});
+const amb3 = el("amboss-component-wrapper", "", "amboss-qbank-widget");
+d.center.appendChild(pw("x:amboss-qbank-widget", amb3));
+boot(Object.assign({}, SIZED, { edit: true, order: ["decks", "heatmap", "x:amboss-qbank-widget"] }));
+const COLS = { 1: 0, 2: 300, 3: 600 }; // one row of three, side by side
+for (const id of ["decks", "heatmap", "x:amboss-qbank-widget"]) {
+  const w = widget(id);
+  w.getBoundingClientRect = () => {
+    const left = COLS[ord(w)];
+    return { top: 0, bottom: 200, height: 200, left, right: left + 280, width: 280 };
+  };
+}
+const sh3 = widget("x:amboss-qbank-widget").querySelector(".klaus-w-shield");
+fire(sh3, "pointerdown", { clientX: 650, clientY: 100, button: 0, pointerId: 1 });
+fire(sh3, "pointermove", { clientX: 100, clientY: 100, pointerId: 1 });
+ok("dragging sideways onto the first widget takes its place",
+   ord(widget("x:amboss-qbank-widget")) === 1 && ord(widget("decks")) === 2,
+   [ord(widget("x:amboss-qbank-widget")), ord(widget("decks"))]);
+const landing = d.center.querySelector(".klaus-dash-slot");
+ok("while dragging, the box it will land in is outlined in the grid",
+   landing && landing.parentNode === d.center && landing.style.left === "0px" && landing.style.width === "280px",
+   landing && JSON.stringify(landing.style));
+ok("…and the outline is no widget (it takes no place in the order)",
+   !hasClass(landing, "klaus-widget") && landing.style.order === undefined);
+ok("…and the widget follows the pointer in both directions",
+   /^translate\(-?[\d.]+px, -?[\d.]+px\) scale\(1.02\)$/.test(widget("x:amboss-qbank-widget").style.transform),
+   widget("x:amboss-qbank-widget").style.transform);
+fire(sh3, "pointerup", { clientX: 100, clientY: 100, pointerId: 1 });
+ok("the drop reports the new order",
+   JSON.stringify(decoded(SENT.length - 1)) === '{"action":"order","order":["x:amboss-qbank-widget","decks","heatmap"]}',
+   JSON.stringify(decoded(SENT.length - 1)));
+ok("…without ever re-connecting the add-on's element", amb3.connects === 1, String(amb3.connects));
+ok("dropping clears the landing outline", d.center.querySelectorAll(".klaus-dash-slot").length === 0);
+
+// 19. A shadow-root card gets dashboard.SHADOW_CSS adopted into its root,
+//     once, as a constructed sheet (never a node the add-on's renderer owns).
+global.CSSStyleSheet = class { replaceSync(t) { this.text = t; } };
+d = build({});
+const amb4 = el("amboss-component-wrapper", "", "amboss-qbank-widget");
+amb4.shadowRoot = { adoptedStyleSheets: [{ own: true }] };
+d.center.appendChild(pw("x:amboss-qbank-widget", amb4));
+boot(Object.assign({}, SIZED, { shadowCss: { "amboss-component-wrapper": "div { margin: 0 }" } }));
+boot(Object.assign({}, SIZED, { shadowCss: { "amboss-component-wrapper": "div { margin: 0 }" } }));
+const sheets = amb4.shadowRoot.adoptedStyleSheets;
+ok("the add-on's own sheets stay and ours is added once",
+   sheets.length === 2 && sheets[0].own && sheets[1].text === "div { margin: 0 }", String(sheets.length));
 
 let failed = 0;
 for (const [name, pass, detail] of results) {

@@ -1,9 +1,9 @@
-"""Import-smoke test: every klausmate/*.py module, one pass/fail line each.
+"""Import-smoke test: every klaus_note/*.py module, one pass/fail line each.
 
 Run: env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
 
 Why this exists (K-008): the human reported the PDF drive window does not
-open at all in live Anki. `klausmate/__init__.py` wraps both
+open at all in live Anki. `klaus_note/__init__.py` wraps both
 `from . import pdf_drive as _pdf_drive; _pdf_drive.setup()` and the
 equivalent for `pdf_drop` in a `try/except Exception` that only prints —
 so an ImportError or NameError anywhere in pdf_drive.py's own module-level
@@ -13,11 +13,11 @@ with no trace beyond a buried `print()` in Anki's console.
 Nothing caught this before now: the old `aqt.qt` stub in
 `.claude/skills/klaus-test/scripts/anki_stubs.py` only defined QAction,
 QInputDialog, QMessageBox, QTimer and qconnect, so `from aqt.qt import
-QWidget` (or any of the ~55 other Qt names klausmate actually imports)
+QWidget` (or any of the ~55 other Qt names klaus_note actually imports)
 raised before either pdf_drive.py's or pdf_drop.py's own code ever ran —
 meaning those modules had literally never been import-tested. anki_stubs.py
 now stubs aqt/anki permissively (see its module docstring); this test uses
-that to import every klausmate module directly, bypassing __init__.py's
+that to import every klaus_note module directly, bypassing __init__.py's
 swallowing try/except, so a genuine import-time bug shows up as a hard FAIL
 here instead of a buried print.
 """
@@ -41,7 +41,7 @@ from anki_stubs import ADDON, check, install, report, section  # noqa: E402
 
 
 def _submodule_names() -> list[str]:
-    """Every klausmate/*.py file directly under the package (no vendor/,
+    """Every klaus_note/*.py file directly under the package (no vendor/,
     no __pycache__ — the glob is non-recursive so subdirectories are never
     matched), as bare module stems, sorted for stable output. `__init__`
     is handled separately below.
@@ -65,40 +65,40 @@ def _check_import(dotted: str) -> None:
 def main() -> int:
     install()
 
-    section("klausmate submodule imports")
+    section("klaus_note submodule imports")
     for name in _submodule_names():
-        _check_import(f"klausmate.{name}")
+        _check_import(f"klaus_note.{name}")
 
     # install() (via install_package_stub) deliberately registers a
-    # *lightweight* stand-in for the "klausmate" package itself — an empty
+    # *lightweight* stand-in for the "klaus_note" package itself — an empty
     # module whose __path__ points at the working tree — so that the
     # relative imports (`from . import curation`, etc.) inside every
     # submodule above resolve without ever running the real __init__.py.
     # That's the right call for every OTHER test in this suite (nobody
     # wants __init__.py's ~6k-line bootstrap running just to test
     # retention math), but it means a plain
-    # `importlib.import_module("klausmate")` here would just return that
+    # `importlib.import_module("klaus_note")` here would just return that
     # already-cached stand-in and vacuously "pass" without importing
     # anything — for exactly the file where the human's bug report points.
     # Load the real __init__.py from disk and execute it under the
-    # "klausmate" name instead, so its own module-level code (including
+    # "klaus_note" name instead, so its own module-level code (including
     # the try/except around pdf_drive/pdf_drop setup()) actually runs.
-    section("klausmate package bootstrap (__init__.py)")
+    section("klaus_note package bootstrap (__init__.py)")
     init_path = os.path.join(ADDON, "__init__.py")
     spec = importlib.util.spec_from_file_location(
-        "klausmate", init_path, submodule_search_locations=[ADDON]
+        "klaus_note", init_path, submodule_search_locations=[ADDON]
     )
     real_init = importlib.util.module_from_spec(spec)
-    previous = sys.modules.get("klausmate")
-    sys.modules["klausmate"] = real_init
+    previous = sys.modules.get("klaus_note")
+    sys.modules["klaus_note"] = real_init
     try:
         spec.loader.exec_module(real_init)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
-        check("import klausmate (__init__.py)", False, f"- {type(e).__name__}: {e}")
-        sys.modules["klausmate"] = previous  # restore the lightweight stand-in
+        check("import klaus_note (__init__.py)", False, f"- {type(e).__name__}: {e}")
+        sys.modules["klaus_note"] = previous  # restore the lightweight stand-in
     else:
-        check("import klausmate (__init__.py)", True)
+        check("import klaus_note (__init__.py)", True)
 
     _check_licences()
     return report()
@@ -113,7 +113,7 @@ def _check_licences() -> None:
     """Both LICENSE files exist and carry the AGPL v3 header.
 
     This test is already the census of what the add-on folder contains, so
-    it is where the two licence files are pinned (K-248). `klausmate/LICENSE`
+    it is where the two licence files are pinned (K-248). `klaus_note/LICENSE`
     is the load-bearing one: the AGPL obliges the SHIPPED program to carry
     its licence, and `scripts/package.sh` copies the add-on folder wholesale
     — so a missing or edited file there is a licensing defect that reaches
@@ -124,7 +124,7 @@ def _check_licences() -> None:
     section("licence files (AGPL v3)")
     for label, path in (
         ("LICENSE", os.path.join(ADDON, "..", "LICENSE")),
-        ("klausmate/LICENSE", os.path.join(ADDON, "LICENSE")),
+        ("klaus_note/LICENSE", os.path.join(ADDON, "LICENSE")),
     ):
         if not os.path.isfile(path):
             check(f"{label} exists", False, "- file not found")

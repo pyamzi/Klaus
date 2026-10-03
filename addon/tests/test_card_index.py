@@ -1,4 +1,4 @@
-"""Tests for klausmate.card_index (PR1 review fix): load_row_map must not
+"""Tests for klaus_note.card_index (PR1 review fix): load_row_map must not
 crash on a non-dict manifest.
 
 json.load happily returns whatever valid JSON allows — null, a list, a
@@ -25,7 +25,7 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
-card_index = importlib.import_module("klausmate.card_index")
+card_index = importlib.import_module("klaus_note.card_index")
 
 section("load_row_map on a non-dict manifest")
 

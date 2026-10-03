@@ -1,4 +1,4 @@
-"""Headless tests for the Klaus top bar (toolbar restyle + star logo)."""
+"""Headless tests for the Klaus top bar (toolbar restyle + k logo)."""
 import importlib
 import json
 import re
@@ -8,33 +8,34 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, code_only, install, report, section
 
 install()
-top_bar = importlib.import_module("klausmate.top_bar")
-theme = importlib.import_module("klausmate.theme")
+top_bar = importlib.import_module("klaus_note.top_bar")
+theme = importlib.import_module("klaus_note.theme")
 
 section("logo")
 html = top_bar.logo_html()
 check("inline svg", "<svg" in html and "</svg>" in html)
-# K-270 re-baseline: the mark is Pouya's "impossible star" — FIVE
-# filled polygons, not one stroked open path. A stroke on this artwork
-# would outline every arm and read as a different drawing entirely, so
-# the absence of `stroke=` is the pin, not decoration.
-check("the impossible star is five FILLED paths in the 1254 box",
-      'viewBox="0 0 1254 1254"' in html
-      and html.count("<path") == 5
-      and html.count('fill="var(--klaus-accent, currentColor)"') == 5)
+# 2026-10-01: the mark is Pouya's hand-drawn k — ONE evenodd path of
+# M/L/Z subpaths, filled in the text colour, in a viewBox cropped to the k.
+check("the hand-drawn k is ONE filled evenodd path in its cropped box",
+      f'viewBox="{top_bar.LOGO_VIEWBOX}"' in html
+      and top_bar.LOGO_VIEWBOX == "126 163 1010 918"
+      and html.count("<path") == 1
+      and 'fill-rule="evenodd"' in html
+      and html.count('fill="var(--klaus-text, currentColor)"') == 1)
 check("nothing is stroked — a filled mark, never an outlined one",
       "stroke" not in html and 'fill="none"' not in html)
-check("every path in the svg is one of _STAR_PATHS, verbatim",
-      all(f'd="{d}"' in html for d in top_bar._STAR_PATHS)
-      and len(top_bar._STAR_PATHS) == 5)
+check("the path in the svg is _LOGO_PATH, verbatim",
+      f'd="{top_bar._LOGO_PATH}"' in html)
+check("no tile inside Klaus: the brand file's #2393f4 square is the app "
+      "icon only", "<rect" not in html and "2393f4" not in html)
 check("colour comes from the CSS var with a currentColor fallback — "
       "the var only exists while the design layer injects toolbar_css; "
-      "on a stock toolbar the star must inherit Anki's own link colour "
+      "on a stock toolbar the k must inherit Anki's own link colour "
       "rather than vanish (an unresolvable var() makes the fill invalid)",
-      "var(--klaus-accent, currentColor)" in html
+      "var(--klaus-text, currentColor)" in html
       and "#" not in html.split("href=#")[1])
-check("clicking the star opens Klaus's own settings",
-      "pycmd('klausmate:settings')" in html)
+check("clicking the k opens Klaus's own settings",
+      "pycmd('klaus_note:settings')" in html)
 check("addressable for styling", 'id="klaus-logo"' in html)
 # The <a> is the accessible element: it carries the name a screen
 # reader announces and the click target. klaus-logo.svg ships its own
@@ -43,9 +44,9 @@ check("addressable for styling", 'id="klaus-logo"' in html)
 check("the <a> owns the accessible name — the inner svg repeats neither "
       "role nor aria-label",
       html.count("aria-label=") == 1
-      and 'aria-label="Klaus settings"' in html
+      and 'aria-label="KlausNote settings"' in html
       and "role=" not in html
-      and 'title="Klaus settings"' in html)
+      and 'title="KlausNote settings"' in html)
 check("the 26x26 seat is unchanged — the box is the toolbar's, only the "
       "artwork inside it changed",
       'width="26" height="26"' in html)
@@ -56,7 +57,7 @@ check("no unsubstituted tokens", "{c[" not in css and "{{" not in css)
 check("styles .header and .hitem", ".header" in css and ".hitem" in css)
 check("RESTYLE ONLY — hides nothing",
       "display: none" not in css and "display:none" not in css)
-# The star's geometry used to live in this sheet, which the KlausBook
+# The logo's geometry used to live in this sheet, which the KlausBook
 # design gate switches off — so the mark moved whenever the design
 # layer did. It now travels inline on the element (logo_html), and this
 # sheet must NOT re-declare it, or the two could drift apart again.
@@ -64,7 +65,7 @@ check("RESTYLE ONLY — hides nothing",
 # otherwise satisfy this pin with no rule present (prose has faked four
 # pins in this repo already).
 _css_code = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
-check("the star's seat is NOT in this sheet — it rides inline so the "
+check("the logo's seat is NOT in this sheet — it rides inline so the "
       "design gate cannot move the mark",
       "#klaus-logo" not in _css_code)
 check("...and logo_html carries the whole seat itself",
@@ -118,10 +119,10 @@ import re
 check("rule bodies contain NO baked hex colours",
       re.search(r"#[0-9A-Fa-f]{6}", rules) is None)
 check("rule bodies reference the klaus vars", "var(--klaus-" in rules)
-check("the logo strokes a var, so it recolours too",
-      "var(--klaus-accent," in top_bar.logo_html())
+check("the logo fills a var, so it recolours too",
+      "var(--klaus-text," in top_bar.logo_html())
 check("top_bar injects without a snapshot",
-      "toolbar_css()" in open("klausmate/top_bar.py").read())
+      "toolbar_css()" in open("klaus_note/top_bar.py").read())
 
 section("seamless with the OS title bar")
 check("no hairline under the bar (would break the seam)",
@@ -146,13 +147,13 @@ check("a hostile value stays inside ONE escaped JS string literal",
 check("...and the colour is the only interpolated part",
       _js_h.replace(json.dumps(_hostile), "") .count('"') == 0)
 check("theme changes repaint the bar (Anki won't re-inject)",
-      "theme_did_change" in open("klausmate/top_bar.py").read())
+      "theme_did_change" in open("klaus_note/top_bar.py").read())
 # The old first-paint override set --klaus-chrome on BOTH the light and
 # dark selectors at once, pinning both themes to one draw-time snapshot
 # — that is why the bar came up light in dark mode. It is gone; the
 # background CSS is what the injector adds now, and the live window
 # colour is only ever pushed imperatively (theme_did_change).
-_src = open("klausmate/top_bar.py").read()
+_src = open("klaus_note/top_bar.py").read()
 _inject = _src.split("def _on_webview_will_set_content")[1].split("def setup")[0]
 check("first paint no longer pins both themes to one snapshot",
       ":root.night-mode" not in _inject)
@@ -165,13 +166,13 @@ check("first paint does NOT inject the chosen wallpaper — the bars "
 check("_background_css takes no bar/bottom distinction any more — its "
       "only remaining caller wants the deck/overview background",
       "def _background_css() -> str:" in _src)
-check("the star's settings command is intercepted",
-      "klausmate:settings" in _src and "webview_did_receive_js_message" in _src)
+check("the logo's settings command is intercepted",
+      "klaus_note:settings" in _src and "webview_did_receive_js_message" in _src)
 
 section("a SEPARATE background for the study screen")
 # Pouya: "this needs to be separate from the background I set for the
 # regular main section." One dispatch function, two independent paths.
-_main_src = open("klausmate/top_bar.py").read()
+_main_src = open("klaus_note/top_bar.py").read()
 _dispatch = _main_src.split("def _on_main_webview_content")[1].split(
     "def _on_js_message")[0]
 check("the reviewer's own webview is handled — context=self in "
@@ -212,7 +213,7 @@ section("the KlausBook design gate")
 # klausbook_design (default OFF) is the master switch between "stock
 # Anki + Klaus tools" and the full KlausBook look. Every visual
 # injection into an Anki-owned surface must consult it; the functional
-# ones (star, Library link, settings pycmd) must not.
+# ones (the k, Library link, settings pycmd) must not.
 check("the toolbar/bottombar restyle is gated — it was the one part of "
       "the design layer no config key reached",
       "design_enabled" in _inject)
@@ -226,7 +227,7 @@ _push = _src.split("def _push_chrome_colour")[1].split("def _addon")[0]
 check("the chrome-colour push is gated — an off state must not eval "
       "into Anki's toolbar on every theme flip",
       "design_enabled" in _push)
-check("the star itself is NOT gated: it survives native mode as the "
+check("the k itself is NOT gated: it survives native mode as the "
       "one Klaus mark and the in-window Preferences entry",
       "design_enabled" not in _src.split("def _on_left_tray")[1].split("def _on_webview_will_set_content")[0])
 check("the dead congrats import is gone for good — that class does not "
@@ -276,9 +277,9 @@ check("logo lands FIRST, other addons' items untouched after it",
       and content[1] == "<div>ankihub-item</div>")
 # Anki draws the toolbar in finish_ui_setup — BEFORE any profile opens —
 # so the first sheet bakes the DEFAULT accent; without this profile-open
-# redraw the star launched blue on every restart whatever theme was
+# redraw the k launched blue on every restart whatever theme was
 # saved (live repro, 2026-08-30). code_only so prose can't fake the pin.
-_wiring_code = code_only(open("klausmate/top_bar.py").read())
+_wiring_code = code_only(open("klaus_note/top_bar.py").read())
 check("setup registers a profile-open toolbar redraw (saved accent "
       "reaches the bar only through it)",
       "gui_hooks.profile_did_open.append(_on_profile_open_redraw)"
@@ -314,44 +315,53 @@ check("only the <button>-specific native strip is extra on the bottom",
       "-webkit-appearance: none !important;" in bcss
       and "#header button" in bcss)
 check("hook injects it for deck-browser and overview bottom bars only",
-      '"DeckBrowserBottomBar"' in open("klausmate/top_bar.py").read()
-      and '"OverviewBottomBar"' in open("klausmate/top_bar.py").read()
-      and "ReviewerBottomBar" not in open("klausmate/top_bar.py").read())
+      '"DeckBrowserBottomBar"' in open("klaus_note/top_bar.py").read()
+      and '"OverviewBottomBar"' in open("klaus_note/top_bar.py").read()
+      and "ReviewerBottomBar" not in open("klaus_note/top_bar.py").read())
 
-section("star geometry shared with Qt surfaces")
-# K-270: star_points() (one 5-vertex polygon) became star_polygons()
-# (five polygons, one per filled path), because the impossible star is
-# five separate shapes. Qt surfaces fill these; the toolbar's SVG fills
-# the same strings. ONE source of truth: _STAR_PATHS.
-polys = top_bar.star_polygons()
-# Vertex counts measured off the asset itself, not retyped: a path that
-# silently loses a vertex is a mark that silently changes shape.
-_counts = [len([c for c in d.replace("M", "").replace("Z", "").split("L")
-                if len(c.split()) == 2])
-           for d in top_bar._STAR_PATHS]
-check("star_polygons parses every vertex of all five paths",
-      len(polys) == 5
-      and [len(p) for p in polys] == _counts
-      and _counts == [39, 46, 37, 39, 35])
-check("all vertices live inside the declared viewBox",
-      top_bar.STAR_VIEWBOX == 1254
-      and all(0 <= x <= top_bar.STAR_VIEWBOX and 0 <= y <= top_bar.STAR_VIEWBOX
-              for poly in polys for x, y in poly))
-check("star_points is gone — one shape of the data, not two",
-      not hasattr(top_bar, "star_points"))
-
-# The asset and the code cannot drift: klausmate/web/klaus-logo.svg is
-# the design source of record (Pouya's original, copied unchanged), and
-# _STAR_PATHS is what actually paints. If someone redraws the mark in
-# the file and forgets the module — or the other way round — this fails.
+section("logo geometry: code == brand file, Qt == web")
+# The code and the brand file cannot drift: docs/reference/brand/
+# klaus-logo.svg is Pouya's file verbatim (blue tile + white k), and
+# _LOGO_PATH is what actually paints. Redraw one and forget the other
+# and this fails.
 import xml.etree.ElementTree as _ET
-_svg_root = _ET.parse("klausmate/web/klaus-logo.svg").getroot()
-_svg_ds = [p.get("d") for p in
-           _svg_root.iter("{http://www.w3.org/2000/svg}path")]
-check("klaus-logo.svg parses and declares the same 1254 box",
-      _svg_root.get("viewBox") == "0 0 1254 1254")
-check("its five path d strings ARE _STAR_PATHS, verbatim",
-      _svg_ds == list(top_bar._STAR_PATHS))
+_NS = "{http://www.w3.org/2000/svg}"
+_svg_root = _ET.parse("docs/reference/brand/klaus-logo.svg").getroot()
+_brand_paths = list(_svg_root.iter(_NS + "path"))
+_brand_k = [p for p in _brand_paths if p.get("fill") == "#fff"]
+check("the brand file is the 1254 tile with one white k path",
+      _svg_root.get("viewBox") == "0 0 1254 1254"
+      and len(_brand_paths) == 1 and len(_brand_k) == 1
+      and [r.get("fill") for r in _svg_root.iter(_NS + "rect")] == ["#2393f4"])
+check("_LOGO_PATH IS the brand file's white path, verbatim, same rule",
+      _brand_k and _brand_k[0].get("d") == top_bar._LOGO_PATH
+      and _brand_k[0].get("fill-rule") == "evenodd")
+# M/L/Z only, so every number pair is a vertex: the crop must hold all
+# of them, or the k is clipped in its seat.
+_d = top_bar._LOGO_PATH
+_nums = [int(n) for n in re.findall(r"-?\d+", _d)]
+_vx, _vy = _nums[0::2], _nums[1::2]
+_bx, _by, _bw, _bh = (int(v) for v in top_bar.LOGO_VIEWBOX.split())
+check("the path is M/L/Z polygons only (no curves to hide a vertex)",
+      set(re.findall(r"[A-Za-z]", _d)) == {"M", "L", "Z"})
+check("every vertex lies inside the cropped viewBox, with a margin",
+      _bx < min(_vx) and max(_vx) < _bx + _bw
+      and _by < min(_vy) and max(_vy) < _by + _bh)
+check("the crop is tight: the k spans over 90% of the box both ways",
+      (max(_vx) - min(_vx)) / _bw > 0.9 and (max(_vy) - min(_vy)) / _bh > 0.9)
+_qt_svg = _ET.fromstring(top_bar.logo_svg("#123456"))
+_qt_paths = list(_qt_svg)
+check("Qt renders the same path, evenodd, in its requested accent",
+      len(_qt_paths) == 1
+      and _qt_paths[0].get("d") == top_bar._LOGO_PATH
+      and _qt_paths[0].get("fill-rule") == "evenodd"
+      and _qt_paths[0].get("fill") == "#123456"
+      and _qt_svg.get("viewBox") == top_bar.LOGO_VIEWBOX)
+check("the fill is attribute-escaped",
+      'fill="a&quot;b"' in top_bar.logo_svg('a"b'))
+check("the star's leftovers are gone",
+      not any(hasattr(top_bar, n) for n in
+              ("star_polygons", "star_points", "_STAR_PATHS", "STAR_VIEWBOX")))
 
 section("live preview mid-review (non-modal Preferences, 2026-08-30)")
 # mw.reset() rebuilds the study queues (aqt/main.py says so in its own
@@ -388,7 +398,7 @@ check("the will_set_content injection and the push share one tag id, "
       in inspect.getsource(top_bar.reviewer_style_push_js))
 
 section("gradient editor wiring (drag on the actual screen)")
-_tb_raw = open("klausmate/top_bar.py").read()
+_tb_raw = open("klaus_note/top_bar.py").read()
 _tb_code = code_only(_tb_raw)
 check("both screens plant the editor at page build while armed — two "
       "gradient_edit_js call sites, each inside its branch's `if css` "
@@ -405,7 +415,7 @@ check("refresh()'s review path cleans THEN re-plants (a planted "
 # Behavioural: a real drag-end message through the real handler.
 import base64 as _b64
 
-_bg_mod = importlib.import_module("klausmate.background")
+_bg_mod = importlib.import_module("klaus_note.background")
 _seen: list = []
 _bg_mod.set_grad_edit(True, lambda t, op, d: _seen.append((t, op, d)))
 _payload = _b64.b64encode(
@@ -413,7 +423,7 @@ _payload = _b64.b64encode(
                 "x": 30, "y": 40, "size": 120}).encode()
 ).decode()
 _res = top_bar._on_js_message(
-    (False, None), "klausmate:bggrad:" + _payload, None
+    (False, None), "klaus_note:bggrad:" + _payload, None
 )
 _bg_mod.set_grad_edit(False, None)
 check("an editor pycmd decodes, clamps, reaches the sink with its op "
@@ -423,7 +433,7 @@ check("an editor pycmd decodes, clamps, reaches the sink with its op "
                      {"i": 1, "x": 30, "y": 40, "size": 120})])
 check("a garbage payload is swallowed, never raises out of the hook",
       top_bar._on_js_message(
-          (False, None), "klausmate:bggrad:@@not-b64@@", None
+          (False, None), "klaus_note:bggrad:@@not-b64@@", None
       ) == (True, None))
 
 raise SystemExit(report())

@@ -14,23 +14,27 @@ import types
 from enum import IntEnum
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.claude/skills/klaus-test/scripts'))
-from anki_stubs import install, exec_klausmate_under_qt, check, report
+from anki_stubs import install, exec_klaus_note_under_qt, check, report, LiveStore
 install()
-from PyQt6 import QtWidgets
+import klaus_note.settings as _settings  # noqa: E402
+from PyQt6 import QtCore, QtWidgets
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 scratch = tempfile.TemporaryDirectory()
-K = exec_klausmate_under_qt(scratch.name)
-store = json.loads(Path('klausmate/config.json').read_text())
+K = exec_klaus_note_under_qt(scratch.name)
+store = json.loads(Path('klaus_note/config.json').read_text())
 store.update(embedding_model='saved-model')
 # A profile whose one-time threshold migration (retention, K-302) already
 # ran: these tests pin what SETTINGS write, not that migration's write.
 store.update(_threshold_scale='centered', _threshold_default_applied=0.45)
 writes, pending, operations, calls = [], [], [], []
-K.get_config = lambda: dict(store)
 def write(cfg):
     store.update(cfg)
     writes.append(dict(cfg))
-K.write_config = write
+_writer = write
+class _Store(LiveStore):
+    def write(self, cfg):
+        _writer(cfg)
+_settings.store = _Store(store)
 mw = QtWidgets.QMainWindow()
 mw.taskman = types.SimpleNamespace(run_on_main=pending.append)
 mw.reset = lambda: None
@@ -46,11 +50,11 @@ theme.theme_manager = types.SimpleNamespace(night_mode=False)
 sys.modules['aqt.theme'] = theme
 mw.pm = types.SimpleNamespace(theme=lambda: Theme.SYSTEM)
 K.mw = sys.modules['aqt'].mw = mw
-mm = importlib.import_module('klausmate.manage_models')
+mm = importlib.import_module('klaus_note.manage_models')
 mm.mw = mw
-importlib.import_module('klausmate.curation').index_stats = lambda: {'exists': False}
+importlib.import_module('klaus_note.curation').index_stats = lambda: {'exists': False}
 sweeps = []
-importlib.import_module('klausmate.index_queue').offer_model_sweep = lambda *args: sweeps.append(args)
+mm.tooltip = lambda text='', **_k: sweeps.append(text)  # a model change tooltips where to re-index
 class Op:
     def __init__(self, parent, op, success):
         self.op, self.success, self.free = op, success, False
@@ -68,7 +72,7 @@ class Op:
             return
         operations.append(self)
 mm.QueryOp = Op
-rt = importlib.import_module('klausmate.ollama_runtime')
+rt = importlib.import_module('klaus_note.ollama_runtime')
 real_setup, real_update, real_ensure = rt.full_setup, rt.update_runtime, rt.ensure_server
 state = {'owned': False, 'version': 'old', 'error': False}
 rt.runtime_download_size_hint = lambda: '~123 MB'
@@ -82,14 +86,14 @@ def setup(cfg, on_progress=None, **kwargs):
     if on_progress:
         on_progress({'status': 'Downloading runtime', 'completed': 25, 'total': 100})
     if state.get('setup_error'):
-        raise RuntimeError('Install failed. Retry Install/start.')
+        raise RuntimeError('Install failed. Retry Install/Start.')
     state['owned'] = True
     return rt.EnsureResult('started', cfg['endpoint'])
 rt.full_setup = setup
 def update(cfg, **kwargs):
     calls.append('update')
     if state.get('update_error'):
-        raise RuntimeError('Update failed. Retry Update runtime.')
+        raise RuntimeError('Update failed. Retry Update Runtime.')
     state['version'] = rt.OLLAMA_VERSION
     return rt.EnsureResult('started', cfg['endpoint'])
 rt.update_runtime = update
@@ -118,7 +122,7 @@ class Client:
         if state.get('delete_error'):
             raise RuntimeError('Delete failed. Retry Delete.')
         models.remove(name)
-importlib.import_module('klausmate.ollama_client').OllamaClient = Client
+importlib.import_module('klaus_note.ollama_client').OllamaClient = Client
 
 def drain():
     while pending:
@@ -175,7 +179,7 @@ search.setText('Ollama endpoint'); app.processEvents()
 check('search reveals matching advanced setting', field('endpoint').isVisible())
 search.clear(); app.processEvents()
 check('clearing search restores collapsed advanced state', not field('endpoint').isVisible())
-required = ['Install/start', 'Stop managed server', 'Update runtime', 'Refresh', 'Download', 'Delete']
+required = ['Install/Start', 'Stop Managed Server', 'Update Runtime', 'Refresh', 'Download', 'Delete']
 check('runtime and inventory controls exist', all(button(s) for s in required))
 if not all(button(s) for s in required):
     dlg.accept()
@@ -184,11 +188,11 @@ status = dlg.findChild(QtWidgets.QLabel, 'OllamaStatus')
 progress = dlg.findChild(QtWidgets.QProgressBar, 'OllamaProgress')
 inventory = dlg.findChild(QtWidgets.QListWidget, 'InstalledModels')
 check('download size shown before install consent', any('~123 MB' in l.text() for l in dlg.findChildren(QtWidgets.QLabel)))
-check('stop initially disabled', not button('Stop managed server').isEnabled())
+check('stop initially disabled', not button('Stop Managed Server').isEnabled())
 button('Refresh').click()
 work(); drain()
 check('refresh retrieves installed names without changing config', inventory.count() == 2 and not writes and field('embedding_model').text() == 'saved-model')
-check('external server cannot be stopped', not button('Stop managed server').isEnabled() and 'external' in status.text().lower())
+check('external server cannot be stopped', not button('Stop Managed Server').isEnabled() and 'external' in status.text().lower())
 check('installed model shows its purpose', 'Card matching' in inventory.item(0).text())
 models.append('vision-model')
 button('Refresh').click(); work(); drain()
@@ -202,8 +206,19 @@ check('selection populates pending embedding field only', field('embedding_model
 auto = dlg.findChild(QtWidgets.QAbstractButton, 'runtime_auto_setup')
 auto.setChecked(False)
 save_preferences()
-check('Save persists selection and automatic management', store['embedding_model'] == 'new-model' and not store['runtime_auto_setup'] and bool(sweeps))
-button('Install/start').click()
+check('Save persists selection and automatic management', store['embedding_model'] == 'new-model' and not store['runtime_auto_setup'] and bool(sweeps) and sweeps[-1].endswith('Press ⟳ in the Library to re-index for the new model.') and 'preferences saved' in sweeps[-1], str(sweeps))  # one tooltip: Anki's closes the previous one
+_hd_calls = []
+_pv_mod = importlib.import_module('klaus_note.pdfjs_viewer')
+_pv_mod.set_hand_drawn_all = lambda flag: _hd_calls.append(flag)
+_hd_sw = dlg.findChild(QtWidgets.QAbstractButton, 'hand_drawn')
+check('Appearance has a "Hand-drawn style" switch, on by default',
+      _hd_sw is not None and _hd_sw.isChecked()
+      and any(l.text() == 'Hand-drawn style' for l in dlg.findChildren(QtWidgets.QLabel)))
+if _hd_sw is not None:
+    _hd_sw.setChecked(False)
+    save_preferences()
+check('Save with it off stores it and tells every open reader', store.get('hand_drawn') is False and _hd_calls == [False], repr((store.get('hand_drawn'), _hd_calls)))
+button('Install/Start').click()
 check('explicit install click queues background setup', len(operations) == 1 and not button('Download').isEnabled())
 before = status.text()
 work()
@@ -211,20 +226,28 @@ check('worker progress does not touch Qt directly', status.text() == before)
 pending.pop(0)()
 check('queued runtime progress reaches main-thread widgets', progress.value() == 25 and status.text() == 'Downloading runtime')
 drain()
-check('runtime progress and completion recover controls', ('setup', store['endpoint']) in calls and button('Download').isEnabled() and button('Stop managed server').isEnabled())
+check('runtime progress and completion recover controls', ('setup', store['endpoint']) in calls and button('Download').isEnabled() and button('Stop Managed Server').isEnabled())
 state['update_error'] = True
-button('Update runtime').click(); work(); drain()
-check('failed update restores retry control', button('Update runtime').isEnabled() and 'Retry Update' in status.text())
+button('Update Runtime').click(); work(); drain()
+check('failed update restores retry control', button('Update Runtime').isEnabled() and 'Retry Update' in status.text())
 state['update_error'] = False
-button('Update runtime').click()
+button('Update Runtime').click()
 work(); drain()
-check('update uses runtime helper and disables current version update', 'update' in calls and not button('Update runtime').isEnabled())
+check('update uses runtime helper and disables current version update', 'update' in calls and not button('Update Runtime').isEnabled())
 field('pull_model').setText('downloaded-model')
+_tasks = importlib.import_module('klaus_note.tasks')
+_tasks.run_on_main = lambda fn: fn()
+_tasks.clear()
 button('Download').click()
+check('a download shows in the status bar while it runs',
+      [t.label for t in _tasks.snapshot() if t.key == 'ollama'] == ['Ollama: Pull downloaded-model'], str(_tasks.snapshot()))
 work()
+_o = [t for t in _tasks.snapshot() if t.key == 'ollama']
+check('...with its streamed progress', len(_o) == 1 and _o[0].done == 50 and _o[0].total == 100, str(_o))
 pending.pop(0)()
 check('streamed model progress reaches main-thread widgets', progress.value() == 50 and status.text() == 'Downloading model')
 drain()
+check('...and leaves the bar when it finishes', all(t.key != 'ollama' for t in _tasks.snapshot()), str(_tasks.snapshot()))
 check('pull downloads requested name and refreshes inventory', ('pull', 'downloaded-model') in calls and inventory.count() == 3 and store['embedding_model'] == 'new-model')
 inventory.setCurrentRow(2)
 button('Delete').click(); answer(False)
@@ -240,11 +263,15 @@ state['error'] = True
 field('pull_model').setText('broken-model')
 button('Download').click(); work(); drain()
 check('failure actionable and controls usable', 'Retry Pull' in status.text() and button('Download').isEnabled() and button('Refresh').isEnabled())
-button('Stop managed server').click(); work(); drain()
-check('stop calls owned server manager', 'stop' in calls and not button('Stop managed server').isEnabled())
+check('a failed download leaves its reason in the bar',
+      [t.message for t in _tasks.snapshot() if t.key == 'ollama'] == ['Pull failed: Download failed. Retry Pull.'], str(_tasks.snapshot()))
+check('...marked as a failure, so it stays until the next task',
+      [t.error for t in _tasks.snapshot() if t.key == 'ollama'] == [True], str(_tasks.snapshot()))
+button('Stop Managed Server').click(); work(); drain()
+check('stop calls owned server manager', 'stop' in calls and not button('Stop Managed Server').isEnabled())
 state['setup_error'] = True
-button('Install/start').click(); work(); drain()
-check('failed install restores controls', button('Install/start').isEnabled() and 'Retry Install/start' in status.text())
+button('Install/Start').click(); work(); drain()
+check('failed install restores controls', button('Install/Start').isEnabled() and 'Retry Install/Start' in status.text())
 state['list_error'] = True
 button('Refresh').click(); work(); drain()
 check('failed refresh restores controls', button('Refresh').isEnabled() and 'Retry Refresh' in status.text())
@@ -254,6 +281,83 @@ save_preferences()
 dlg.accept()
 mm.manage_models_dialog(); dlg = mm._OPEN_DLG
 check('reopen loads saved local settings', field('embedding_model').text() == store['embedding_model'])
+# The state machine (docs/superpowers/specs/2026-09-30-prefs-state-design.md):
+# dirty is a fact, Save writes only what changed.
+check('a fresh dialog has nothing to save', not button('Save').isEnabled())
+_n = len(writes); button('Save').click(); drain()
+check('save with no edit writes nothing', len(writes) == _n, str(writes[_n:]))
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_slider = dlg.findChild(QtWidgets.QSlider, 'pdf_match_threshold')
+_slider.setValue(_slider.value() + 7)   # valueChanged only, no sliderReleased: a keyboard edit
+check('a keyboard-only threshold edit lights Save', button('Save').isEnabled())
+button('Save').click(); drain()
+check('...and is written, with its user-set mark',
+      writes[-1].get('pdf_match_threshold') == round(_slider.value() / 100, 2) and writes[-1].get('_threshold_user_set') is True,
+      str(writes[-1:]))
+dlg.accept(); drain()
+# Appearance in the state too: a previewed edit reverts on discard and writes nothing.
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_bgmod = importlib.import_module('klaus_note.background')
+_st = dlg.prefs_state
+_mode = dlg.findChild(QtWidgets.QComboBox, 'background_mode')
+_mode.setCurrentIndex(_mode.findData('image' if _st.get('background')['mode'] == 'color' else 'color'))
+dlg.findChild(QtCore.QTimer, 'preview_timer').timeout.emit(); app.processEvents()
+check('an appearance edit is a pending value, previews live and lights Save',
+      _st.dirty and _bgmod.preview_active() and button('Save').isEnabled(),
+      f"dirty={_st.dirty} preview={_bgmod.preview_active()} save={button('Save').isEnabled()}")
+_n = len(writes)
+dlg.reject(); answer(True); drain()
+check('discard reverts the preview, clears pending and writes nothing',
+      not _bgmod.preview_active() and not _st.dirty and len(writes) == _n)
+# An appearance nudge-and-back arms the preview with baseline-equal values and
+# leaves nothing pending; a Save for an unrelated edit must still drop that override.
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_st = dlg.prefs_state; _mode = dlg.findChild(QtWidgets.QComboBox, 'background_mode')
+_orig_mode = _st.get('background')['mode']
+_mode.setCurrentIndex(_mode.findData('image' if _orig_mode == 'color' else 'color'))
+_mode.setCurrentIndex(_mode.findData(_orig_mode))
+dlg.findChild(QtCore.QTimer, 'preview_timer').timeout.emit(); app.processEvents()
+check('nudge-and-back: preview armed, nothing pending', _bgmod.preview_active() and 'background' not in _st.pending())
+field('embedding_model').setText('other-model'); field('embedding_model').textEdited.emit('other-model')
+button('Save').click(); drain()
+check('a Save with no appearance change still drops the armed preview override', not _bgmod.preview_active())
+dlg.accept(); drain()
+# Review fix 1: with no stored image, picking Image must stay Image and show Choose Image…
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_st = dlg.prefs_state; _mode = dlg.findChild(QtWidgets.QComboBox, 'background_mode')
+_mode.setCurrentIndex(_mode.findData('image')); app.processEvents()
+_img_btn = next((b for b in dlg.findChildren(QtWidgets.QPushButton) if 'Choose Image' in b.text()), None)
+check('Image mode is reachable from a profile with no image: the mode sticks and Choose Image… shows',
+      _st.get('background')['mode'] == 'image' and _img_btn is not None and not _img_btn.isHidden(),
+      f"mode={_st.get('background')['mode']} btn={_img_btn}")
+dlg.reject(); answer(True); drain()
+# Review fix 2a: painting never marks dirty — a stored threshold outside the slider's range
+# is clamped by the widget; without the binding's syncing guard that clamp reads as an edit.
+store['pdf_match_threshold'] = 1.5  # beyond the slider's range: the widget clamps, the state must not care
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+check('painting a clamped slider from state is not an edit', not dlg.prefs_state.dirty and not button('Save').isEnabled(),
+      str(dlg.prefs_state.pending()))
+dlg.accept(); drain()
+store['pdf_match_threshold'] = 0.45
+# Review fix 2b: with the design on and colour mode stored, opening the dialog and letting the
+# preview tick fire must arm nothing — a handler guard that fires on seed would.
+store.update(klausbook_design=True, background_mode='color')
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+app.processEvents()
+check('opening the dialog schedules no preview and marks nothing',
+      not dlg.findChild(QtCore.QTimer, 'preview_timer').isActive() and not _bgmod.preview_active() and not dlg.prefs_state.dirty,
+      f'timer={dlg.findChild(QtCore.QTimer, "preview_timer").isActive()} preview={_bgmod.preview_active()} pending={dlg.prefs_state.pending()}')
+# …and repainting a CHANGED value from state (what discard does) fires no handler: the
+# Appearance handlers' syncing guard is what keeps a paint from scheduling a preview.
+_mode = dlg.findChild(QtWidgets.QComboBox, 'background_mode'); _timer = dlg.findChild(QtCore.QTimer, 'preview_timer')
+_mode.setCurrentIndex(_mode.findData('image')); app.processEvents(); _timer.stop()
+dlg.prefs_state.discard(); dlg.paint_all(); app.processEvents()
+check('repainting a changed mode from state is not an edit and schedules no preview',
+      _mode.currentData() == 'color' and not dlg.prefs_state.dirty and not _timer.isActive(),
+      f'mode={_mode.currentData()} timer={_timer.isActive()} pending={dlg.prefs_state.pending()}')
+dlg.accept(); drain()
+store.update(klausbook_design=False, background_mode='theme')
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
 nav = dlg.findChild(QtWidgets.QListWidget, 'SettingsNav')
 nav.setCurrentRow(next(i for i in range(nav.count()) if nav.item(i).text() == 'Local models'))
 button('Refresh').click(); work(); drain()
@@ -277,7 +381,7 @@ check('closed dialog ignores queued progress and failure', mm._OPEN_DLG is None 
 # Runtime lifetime is profile scoped, including operations launched from
 # dialogs that have already closed. Exercise the real profile stop hook and
 # readiness coordinator with blocked fake runtime workers.
-sf = importlib.import_module('klausmate.setup_flow')
+sf = importlib.import_module('klaus_note.setup_flow')
 sf.mw = mw
 sf.QueryOp = Op
 sf._first_run_dialog_shown_this_session = True
@@ -293,10 +397,10 @@ def close_profile():
             hook()
     drain()
 
-for action, helper, raises in [('Install/start', 'full_setup', False),
-                                ('Update runtime', 'update_runtime', False),
-                                ('Install/start', 'full_setup', True),
-                                ('Update runtime', 'update_runtime', True)]:
+for action, helper, raises in [('Install/Start', 'full_setup', False),
+                                ('Update Runtime', 'update_runtime', False),
+                                ('Install/Start', 'full_setup', True),
+                                ('Update Runtime', 'update_runtime', True)]:
     case = action + (' exception' if raises else '')
     state.update(owned=True, version='old')
     mm.manage_models_dialog(); dlg = mm._OPEN_DLG
@@ -342,7 +446,7 @@ for action, helper, raises in [('Install/start', 'full_setup', False),
     setattr(rt, helper, original)
 
 # A queued old operation must never start after the next profile is active.
-for action in ('Install/start', 'Stop managed server', 'Update runtime'):
+for action in ('Install/Start', 'Stop Managed Server', 'Update Runtime'):
     state.update(owned=True, version='old')
     mm.manage_models_dialog(); dlg = mm._OPEN_DLG
     button('Refresh').click(); work(); drain()
@@ -359,7 +463,7 @@ for action in ('Install/start', 'Stop managed server', 'Update runtime'):
 # Ordinary dialog close does not invalidate this profile's install consent.
 state.update(owned=False, setup_error=False)
 mm.manage_models_dialog(); dlg = mm._OPEN_DLG
-button('Install/start').click()
+button('Install/Start').click()
 dlg.accept()
 work(); drain()
 check('ordinary dialog close still permits same-profile background install', state['owned'])
@@ -382,21 +486,21 @@ rt.server_manager = types.SimpleNamespace(
     stop=lambda: (state.update(owned=False), running.update(endpoint=None)))
 embed_calls = []
 Client.embed = lambda self, model, texts: (embed_calls.append((self.endpoint, model)) or [[3, 4]])
-provider = importlib.import_module('klausmate.embeddings').provider_from_config(K.get_config)
+provider = importlib.import_module('klaus_note.embeddings').provider_from_config(_settings.read)
 main_ident = threading.get_ident()
 write_threads = []
 def traced_write(cfg):
     write_threads.append(threading.get_ident())
     write(cfg)
-K.write_config = traced_write
-for action in ('Install/start', 'Update runtime'):
+_writer = traced_write
+for action in ('Install/Start', 'Update Runtime'):
     for variant in ('close', 'new endpoint', 'unsaved endpoint', 'stale profile', 'open'):
         case = action + ' relocation ' + variant
         store.update(endpoint='http://127.0.0.1:11434', embedding_model='saved-model', color_theme='rose')
         state.update(owned=False, version='old')
         running['endpoint'] = None
         mm.manage_models_dialog(); dlg = mm._OPEN_DLG
-        if action == 'Update runtime':
+        if action == 'Update Runtime':
             state['owned'] = True
             button('Refresh').click(); work(); drain()
         field('embedding_model').setText('unsaved-model')
@@ -420,7 +524,7 @@ for action in ('Install/start', 'Update runtime'):
         check(case + ' preserves unrelated and unsaved settings',
               store['color_theme'] == 'ocean' and store['embedding_model'] == 'saved-model')
         if variant in ('close', 'open'):
-            result = rt.ensure_server(K.get_config())
+            result = rt.ensure_server(_settings.read())
             check(case + ' subsequent startup reaches running server', result.ok and result.endpoint == running['endpoint'])
             provider.embed(['test'])
             check(case + ' provider uses saved relocation', embed_calls[-1] == (running['endpoint'], 'saved-model'))
@@ -441,8 +545,44 @@ sf._themed_message_box = capture_box
 sf.first_run_check()
 welcome = welcome_boxes[-1]
 check('welcome shows local model guidance and Preferences plus Later',
-      sf.LOCAL_MODELS_COPY in welcome.text() and sorted(b.text() for b in welcome.buttons()) == ['KlausMate Preferences', 'Later']
-      and welcome.defaultButton().text() == 'KlausMate Preferences')
+      sf.LOCAL_MODELS_COPY in welcome.text() and sorted(b.text() for b in welcome.buttons()) == ['KlausNote Preferences', 'Later']
+      and welcome.defaultButton().text() == 'KlausNote Preferences')
 welcome.accept()
 mw.close()
+# Review fix 3: a relocation that lands while the field holds an edit still moves the BASELINE.
+store.update(endpoint='http://127.0.0.1:11434', embedding_model='saved-model')
+state.update(owned=False, version='old'); running['endpoint'] = None
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_st = dlg.prefs_state
+button('Install/Start').click(); work()
+field('endpoint').setText('http://127.0.0.1:11499'); field('endpoint').textEdited.emit('http://127.0.0.1:11499')
+drain()
+check('the relocation was saved underneath the edit', store['endpoint'] == 'http://127.0.0.1:11435')
+check('…the edit is still pending and the baseline moved to the saved endpoint',
+      _st.pending().get('endpoint') == 'http://127.0.0.1:11499' and _st.view() and (_st.discard() or _st.get('endpoint') == 'http://127.0.0.1:11435'),
+      str(_st.view().get('endpoint')))
+dlg.accept(); drain()
+
+# Sync automatically (docs/superpowers/specs/2026-10-02-auto-sync-design.md)
+_as_calls = []
+_auto = importlib.import_module('klaus_note.auto_sync')
+_auto.set_enabled = lambda on: _as_calls.append(on)
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_as_sw = dlg.findChild(QtWidgets.QAbstractButton, 'auto_sync')
+check('General has "Sync automatically", on by default',
+      _as_sw is not None and _as_sw.isChecked() and _as_sw.isEnabled()
+      and any(l.text() == 'Sync automatically' for l in dlg.findChildren(QtWidgets.QLabel)))
+if _as_sw is not None:
+    _as_sw.setChecked(False)
+    save_preferences()
+check('Save with it off stores it and tells auto_sync', store.get('auto_sync') is False and _as_calls == [False],
+      repr((store.get('auto_sync'), _as_calls)))
+dlg.accept(); drain()
+_auto.standing_down_now = lambda: True
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+_as_sw = dlg.findChild(QtWidgets.QAbstractButton, 'auto_sync')
+check('with the Auto Sync add-on on, the switch is disabled and says why',
+      _as_sw is not None and not _as_sw.isEnabled()
+      and any(l.text() == 'The Auto Sync add-on is installed and handles syncing.' for l in dlg.findChildren(QtWidgets.QLabel)))
+dlg.accept(); drain()
 raise SystemExit(report())

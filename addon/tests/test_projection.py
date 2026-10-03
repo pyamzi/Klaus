@@ -1,7 +1,7 @@
-"""Headless tests for K-071: klausmate/projection.py (2D PCA-ish projection
-of embedding vectors) and klausmate/pdf_graph.py (map node/edge assembly
+"""Headless tests for K-071: klaus_note/projection.py (2D PCA-ish projection
+of embedding vectors) and klaus_note/pdf_graph.py (map node/edge assembly
 built on top of it). Both are the headless data layer under the embedding
-map window (klausmate/pdf_map.py, tested separately) — no window/canvas
+map window (klaus_note/pdf_map.py, tested separately) — no window/canvas
 here.
 
 K-138 split the sample cap: ``fit_rows`` now bounds only the rows the two
@@ -12,7 +12,7 @@ rather than parked somewhere.
 
 Style matches the other suites: standalone check()/report/sys.exit runner,
 synthetic package stub so the addon's relative imports resolve (see
-tests/test_klausmate.py's header), aqt stubbed only for the pdf_graph
+tests/test_klaus_note.py's header), aqt stubbed only for the pdf_graph
 section since projection.py itself must import with NO aqt/Qt present at
 all — that is the whole point of the determinism/degenerate-input tests
 running before any stub exists.
@@ -33,7 +33,7 @@ import types
 from array import array
 
 ADDON = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klausmate"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klaus_note"
 )
 
 # Synthetic package so relative imports inside the modules resolve; the
@@ -42,17 +42,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(ADDON), ".claude", "skills", "kl
 from anki_stubs import install_package_stub  # noqa: E402
 
 install_package_stub()
-pkg = sys.modules["klausmate"]
+
+import klaus_note.settings as _settings  # noqa: E402
+pkg = sys.modules["klaus_note"]
 
 # projection.py must be importable with NO aqt/Qt stub in place at all —
 # that is proven simply by this import succeeding before any stub exists
 # anywhere in this file.
-projection = importlib.import_module("klausmate.projection")
-card_index = importlib.import_module("klausmate.card_index")
-pdf_handler = importlib.import_module("klausmate.pdf_handler")
-pdf_index = importlib.import_module("klausmate.pdf_index")
-drive_store = importlib.import_module("klausmate.drive_store")
-pdf_graph = importlib.import_module("klausmate.pdf_graph")
+projection = importlib.import_module("klaus_note.projection")
+card_index = importlib.import_module("klaus_note.card_index")
+pdf_handler = importlib.import_module("klaus_note.pdf_handler")
+pdf_index = importlib.import_module("klaus_note.pdf_index")
+drive_store = importlib.import_module("klaus_note.drive_store")
+pdf_graph = importlib.import_module("klaus_note.pdf_graph")
 
 PASS = 0
 FAIL = 0
@@ -250,7 +252,7 @@ print(f"  .. projected {N_BIG}x{D_BIG} in {elapsed:.2f}s (no numpy, no C ext)")
 # --------------------------------------------------------------- pdf_graph
 #
 # retention.py (imported lazily, inside build_graph_data) pulls in aqt at
-# its own module top via curation.py -- stub exactly what test_klausmate.py
+# its own module top via curation.py -- stub exactly what test_klaus_note.py
 # already stubs for the identical reason, so importing it doesn't require
 # a live Anki.
 
@@ -297,7 +299,7 @@ aqt_mod.gui_hooks = sys.modules["aqt.gui_hooks"]
 _stub("anki")
 _stub("anki.collection", AddNoteRequest=object)
 
-retention = importlib.import_module("klausmate.retention")
+retention = importlib.import_module("klaus_note.retention")
 
 tmp = tempfile.mkdtemp(prefix="klaus_test_projection_")
 try:
@@ -337,9 +339,9 @@ try:
     src_b = _write_context("PdfB")
     src_c = _write_context("PdfC")  # enumerated, but gets no matches.json
 
-    retention.USER_FILES = tmp  # redirect the module-global path, same
-    # pattern tests/test_klausmate.py uses to point retention at a scratch
-    # dir instead of the real klausmate/user_files.
+    _settings.user_files_dir = tmp  # redirect the user-files path, same
+    # pattern tests/test_klaus_note.py uses to point retention at a scratch
+    # dir instead of the real klaus_note/user_files.
 
     matches_a = [(1, 0.90), (2, 0.85), (3, 0.40)]
     matches_b = [(5, 0.95), (6, 0.20)]
@@ -489,7 +491,7 @@ try:
 
     _mk_index()
     os.makedirs(os.path.join(cache_tmp, "contexts"))
-    retention.USER_FILES = cache_tmp
+    _settings.user_files_dir = cache_tmp
 
     # One PDF with a match cache, so the graph has a node whose threshold
     # can be moved later without touching the card index.
@@ -785,7 +787,7 @@ print("== pdf_graph: the cache's signature gate is not hand-spelled ==")
 # Widening index_signature from (provider, model) to (provider, model, dims)
 # broke EIGHT call sites at once, and silently: a two-tuple compared against
 # a three-tuple is simply never equal, so every cache read as stale and the
-# collection was re-embedded on a paid API. test_klausmate.py pins the six
+# collection was re-embedded on a paid API. test_klaus_note.py pins the six
 # modules that existed then by regex; this is the same pin for the cache
 # this card added, done structurally so it cannot be dodged by spelling.
 import ast as _ast  # noqa: E402 - local to this section, like the AST pins

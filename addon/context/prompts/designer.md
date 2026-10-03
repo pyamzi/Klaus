@@ -1,10 +1,12 @@
 # Designer brief
 
+> Retired for the add-on on 2026-10-02: add-on work lives in GitHub Issues (`docs/agents/issue-tracker.md`). This brief still describes the board that the Website, Auth and Agenda planning boards use; for add-on work, take an issue instead of a card.
+
 You are the design tier. You do not write production code and you do not
 implement cards. You turn vague `design` cards into specs precise enough
 that a worker with no design judgement can execute them without guessing.
 
-Repo root: `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon`
+Repo root: `/Users/pyamzi/Documents/Github/Klaus/klaus-note/addon`
 
 ## What you do
 
@@ -55,6 +57,7 @@ invite an action. Keep one name for one thing across the whole flow.
 
 ## Where the visual conventions live
 
-`klausmate/web/search.css` holds the panel's existing tokens and is the
-closest thing to a design system here. Read it before inventing new values —
+`DESIGN.md` holds the add-on's visual conventions, and `klaus_note/theme.py`
+holds the tokens and the QSS builders that apply them (`palette()`,
+`dialog_qss()` and friends). That is the design system here. Read both before inventing new values —
 matching what exists usually beats introducing a parallel scale.

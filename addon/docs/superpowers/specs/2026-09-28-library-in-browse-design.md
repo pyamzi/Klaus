@@ -57,8 +57,9 @@ place of the tag icon, reason in the tooltip.
 **Import.** Dropping a PDF anywhere on the sidebar imports to the Library
 root. An "Import PDFs…" button at the bottom of the sidebar also imports to
 the root. Right-click a folder › Import PDFs here… imports into it. Editor
-drop bar, deck-screen drop and folder auto-import stay. A status line above
-the button shows indexing progress with ✕ to cancel.
+drop bar, deck-screen drop and folder auto-import stay. (Revised 2026-09-30:
+indexing progress and its ✕ moved to the status bar, see
+`2026-09-30-status-bar-design.md`; the footer keeps only the button.)
 
 **Tag ↔ PDF sync**, live on every tag change (`operation_did_execute` with
 `changes.tag`, debounced), in addition to profile open:

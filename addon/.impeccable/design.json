@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatedAt": "2026-08-26T06:26:49Z",
-  "title": "Design System: KlausMate",
+  "title": "Design System: KlausNote",
   "extensions": {
     "colorMeta": {
       "system-blue": {
@@ -308,7 +308,7 @@
     "typographyMeta": {
       "wordmark": {
         "displayName": "Wordmark",
-        "purpose": "The KlausMate identity in light Garamond \u2014 sidebar and identity moments only; the system's one serif."
+        "purpose": "The KlausNote identity in light Garamond \u2014 sidebar and identity moments only; the system's one serif."
       },
       "page-title": {
         "displayName": "Page Title",
@@ -413,8 +413,8 @@
       "name": "Wordmark",
       "kind": "custom",
       "refersTo": "card",
-      "description": "The KlausMate identity: light Garamond over a muted version line \u2014 the one serif moment in the system.",
-      "html": "<div class=\"ds-wordmark\">KlausMate<div class=\"ds-wordmark-ver\">Version 0.1.3</div></div>",
+      "description": "The KlausNote identity: light Garamond over a muted version line \u2014 the one serif moment in the system.",
+      "html": "<div class=\"ds-wordmark\">KlausNote<div class=\"ds-wordmark-ver\">Version 0.1.3</div></div>",
       "css": ".ds-wordmark { font-family: \"EB Garamond\", Garamond, \"Apple Garamond\", Georgia, serif; font-size: 18px; font-weight: 300; color: #1D1D1F; } .ds-wordmark-ver { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; font-size: 11px; color: #6A6A6F; }"
     },
     {
@@ -428,7 +428,7 @@
   ],
   "narrative": {
     "northStar": "The Quiet Clinic",
-    "overview": "KlausMate dresses Anki the way a well-run clinic dresses a hospital: calm, sterile-clean Apple surfaces where nothing shouts, because the user \u2014 a medical student mid-exam-cycle \u2014 is already carrying enough stimulation. One hand-drawn star and one light-Garamond wordmark are the human pulse in the sterile field; everything else defers to the system. The entire look of every surface is a function of theme.palette(night): one token module, thirteen accent presets plus a custom colour, light and dark as parallel worlds with identical vocabularies. Controls are refined and restrained \u2014 visible but understated, answering interaction with soft tints rather than hard state flips.",
+    "overview": "KlausNote dresses Anki the way a well-run clinic dresses a hospital: calm, sterile-clean Apple surfaces where nothing shouts, because the user \u2014 a medical student mid-exam-cycle \u2014 is already carrying enough stimulation. One hand-drawn star and one light-Garamond wordmark are the human pulse in the sterile field; everything else defers to the system. The entire look of every surface is a function of theme.palette(night): one token module, thirteen accent presets plus a custom colour, light and dark as parallel worlds with identical vocabularies. Controls are refined and restrained \u2014 visible but understated, answering interaction with soft tints rather than hard state flips.",
     "keyCharacteristics": [
       "Apple system palette, light and dark, with identical semantic key sets",
       "One accent family, user-selectable (13 presets + custom), overriding only blue-family tokens",

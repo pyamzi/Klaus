@@ -1,6 +1,6 @@
 ---
-name: KlausMate
-description: The Quiet Clinic — Apple-calm study chrome inside Anki, with one hand-drawn star.
+name: KlausNote
+description: The Quiet Clinic — Apple-calm study chrome inside Anki, with one hand-drawn k.
 colors:
   fog-white: "#F5F5F7"
   pure-surface: "#FFFFFF"
@@ -25,9 +25,9 @@ colors:
   claude-terracotta: "#D97757"
 typography:
   wordmark:
-    fontFamily: "EB Garamond, Garamond, Apple Garamond, Georgia, serif"
+    fontFamily: "Excalifont, EB Garamond, Garamond, Georgia, serif"
     fontSize: "18px"
-    fontWeight: 300
+    fontWeight: 400
   page-title:
     fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
     fontSize: "24px"
@@ -98,26 +98,27 @@ components:
     padding: "4px 8px"
 ---
 
-# Design System: KlausMate
+# Design System: KlausNote
 
 ## Overview
 
 **Creative North Star: "The Quiet Clinic"**
 
-KlausMate dresses Anki the way a well-run clinic dresses a hospital:
+KlausNote dresses Anki the way a well-run clinic dresses a hospital:
 calm, sterile-clean Apple surfaces where nothing shouts, because the
 patient — a medical student mid-exam-cycle — is already carrying enough
 stimulation. The visual world is the Apple system palette held under
 strict token discipline: fog-white fields, hairline borders, white
 cards, and exactly one saturated voice (the user's chosen accent) used
 sparingly. Into this sterile field walks one deliberately human
-artifact: a hand-drawn, point-down star, traced from the owner's
-sketch, always an open stroke in the accent colour, never boxed into an
-icon square — the warm pulse in the clinic. Beside it, the "KlausMate"
-wordmark in light Garamond is the single serif voice in an otherwise
-system-sans world.
+artifact: Pouya's hand-drawn k, a brush-like lowercase letter with a
+separate dash at its left, filled solid in the accent colour and never
+boxed into an icon square inside Klaus — the warm pulse in the clinic.
+Beside it, the "KlausNote" wordmark in Excalifont, the same hand-drawn
+hand as the k, is the single display voice in an otherwise system-sans
+world.
 
-The system is implemented as one Python module (`klausmate/theme.py`)
+The system is implemented as one Python module (`klaus_note/theme.py`)
 of semantic tokens and per-surface QSS builders; the entire look of
 every dialog, panel, toolbar, and webview is a function of
 `palette(night)`. That is not an implementation detail, it is the
@@ -137,8 +138,8 @@ state flips.
 - Seamless window chrome: the top and bottom toolbars read as part of
   the OS window, matching its own colour — independent of whatever
   custom wallpaper is chosen for the deck screen.
-- One hand-drawn mark and one Garamond wordmark carrying the entire
-  brand; everything else defers to the system.
+- One hand-drawn mark and one hand-drawn (Excalifont) wordmark carrying
+  the entire brand; everything else defers to the system.
 
 ## Colors
 
@@ -152,7 +153,7 @@ vocabulary.
   brightens to **Night Accent** (#4FACFE) because saturation reads
   differently on graphite; `blue_accent` encodes exactly this rule
   (base in light, bright in dark).
-- **System Blue Bright** (#007AFF): focus rings, the toolbar star, and
+- **System Blue Bright** (#007AFF): focus rings, the toolbar k, and
   translucent selection tints (via `accent_rgba`).
 - The whole blue family (`blue`, `blue_hover`, `blue_pressed`,
   `blue_border`, `blue_bright`, `blue_accent`) is what an accent theme
@@ -203,18 +204,19 @@ page dissolves into it.
 
 ## Typography
 
-**Display Font:** EB Garamond (Garamond → Georgia → serif) — the
-wordmark only.
+**Display Font:** Excalifont (bundled as `klaus_note/web/fonts/
+Excalifont-Regular.ttf`, registered by `theme.register_wordmark_font`;
+falls back to Garamond → Georgia → serif) — the wordmark only.
 **Body Font:** the Apple system stack (-apple-system, BlinkMacSystemFont,
 "Segoe UI", Roboto, Helvetica, Arial).
 
-**Character:** a single light serif signature over a fully system-native
-text world — like a clinician's engraved nameplate on an otherwise
-standardized door.
+**Character:** a single hand-drawn signature over a fully system-native
+text world — a handwritten name on an otherwise standardized door, in
+the same hand as the k.
 
 ### Hierarchy
-- **Wordmark** (300, 18px): "KlausMate" in light Garamond, sidebar and
-  identity moments only. The lightness is the point.
+- **Wordmark** (400, 18px): "KlausNote" in Excalifont, sidebar and
+  identity moments only. Excalifont has one weight; the hand is the point.
 - **Page Title** (600, 24px): one per settings page ("General",
   "Appearance"…).
 - **Heading** (700, 14px): section/card headings (SubHeaderLabel,
@@ -232,8 +234,9 @@ standardized door.
 builder's emitted CSS and fails the suite on any other value. An
 off-scale value is drift, not a style choice.
 
-**The One Serif Rule.** Garamond appears exactly once — the wordmark.
-No headings, no body text, no second serif moment.
+**The One Display Font Rule.** Excalifont appears exactly once — the
+wordmark. No headings, no body text, no second display moment. (Until
+2026-10-01 this was the One Serif Rule, with a Garamond wordmark.)
 
 ## Layout
 
@@ -296,9 +299,9 @@ inputs, chips, nav rows), 6px for small controls (swatches, list items,
 checkbox indicators), 7px only as the slider handle's circle
 (height/2), 4px and 2px for slim fills (progress, grooves), and 0 only
 as a deliberate flattener. Hairlines are always 1px in Fog Border. The
-star mark is the one irregular shape in the system — a hand-traced,
-self-crossing pentagram stroke with round caps and joins, its
-imperfection deliberately preserved.
+k mark is the one irregular shape in the system — a hand-drawn letter
+traced into straight-segment polygons, its wobble deliberately
+preserved.
 
 ## Components
 
@@ -370,12 +373,35 @@ imperfection deliberately preserved.
   square is the user's own colour and opens the picker; cancelling the
   picker still selects custom with its held colour.
 
-### The Star (signature)
-- The hand-drawn point-down pentagram from `top_bar._STAR_PATH` — the
-  single source of truth for both the toolbar SVG and any Qt-side
-  pixmap. Always an open stroke in the accent (`--klaus-accent` /
-  `blue_accent`), round caps and joins, **never** filled, boxed, or
-  squared. Clicking it opens KlausMate Preferences.
+### PDF Reader
+- **One reader, identical everywhere.** Every place a PDF opens shows
+  the same surface: pdf.js pages in a webview, with the tab strip
+  (`[＋] [tabs] … [page n/m]`) above them. Each host keeps its own tab
+  set; nothing about the reader changes with the window it sits in,
+  because the panel styles itself (`pdf_panel_qss`) and the page takes
+  its colours from `theme.css_vars`.
+- **Paper on ground.** Pages are white paper with a 4px radius and
+  the soft page shadow (see Elevation) on the panel's ground; the
+  thumbnail strip repeats them in miniature.
+- **Tools.** The find bar is a flat strip above the pages (hairline
+  below it). The annotation pill (Highlight, Add Text, the ink row,
+  −/%/+/fit) and the context menu float over the page on soft shadows
+  — with paper, the only things that cast one. Inks are page colours,
+  not chrome: they bake into the PDF.
+- The native renderer was deleted in PDF reader 5/5; there is no
+  second renderer to match.
+
+### The k (signature)
+- Pouya's hand-drawn k (2026-10-01), one `fill-rule="evenodd"` path in
+  `top_bar._LOGO_PATH`, copied verbatim from the white shape in
+  `docs/reference/brand/klaus-logo.svg`. It is the single source of
+  truth for both the toolbar SVG and the Preferences sidebar pixmap
+  (`top_bar.logo_svg`, rendered by `QSvgRenderer`).
+- Inside Klaus it is **just the k**: filled solid in the accent
+  (`--klaus-accent` / `blue_accent`), never stroked, on a transparent
+  ground, in a viewBox cropped to the letter so it fills its seat.
+  The brand file's #2393f4 tile belongs to the app icon only.
+  Clicking the k opens KlausNote Preferences.
 
 ## Do's and Don'ts
 
@@ -402,8 +428,9 @@ imperfection deliberately preserved.
   files — the test suite scans for off-scale values and will fail.
 - **Don't** use drop shadows; depth is tone, hairline, and frost.
 - **Don't** use opaque fills for chrome-bar hover states — veils only.
-- **Don't** box, fill, or "iconify" the star, and don't introduce a
-  second serif moment beyond the Garamond wordmark.
+- **Don't** box, stroke, or "iconify" the k inside Klaus (the blue
+  tile is for the app icon only), and don't introduce a
+  second display-font moment beyond the Excalifont wordmark.
 - **Don't** build sidebar navigation from per-item buttons, or derive
   control geometry from QSS size hints — hard view geometry only.
 - **Don't** fork backgrounds or text per accent theme, and don't let

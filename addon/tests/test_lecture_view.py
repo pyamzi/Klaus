@@ -20,10 +20,12 @@ from anki_stubs import install, check, section, report  # noqa: E402
 
 install()
 
-card_index = importlib.import_module("klausmate.card_index")
-pdf_index = importlib.import_module("klausmate.pdf_index")
-pdf_handler = importlib.import_module("klausmate.pdf_handler")
-lecture_view = importlib.import_module("klausmate.lecture_view")
+import klaus_note.settings as _settings  # noqa: E402
+
+card_index = importlib.import_module("klaus_note.card_index")
+pdf_index = importlib.import_module("klaus_note.pdf_index")
+pdf_handler = importlib.import_module("klaus_note.pdf_handler")
+lecture_view = importlib.import_module("klaus_note.lecture_view")
 
 LectureMatch = lecture_view.LectureMatch
 NoLecture = lecture_view.NoLecture
@@ -427,8 +429,8 @@ section("dock open/width persistence (pdf_tabs.json's lecture_view key)")
 # never the real one.
 _st_ufd = fresh_ufd()
 _st_file = os.path.join(_st_ufd, pdf_handler._OPEN_TABS_FILE)
-_orig_user_files = lecture_view._user_files
-lecture_view._user_files = lambda: _st_ufd
+_orig_user_files = _settings.user_files_dir
+_settings.user_files_dir = _st_ufd
 try:
     check("no saved state yet reads as an empty dict, never None — the "
           "callers do state.update() on whatever comes back",
@@ -492,11 +494,11 @@ try:
           _fd.hidden is True and _fd.saved_widths == 1
           and lecture_view._saved_state().get("open") is False)
 finally:
-    lecture_view._user_files = _orig_user_files
+    _settings.user_files_dir = _orig_user_files
     lecture_view._dock = _BOOT_DOCK
 
 
-section("bridge contract (klausmate:lecture)")
+section("bridge contract (klaus_note:lecture)")
 
 
 class _RecTimer:
@@ -514,13 +516,13 @@ lecture_view.QTimer = _RecTimer
 try:
     check("a foreign message travels on UNCHANGED — the hook is a chain "
           "and __init__'s handler (and AnkiHub's) still get their turn",
-          lecture_view._on_js_message(("sentinel", 1), "klausmate:settings",
+          lecture_view._on_js_message(("sentinel", 1), "klaus_note:settings",
                                       None)
           == ("sentinel", 1))
     check("the exact message reports HANDLED — returning False re-opens "
           "the pycmd to the rest of Anki's hook chain, which has no idea "
           "what it is",
-          lecture_view._on_js_message((False, None), "klausmate:lecture",
+          lecture_view._on_js_message((False, None), "klaus_note:lecture",
                                       None)
           == (True, None))
     check("...and the toggle is DEFERRED off the bridge, never run inside "
@@ -534,7 +536,7 @@ finally:
 
 section("glue pins (source)")
 
-SRC_PATH = "klausmate/lecture_view.py"
+SRC_PATH = "klaus_note/lecture_view.py"
 with open(SRC_PATH, encoding="utf-8") as f:
     SRC = f.read()
 
@@ -562,7 +564,7 @@ for hook in (
     check("registers %s" % hook, hook in CODE)
 
 check("bottom bar name-matched", '"ReviewerBottomBar"' in SRC)
-check("button posts klausmate:lecture", 'pycmd("klausmate:lecture")' in SRC)
+check("button posts klaus_note:lecture", 'pycmd("klaus_note:lecture")' in SRC)
 check("button id present", "klaus-lecture-btn" in SRC)
 check("button sits beside More", "insertBefore(b, more)" in SRC)
 
@@ -595,7 +597,7 @@ check(
     "min-width threshold leaves room for the four ease buttons",
     "pad * 6" in SRC,
 )
-check("bridge matches the exact message", '"klausmate:lecture"' in CODE)
+check("bridge matches the exact message", '"klaus_note:lecture"' in CODE)
 check("toggle deferred out of the bridge", "QTimer.singleShot(0, toggle_lecture_view)" in CODE)
 check("no app-modal exec anywhere", ".exec()" not in CODE)
 check("sidebar cleanup on the close path", "self.sidebar.cleanup()" in CODE)
@@ -611,22 +613,22 @@ check(
     "empty-state sentence is Pouya's, verbatim",
     lecture_view.NO_LECTURE_TEXT == "No lecture page available for this card.",
 )
-check("dock is right-area", "RightDockWidgetArea" in CODE)
+check("the panel sits in the review splitter, not a full-height dock", "REVIEW_SPLIT" in CODE and "addDockWidget" not in CODE)
 check("state change hides outside review", "_dock.hide()" in CODE)
 
 section("wiring pins")
 
-with open("klausmate/__init__.py", encoding="utf-8") as f:
+with open("klaus_note/__init__.py", encoding="utf-8") as f:
     INIT = f.read()
 check(
     "setup wired in __init__ (guarded)",
     "from . import lecture_view as _lecture_view" in INIT
     and "_lecture_view.setup()" in INIT,
 )
-with open("klausmate/config.json", encoding="utf-8") as f:
+with open("klaus_note/config.json", encoding="utf-8") as f:
     CONF = json.load(f)
 check("config default present and true", CONF.get("lecture_view_reopen") is True)
-with open("klausmate/config.md", encoding="utf-8") as f:
+with open("klaus_note/config.md", encoding="utf-8") as f:
     check("config.md documents the key", "lecture_view_reopen" in f.read())
 
 check("module has aqt-free/glue divider", "aqt glue" in SRC)
@@ -637,7 +639,7 @@ check("setup exists", callable(lecture_view.setup))
 
 section("the card-index directory is spelled three times — they must agree")
 # CARD_INDEX_SUBDIR is one of three INDEPENDENT copies of the same on-disk
-# path (curation.INDEX_DIR, lecture_view.CARD_INDEX_SUBDIR,
+# path (curation.index_dir(), lecture_view.CARD_INDEX_SUBDIR,
 # pdf_graph.CARD_INDEX_SUBDIR). Every fixture in this file builds its
 # directory FROM the constant, so the constant defines both the code and
 # the test and the two can never disagree — a self-referential pin, the
@@ -668,14 +670,26 @@ def _module_str_const(path, name):
     return None
 
 
-_cur_dir = _module_str_const("klausmate/curation.py", "INDEX_DIR")
-_graph_dir = _module_str_const("klausmate/pdf_graph.py", "CARD_INDEX_SUBDIR")
+def _func_str_const(path, name):
+    """The last string literal inside module-level `def name(...)` of `path`."""
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            strings = [n.value for n in ast.walk(node)
+                       if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+            return strings[-1] if strings else None
+    return None
+
+
+_cur_dir = _func_str_const("klaus_note/curation.py", "index_dir")
+_graph_dir = _module_str_const("klaus_note/pdf_graph.py", "CARD_INDEX_SUBDIR")
 check("all three copies are still there to be compared — a copy that "
       "vanishes must fail loudly, not quietly compare nothing",
       isinstance(_cur_dir, str) and _cur_dir
       and isinstance(_graph_dir, str) and _graph_dir
       and isinstance(lecture_view.CARD_INDEX_SUBDIR, str))
-check("curation.INDEX_DIR, lecture_view.CARD_INDEX_SUBDIR and "
+check("curation.index_dir(), lecture_view.CARD_INDEX_SUBDIR and "
       "pdf_graph.CARD_INDEX_SUBDIR name the SAME directory — the writer, "
       "the reviewer's reader and the map's reader must not drift apart",
       lecture_view.CARD_INDEX_SUBDIR == _cur_dir == _graph_dir)
@@ -753,20 +767,20 @@ finally:
     (lecture_view.gui_hooks, lecture_view.mw,
      lecture_view._setup_done) = _saved_glue
 
-section("a partial Qt surface degrades the DOCK, not the whole module (K-161)")
-# ``class LectureDock(QDockWidget)`` with ``QDockWidget = None`` in the
+section("a partial Qt surface degrades the PANEL, not the whole module (K-161)")
+# ``class LectureDock(QWidget)`` with ``QWidget = None`` in the
 # import fallback is a hard TypeError AT IMPORT TIME — "NoneType takes no
 # arguments" — so an environment whose aqt.qt is partial loses the
 # resolver, the config keys and the hooks too, not just the panel it could
 # not have drawn anyway. The guarded-import-with-None-fallback convention
-# (PDF_VIEWER_AVAILABLE and friends) is correct for names used as VALUES
+# (PDFJS_AVAILABLE and friends) is correct for names used as VALUES
 # and a trap for names used as BASE CLASSES. Found in
 # index_queue._StatusDock first (K-152, where tests/test_drive.py's
 # explicit aqt.qt stub reported the whole K-152 block as one opaque
 # failure); this is the twin.
 #
 # Run in a SUBPROCESS, deliberately. The pin must swap aqt.qt for a
-# namespace WITHOUT QDockWidget and re-import lecture_view; doing that in
+# namespace WITHOUT QSplitter and re-import lecture_view; doing that in
 # process would leave a differently-configured module in sys.modules for
 # every section after it, and the boot-state pins at the top of this file
 # would be reading a different module than they were captured from. A
@@ -787,7 +801,7 @@ class _Any:
 
 
 # tests/test_drive.py's shape exactly: an EXPLICIT aqt.qt whose hand-listed
-# names do not include QDockWidget. anki_stubs' own aqt.qt is PERMISSIVE
+# names do not include QSplitter. anki_stubs' own aqt.qt is PERMISSIVE
 # (PEP 562 __getattr__ auto-vivifies every name), which is why this whole
 # class of defect is invisible to the default bootstrap and why the pin
 # builds its own stub rather than reusing it.
@@ -796,15 +810,15 @@ for _n in ("QLabel", "QStackedWidget", "QTimer", "QVBoxLayout", "QWidget"):
     setattr(shim, _n, _Any)
 shim.Qt = _Any()
 sys.modules["aqt.qt"] = shim
-sys.modules.pop("klausmate.lecture_view", None)
+sys.modules.pop("klaus_note.lecture_view", None)
 
-lv = importlib.import_module("klausmate.lecture_view")
+lv = importlib.import_module("klaus_note.lecture_view")
 
 # Importing is most of the point, but on its own it would also pass if the
 # probe simply failed to reproduce a partial surface. So prove the module
 # really did take the fallback, really did degrade the base, and really is
 # still usable above the divider.
-assert lv.QDockWidget is None, "probe did not reproduce a partial aqt.qt"
+assert lv.QSplitter is None, "probe did not reproduce a partial aqt.qt"
 assert lv.LectureDock.__bases__ == (object,), lv.LectureDock.__bases__
 assert lv._ensure_dock() is None, "dock build must refuse, not raise"
 assert lv._dock is None, "a refused build must not latch a half-made dock"
@@ -819,7 +833,7 @@ _probe = subprocess.run(
     env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
 )
 check(
-    "lecture_view IMPORTS under an aqt.qt with no QDockWidget — a partial "
+    "lecture_view IMPORTS under an aqt.qt with no QSplitter — a partial "
     "Qt surface must cost the dock, not the resolver, the config keys and "
     "the hooks as well%s" % (
         "" if _probe.returncode == 0
@@ -834,7 +848,7 @@ section("no OTHER module regrows the shape (K-161 sweep)")
 # three" — there are exactly three, and this is what stops a fourth. A
 # base class is unusable after a failed guarded import when the handler
 # either assigns it None (TypeError at class definition) or never rebinds
-# it at all (NameError). klausmate/md3_switch.py is the pattern done right
+# it at all (NameError). klaus_note/md3_switch.py is the pattern done right
 # and must stay clear of this: it falls back to ``QCheckBox = object``.
 
 
@@ -882,7 +896,7 @@ def _guarded_bases(path):
 
 
 # EMPTY as of K-164, which fixed the one known survivor
-# (klausmate/pdfjs_viewer.py, PdfJsViewer(QWidget)) — the entry was
+# (klaus_note/pdfjs_viewer.py, PdfJsViewer(QWidget)) — the entry was
 # DELETED rather than joined by a second, because an allowlist that is
 # allowed to grow is not a pin. The mechanism stays: an entry added here
 # must name the card that owns it, and the stale-entry check below then
@@ -890,7 +904,7 @@ def _guarded_bases(path):
 _SWEEP_ALLOWED: dict = {}
 
 _swept, _offenders = 0, []
-for _path in sorted(glob.glob("klausmate/**/*.py", recursive=True)):
+for _path in sorted(glob.glob("klaus_note/**/*.py", recursive=True)):
     _rel = _path.replace(os.sep, "/")
     if "/vendor/" in _rel:
         continue
@@ -904,12 +918,12 @@ check("the sweep actually walked the package — an empty glob would make "
       "every finding below vacuously clean", _swept > 20)
 check("md3_switch is the pattern done right and is swept: its fallback is "
       "``QCheckBox = object``, so it must NOT be reported",
-      not any(f.startswith("klausmate/md3_switch.py") for f in _offenders))
+      not any(f.startswith("klaus_note/md3_switch.py") for f in _offenders))
 check("lecture_view is no longer one of them",
-      not any(f.startswith("klausmate/lecture_view.py") for f in _offenders))
+      not any(f.startswith("klaus_note/lecture_view.py") for f in _offenders))
 check("pdfjs_viewer is no longer one of them either (K-164) — the third "
       "and last instance",
-      not any(f.startswith("klausmate/pdfjs_viewer.py") for f in _offenders))
+      not any(f.startswith("klaus_note/pdfjs_viewer.py") for f in _offenders))
 check("the allowlist is EMPTY, so the sweep below holds repo-wide with "
       "nothing excused from it (K-164 closed the last entry)",
       _SWEEP_ALLOWED == {})

@@ -18,7 +18,7 @@ from anki_stubs import check, code_only, install, report, section
 install()
 import importlib
 
-cf = importlib.import_module("klausmate.card_forge")
+cf = importlib.import_module("klaus_note.card_forge")
 
 PAGES = {3: "Incidence is new cases over person-time.",
          4: "Prevalence is existing cases at a point in time."}
@@ -231,7 +231,7 @@ check("a regenerated card is PENDING — regenerating is not accepting",
       _q3.to_write() == [])
 
 section("the engine stays free of the host")
-_SRC = open("klausmate/card_forge.py").read()
+_SRC = open("klaus_note/card_forge.py").read()
 _CODE = code_only(_SRC)
 check("no aqt import at module level — the UI surface is undecided and this "
       "must not presuppose one",

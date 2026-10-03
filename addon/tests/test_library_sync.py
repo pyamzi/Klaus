@@ -24,9 +24,10 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-sys.modules["klausmate"].get_config = lambda: {}
 
-ts = importlib.import_module("klausmate.tag_sync")
+import klaus_note.settings as _settings  # noqa: E402
+
+ts = importlib.import_module("klaus_note.tag_sync")
 plan = ts.plan_library_sync
 
 
@@ -141,15 +142,12 @@ check("everything tagged and present -> []",
 
 # ------------------------------------------------------------ apply layer
 
-curation = importlib.import_module("klausmate.curation")
-drive_store = importlib.import_module("klausmate.drive_store")
-pdf_handler = importlib.import_module("klausmate.pdf_handler")
-retention = importlib.import_module("klausmate.retention")
+curation = importlib.import_module("klaus_note.curation")
+drive_store = importlib.import_module("klaus_note.drive_store")
+pdf_handler = importlib.import_module("klaus_note.pdf_handler")
+retention = importlib.import_module("klaus_note.retention")
 UF = tempfile.mkdtemp(prefix="klaus-k306-")  # fresh: the stub's scratch dir persists between runs
-for _name, _mod in list(sys.modules.items()):
-    if (_name == "klausmate" or _name.startswith("klausmate.")) and hasattr(_mod, "USER_FILES"):
-        _mod.USER_FILES = UF
-sys.modules["klausmate"].USER_FILES = UF  # pdf_drive._user_files reads the package
+_settings.user_files_dir = UF
 root = tempfile.mkdtemp(prefix="klaus-root-")
 pdf_handler._live_library_root = lambda: root
 os.makedirs(os.path.join(UF, "contexts"), exist_ok=True)
@@ -202,6 +200,7 @@ ops = []
 class Op:
     def __init__(self, parent=None, op=None):
         self.op = op
+        self.parent = parent
         ops.append(self)
 
     def success(self, fn):
@@ -264,7 +263,7 @@ ts.reconcile_from_tags(col)
 check("a delete is asked about once, not again on the next pass", len(asked) == 1, str(asked))
 ts.note_user_deleted(["!Library::Onc"])  # the folder tag: covers the PDFs under it
 
-pdf_drive = importlib.import_module("klausmate.pdf_drive")
+pdf_drive = importlib.import_module("klaus_note.pdf_drive")
 pdf_drive._move_to_trash = lambda path: trashed.append(path)
 ts._ask = lambda text, on_yes, on_no: on_yes()
 ts.reconcile_from_tags(col)
@@ -278,6 +277,13 @@ col.tags.tags.discard("!Library::Renal::E1")  # e1 has no matched cards
 ts.note_user_deleted(["!Library::Renal::E1"])
 ts.reconcile_from_tags(col)
 check("one prompt naming the card-less PDF", len(asked2) == 1 and "E1" in asked2[0], str(asked2))
+
+section("K-319: a sync op's progress window never hangs off a closable dialog")
+_dialog = object()
+ts._run_sync_op(_dialog, "KlausNote: test", lambda col: {})
+check("progress is parented to mw, not the caller's dialog",
+      ops[-1].parent is ts.mw and ops[-1].parent is not _dialog, repr(ops[-1].parent))
+ts._own_ops["pending"] -= 1  # the fake op never reports back
 
 section("a reconcile waits for Klaus's own tag ops to land")
 ran = []
@@ -301,7 +307,7 @@ ts._schedule_reconcile = lambda: fired.append(1)
 ts.on_operation_did_execute(types.SimpleNamespace(tag=False), None)
 ts.on_operation_did_execute(types.SimpleNamespace(tag=True), None)
 check("one schedule, for the tag change", fired == [1])
-_init = open("klausmate/__init__.py", encoding="utf-8").read()
+_init = open("klaus_note/__init__.py", encoding="utf-8").read()
 check("registered on operation_did_execute",
       "gui_hooks.operation_did_execute.append(_tag_sync.on_operation_did_execute)" in _init)
 

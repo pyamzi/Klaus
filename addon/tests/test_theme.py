@@ -1,4 +1,4 @@
-"""Headless tests for klausmate.theme — the design-token module.
+"""Headless tests for klaus_note.theme — the design-token module.
 
 theme.py must stay aqt-free at module top (only night_mode() touches aqt,
 lazily, degrading to light mode) so every QSS builder is testable here.
@@ -12,7 +12,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section
 
 install()
-theme = importlib.import_module("klausmate.theme")
+theme = importlib.import_module("klaus_note.theme")
 
 section("palette structure")
 check("LIGHT and DARK have identical key sets",
@@ -32,9 +32,7 @@ section("QSS builders substitute tokens for both modes")
 builders = [
     ("dialog_qss", theme.dialog_qss),
     ("panel_header_qss", theme.panel_header_qss),
-    ("find_bar_qss", theme.find_bar_qss),
     ("pdf_panel_qss", theme.pdf_panel_qss),
-    ("thumb_strip_qss", theme.thumb_strip_qss),
     # The Anki-window builders (window_chrome consumers) join here so
     # every audit below — tokens substituted, background present, the
     # K-110 radius/font design scale — applies to them by construction.
@@ -77,8 +75,8 @@ check("selected nav pill is the blue accent with white text",
       "QListWidget#SettingsNav::item:selected" in d2
       and d2.index("QListWidget#SettingsNav::item:hover")
       < d2.index("QListWidget#SettingsNav::item:selected"))
-check("sidebar wordmark is set in Garamond, like Claude's",
-      "Garamond" in theme.dialog_qss(False)
+check("sidebar wordmark is set in Excalifont (Pouya, 2026-10-01)",
+      '"Excalifont"' in theme.dialog_qss(False)
       and "QLabel#SidebarAppName" in theme.dialog_qss(False))
 check("settings search field is styled in both palettes",
       all("QLineEdit#SettingsSearch" in theme.dialog_qss(n)
@@ -98,22 +96,23 @@ check("dialog combos carry a real chevron per palette, a hover "
       and "QComboBox QAbstractItemView::item" in theme.dialog_qss(False))
 import os as _os  # noqa: E402
 
-check("both chevron assets actually ship in klausmate/web (a QSS "
+check("both chevron assets actually ship in klaus_note/web (a QSS "
       "url() to a missing file is silently blank — back to no arrow)",
-      _os.path.exists("klausmate/web/chevron-day.svg")
-      and _os.path.exists("klausmate/web/chevron-night.svg"))
+      _os.path.exists("klaus_note/web/chevron-day.svg")
+      and _os.path.exists("klaus_note/web/chevron-night.svg"))
 
 section("colour themes (K-107 — SynapsePro's accent presets)")
 BLUE_KEYS = {"blue", "blue_hover", "blue_pressed", "blue_border",
              "blue_bright", "blue_accent"}
 check("every preset ships light AND dark override sets — "
-      "SynapsePro's six, the community palettes, and Claude",
+      "SynapsePro's six, the community palettes, Claude, and the app's zinc",
       set(theme.COLOR_THEMES) == {
           "ocean", "orchid", "forest", "deluge", "horizon", "dusty",
           "nord", "solarized", "catppuccin", "gruvbox", "everforest",
-          "dracula", "claude"}
+          "dracula", "claude", "zinc"}
       and all(set(t) == {False, True}
-              and set(t[False]) == BLUE_KEYS == set(t[True])
+              and set(t[False]) - {"on_accent"} == BLUE_KEYS
+              == set(t[True]) - {"on_accent"}
               for t in theme.COLOR_THEMES.values()))
 check("community presets carry their canonical colours",
       theme.COLOR_THEMES["nord"][False]["blue"] == "#5E81AC"
@@ -127,9 +126,16 @@ check("a palette's canonical dark bright is also its dark accent",
           == theme.COLOR_THEMES[n][True]["blue_bright"]
           for n in ("nord", "dracula", "claude", "solarized")))
 check("only blue-family tokens are overridden — backgrounds and text "
-      "always come from the base palettes",
-      all(k.startswith("blue") for t in theme.COLOR_THEMES.values()
+      "always come from the base palettes (zinc alone adds on_accent: "
+      "its dark fill is light, so the text on it must be dark)",
+      all(k.startswith("blue") or (name == "zinc" and k == "on_accent")
+          for name, t in theme.COLOR_THEMES.items()
           for n in (False, True) for k in t[n]))
+check("zinc is the app's preset: near-black light, zinc-200 dark, dark text on it",
+      theme.COLOR_THEMES["zinc"][False]["blue"] == "#18181B"
+      and theme.COLOR_THEMES["zinc"][True]["blue"] == "#E4E4E7"
+      and theme.COLOR_THEMES["zinc"][True]["on_accent"] == "#18181B"
+      and theme.COLOR_THEMES["zinc"][False]["on_accent"] == "#FAFAFA")
 check("default theme is ocean and matches the base palette",
       theme.get_active_theme() == "ocean"
       and theme.palette(False)["blue"] == "#0071D3")
@@ -225,24 +231,24 @@ for night in (False, True):
         check(f"dialog_qss(night={night}) styles {sel}", sel in d3)
 
 section("drop zone + helpers")
-dz = theme.drop_zone_qss(False, "klausmateLibraryDropZone")
+dz = theme.drop_zone_qss(False, "klausNoteLibraryDropZone")
 check("drop zone scopes rules to the given objectName",
-      "#klausmateLibraryDropZone {" in dz
-      and '#klausmateLibraryDropZone[dragOver="true"]' in dz)
+      "#klausNoteLibraryDropZone {" in dz
+      and '#klausNoteLibraryDropZone[dragOver="true"]' in dz)
 check("drop zone styles its Browse button",
-      "#klausmateLibraryDropZone QPushButton" in dz)
+      "#klausNoteLibraryDropZone QPushButton" in dz)
 # K-132: the Library's empty state is a drop target that must not
 # ADVERTISE as a box while idle — the pane already carries one dashed
 # square below the tree. Same builder, idle half muted.
 for _n in (False, True):
-    _dzq = theme.drop_zone_qss(_n, "klausmateLibraryEmpty",
+    _dzq = theme.drop_zone_qss(_n, "klausNoteLibraryEmpty",
                                idle_border=False)
     _c = theme.palette(_n)
     check(f"idle_border=False (night={_n}) drops the idle dashed box",
           "dashed" not in _dzq)
     check(f"idle_border=False (night={_n}) keeps the SHARED drag-over "
           "half — the empty state lights up exactly like the square",
-          '#klausmateLibraryEmpty[dragOver="true"]' in _dzq
+          '#klausNoteLibraryEmpty[dragOver="true"]' in _dzq
           and _c["blue_bright"] in _dzq and _c["selection_bg"] in _dzq)
     check(f"idle_border=False (night={_n}) makes that border "
           "TRANSPARENT rather than removing it — the box model has to "
@@ -284,10 +290,9 @@ for night in (False, True):
     check(f"css_vars(night={night}) takes --hover-subtle from the "
           "palette token, not a hand-mixed neutral",
           f"--hover-subtle: {c['hover_subtle']};" in cv)
-    check(f"css_vars(night={night}): that is the fill find_bar_qss "
-          "and thumb_strip_qss hover their Qt siblings with",
-          c["hover_subtle"] in theme.find_bar_qss(night)
-          and c["hover_subtle"] in theme.thumb_strip_qss(night))
+    check(f"css_vars(night={night}): that is the fill panel_header_qss "
+          "(the reader's tab strip) hovers its Qt sibling with",
+          c["hover_subtle"] in theme.panel_header_qss(night))
 check("light and dark hover fills actually differ (a single baked "
       "neutral would pass every check above)",
       theme.LIGHT["hover_subtle"] != theme.DARK["hover_subtle"])
@@ -329,14 +334,12 @@ section("one PDF viewer everywhere (K-153): pdf_panel_qss, self-applied")
 # because it should be consistent no matter what." The viewer has three
 # hosts — the editor panel, the Library window, the review-time lecture
 # dock — and before this card the only parts of it that looked identical
-# in all three were the ones that SELF-STYLE (#KlausFindBar,
-# #KlausThumbStrip, and pdf.js's css_vars). Everything else drifted
-# because it relied on ancestry: PdfSidebar carried no sheet and no
-# styled background, so it painted nothing and the host showed through
-# every gap. Measured offscreen, the worst of it was a ~4px NEAR-WHITE
-# vertical seam (rgb 239) where the thumb-strip splitter handle sat on
-# the #191919 dark panel, in every host but the Library.
-_pdf_panel_src = open("klausmate/pdf_viewer.py").read()
+# in all three were the ones that SELF-STYLE (the native find bar and
+# thumb strip, deleted in PDF reader 5/5, and pdf.js's css_vars).
+# Everything else drifted because it relied on ancestry: PdfSidebar
+# carried no sheet and no styled background, so it painted nothing and
+# the host showed through every gap.
+_pdf_panel_src = open("klaus_note/reader_panel.py").read()
 
 for night in (False, True):
     c = theme.palette(night)
@@ -360,36 +363,21 @@ for night in (False, True):
           "deterministic ground instead of letting the host bleed through",
           _panel_blk is not None
           and f"background-color: {c['bg']}" in _panel_blk.group(1))
-    _handle_blk = re.search(
-        r"QWidget#KlausPdfPanel QSplitter::handle \{(.*?)\}", _no_c, re.S
-    )
-    check(f"pdf_panel_qss(night={night}): the splitter handle is the "
-          "panel ground — this is the seam that was near-white on dark",
-          _handle_blk is not None and c["bg"] in _handle_blk.group(1))
     _label_blk = re.search(
         r"QWidget#KlausPdfPanel QLabel \{(.*?)\}", _no_c, re.S
     )
     check(f"pdf_panel_qss(night={night}): labels default to text_muted — "
-          "the viewer's labels are all secondary readouts, and the two "
-          "fallback labels carry no sheet of their own, so without this "
-          "they took utility_window_qss's bare QLabel colour in Add Cards",
+          "the panel's labels are secondary readouts, and the "
+          "fallback label carries no sheet of its own, so without this "
+          "it took utility_window_qss's bare QLabel colour in Add Cards",
           _label_blk is not None
           and f"color: {c['text_muted']}" in _label_blk.group(1))
-    # find_bar_qss and thumb_strip_qss live INSIDE this panel and must
-    # keep winning. They do so by construction — a widget's own
-    # stylesheet beats an inherited one irrespective of specificity
-    # (measured on PyQt6 6.10.2 / Qt 6.10.0: a selector-less widget
-    # sheet held against an ancestor's `QWidget#X QLabel#Y` rule) — but
-    # only as long as this sheet never grows rules in their territory.
-    check(f"pdf_panel_qss(night={night}) never names the find bar or the "
-          "thumb strip — their sheets own those surfaces",
-          "KlausFindBar" not in pq and "KlausThumbStrip" not in pq)
-    # The hover family is find_bar_qss's and thumb_strip_qss's, keyed on
-    # the hover_subtle token that css_vars mirrors for the pdf.js half
-    # (pinned above). A hover rule here would be a fourth definition of
-    # the same interaction, on a surface that has no hover state.
+    # The hover family is keyed on the hover_subtle token that css_vars
+    # mirrors for the pdf.js half (pinned above). A hover rule here
+    # would be another definition of the same interaction, on a surface
+    # that has no hover state.
     check(f"pdf_panel_qss(night={night}) declares no hover state — the "
-          "hover_subtle family stays with the two sheets that own it",
+          "hover_subtle family stays with the sheets that own it",
           ":hover" not in pq)
     # Scrollbars are the one part of the viewer already identical in
     # every host, precisely because NOTHING styles them. Styling them
@@ -399,7 +387,7 @@ for night in (False, True):
 
 # The consumer half of the contract. A design token nobody applies is
 # not a design; these pin that PdfSidebar — the ONE widget every host
-# wraps, and the parent of BOTH renderers — wears the sheet itself, the
+# wraps, and the parent of the viewer — wears the sheet itself, the
 # way the find bar and the strip already do.
 check("PdfSidebar names itself KlausPdfPanel",
       'self.setObjectName("KlausPdfPanel")' in _pdf_panel_src)
@@ -410,51 +398,6 @@ check("PdfSidebar sets WA_StyledBackground — a plain QWidget paints "
       "NOTHING however styled, which is what let the host bleed through",
       "self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)"
       in _pdf_panel_src)
-
-# K-153's other half: the `n / m` page indicator is built in every host
-# but stays hidden unless a host ADOPTS it into its own header, and only
-# the editor panel's tab container does. So the Library — the host Pouya
-# singled out as the good one — showed no page number at all, which also
-# made click-to-go-to-page unreachable there (Cmd+Opt+G still worked, so
-# this was affordance, not capability).
-# Read through the AST, not the raw text: `"_page_bar" in src` passes on
-# a comment, and on any ONE surviving mention elsewhere in a 4,500-line
-# file — both of which it did when these pins were falsified.
-import ast as _ast  # noqa: E402
-
-_pv_tree = _ast.parse(_pdf_panel_src)
-
-
-def _method_src(cls_name: str, fn_name: str) -> str:
-    """That method's own source, comments stripped by unparse()."""
-    for node in _ast.walk(_pv_tree):
-        if isinstance(node, _ast.ClassDef) and node.name == cls_name:
-            for sub in node.body:
-                if (isinstance(sub, _ast.FunctionDef)
-                        and sub.name == fn_name):
-                    return _ast.unparse(sub)
-    return ""
-
-
-_pv_init = _method_src("PdfViewer", "__init__")
-_pv_show = _method_src("PdfViewer", "showEvent")
-_pv_place = _method_src("PdfViewer", "_show_page_label_in_place")
-
-check("the viewer builds a fallback slot for the page indicator into "
-      "its OWN layout — a footer, so it duplicates no host's header",
-      "self._page_bar = bar" in _pv_init
-      and "outer.addWidget(bar)" in _pv_init)
-check("the slot starts empty and hidden — the label is only moved in "
-      "later, so an adopting host never has to fight us for the widget",
-      "bar.setVisible(False)" in _pv_init
-      and "self._page_label" not in _pv_init.split("bar = QWidget(self)")[-1])
-check("PdfViewer.showEvent fills the slot, by which time every host "
-      "that wants the label has taken it during its own construction",
-      "self._show_page_label_in_place()" in _pv_show)
-check("adoption is detected by PARENTAGE inside that method, needing no "
-      "cooperation from any host (adopting IS a reparent into a header)",
-      "self._page_label.parentWidget()" in _pv_place
-      and "bar.setVisible(False)" in _pv_place)
 
 section("design scale (K-110): every builder stays on-scale")
 # Sanctioned sets — must match the "Design scale" comment block above
@@ -512,9 +455,9 @@ section("design-tokens.json sync (shared cross-repo with KlausBook)")
 # The highlight inks are meant to match KlausBook's copy byte-for-byte today
 # (see docs/reference/design-tokens.json's "source_of_truth" note) — unlike
 # the rest of the palette, they deliberately never theme-fork, because they
-# bake into the PDF's own annotation color. The paint alpha (110/255) lives
-# as a literal in pdf_viewer.py's _record_color call, not a theme.py
-# constant, so it isn't asserted here.
+# bake into the PDF's own annotation color. The paint alpha is the
+# renderer's (pdf.js CSS), not a theme.py constant, so it isn't asserted
+# here.
 try:
     with open("docs/reference/design-tokens.json", encoding="utf-8") as _f:
         _tokens = json.load(_f)
@@ -528,5 +471,14 @@ try:
           theme.HIGHLIGHT_INK_DEFAULT == _want_default)
 except FileNotFoundError:
     check("docs/reference/design-tokens.json exists", False)
+
+section("Preferences row dividers stay visible at night (UI review #3)")
+for _night in (False, True):
+    _m = re.search(r"QFrame#RowSeparator\s*\{[^}]*background-color:\s*(#[0-9A-Fa-f]{6})", theme.dialog_qss(_night))
+    _line = _m.group(1) if _m else "#000000"
+    _surf = theme.palette(_night)["surface"]
+    _gap = max(abs(int(_line[i:i + 2], 16) - int(_surf[i:i + 2], 16)) for i in (1, 3, 5))
+    check(f"{'night' if _night else 'day'} divider differs from the card surface by at least 0x10",
+          _gap >= 0x10, f"{_line} on {_surf}")
 
 raise SystemExit(report())

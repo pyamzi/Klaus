@@ -19,9 +19,9 @@ from anki_stubs import check, code_only, install, report, section
 install()
 import importlib
 
-bt = importlib.import_module("klausmate.browse_toggles")
+bt = importlib.import_module("klaus_note.browse_toggles")
 
-_SRC = open("klausmate/browse_toggles.py").read()
+_SRC = open("klaus_note/browse_toggles.py").read()
 _CODE = code_only(_SRC)
 
 BOX = bt.ICON_BOX
@@ -152,7 +152,7 @@ section("every colour handed to QColor is one QColor can actually PARSE")
 # control shipped with black chips because of it, and no geometry test
 # could see it: the failure is in colour parsing, and the SVG preview used
 # to check the design renders rgba() correctly, because in CSS it IS valid.
-theme = importlib.import_module("klausmate.theme")
+theme = importlib.import_module("klaus_note.theme")
 # _SRC, not _CODE: palette KEY NAMES are string literals, and
 # code_only() strips those along with comments — the same trap that
 # hid the hex pin above.
@@ -197,7 +197,7 @@ check(
 check("paint failures degrade to a log line", "pane toggle paint failed" in _SRC)
 
 section("HIG: targets, focus, names, direction")
-check("the button meets HIG's 28pt pointer target", bt.BUTTON_SIZE >= 28)
+check("the button fits the status bar's row", bt.BUTTON_SIZE <= importlib.import_module("klaus_note.status_bar").BAR_HEIGHT)
 check("the icon has breathing room inside it", bt.ICON_SIZE < bt.BUTTON_SIZE)
 check(
     "the chip radius is on the documented 12/8/6 scale",
@@ -208,7 +208,7 @@ check(
     "labels re-sync on programmatic flips too, not only clicks",
     "toggled.connect(self._sync_copy)" in _CODE,
 )
-check("keyboard focus is reachable", "StrongFocus" in _CODE)
+check("keyboard focus is reachable (Tab, so a click leaves no ring)", "TabFocus" in _CODE)
 check(
     "and visible — a self-painted widget must draw its own ring",
     "hasFocus()" in _CODE,
@@ -224,5 +224,9 @@ check(
     "no klausbook_design gate reaches the toggles",
     "klausbook_design" not in _CODE,
 )
+
+section("the toggles live in the status bar now, not beside Browse's search box")
+check("browse_toggles no longer installs search-row buttons",
+      not hasattr(bt, "_install_browser_sidebar_toggle") and "_klaus_note_sidebar_toggle_btn" not in _CODE)
 
 raise SystemExit(report())

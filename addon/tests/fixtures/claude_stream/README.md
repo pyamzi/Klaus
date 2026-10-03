@@ -233,7 +233,7 @@ arrives (never confirmed accepted by the real binary, since it was never
 prompted for) is:
 
 ```json
-{"type": "control_response", "response": {"subtype": "success", "request_id": "<echoed>", "response": {"behavior": "deny", "message": "Klaus allows only reading the library and its own Anki tools."}}}
+{"type": "control_response", "response": {"subtype": "success", "request_id": "<echoed>", "response": {"behavior": "deny", "message": "KlausNote allows only reading the library and its own Anki tools."}}}
 ```
 
 ## 3. Actionable finding: deferred tools (`ToolSearch`) must be allowed
@@ -275,7 +275,7 @@ in the `init` tool list, named in neither `--allowedTools` nor
 Ruled out, concretely, not by assumption:
 
 - **Not the settings files.** This repo's `.claude/settings.json` has
-  only `deny` rules for `klausmate/user_files/**` and
+  only `deny` rules for `klaus_note/user_files/**` and
   `meta.json` — nothing that would allow-list `Bash`. The account's
   `~/.claude/settings.json` has no `permissions` block at all.
 - **Not env-inheritance from the nested host session.** Stripping every
