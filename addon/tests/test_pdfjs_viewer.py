@@ -3198,4 +3198,39 @@ _GD = _H7.split("pdfjsLib.getDocument({", 1)[-1].split("});", 1)[0]
 check("every getDocument call passes isEvalSupported: false",
       _H7.count("pdfjsLib.getDocument(") == 1 and "isEvalSupported: false," in _GD)
 
+section("page render bookkeeping: relayout, pdf.js caches, document switch (#23 #32 #33)")
+# tests/pdfjs_render_test.js runs the REAL renderPage/teardownPage/relayout/
+# teardown and the off-screen renders against a fake DOM and pdf.js doc.
+import shutil as _sh_g1  # noqa: E402
+import subprocess as _sp_g1  # noqa: E402
+import re as _re_g1  # noqa: E402
+if _sh_g1.which("node"):
+    _p_g1 = _sp_g1.run(["node", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                            "pdfjs_render_test.js")],
+                       capture_output=True, text=True, timeout=60)
+    print(_p_g1.stdout.rstrip())
+    check("a relayout redraws the render zone, evicted and off-screen pages "
+          "release their pdf.js caches, a superseded render touches nothing",
+          _p_g1.returncode == 0,
+          (_p_g1.stdout + _p_g1.stderr).strip().replace("\n", " | "))
+else:
+    print("  SKIP  page render bookkeeping (node not installed) — NOT counted as a pass")
+_HG1 = open("klaus_note/web/pdfjs_viewer.html", encoding="utf-8").read()
+_RLG1 = _HG1.split("async function relayout(", 1)[1].split("\n}\n", 1)[0]
+check("#23 relayout renders every in-zone page and keeps mid-render claims",
+      "for (const n of state.inZone) renderPage(n, state.pageDivs[n - 1]);" in _RLG1
+      and "state.rendered.clear()" not in _RLG1)
+check("#32 teardownPage cleans the page's pdf.js caches unless it is in the zone",
+      "if (r.page && !state.inZone.has(num)) r.page.cleanup();"
+      in _HG1.split("\nfunction teardownPage(", 1)[1].split("\n}\n", 1)[0])
+check("#32 thumbnails and both copy renders release their page",
+      _HG1.count("releaseOffscreen(page, page0 + 1);") == 2
+      and _HG1.count("releaseOffscreen(page, num);") == 1)
+_RPG1 = _HG1.split("async function renderPage(", 1)[1].split("\n}\n", 1)[0]
+check("#33 renderPage pins its document and re-checks it after every await "
+      "and before the failure branch's deletes",
+      "const doc = state.doc;" in _RPG1
+      and _RPG1.count("if (state.doc !== doc) return;") == 5
+      and len(_re_g1.findall(r"\bawait [a-z]", _RPG1)) == 4)
+
 raise SystemExit(report())
