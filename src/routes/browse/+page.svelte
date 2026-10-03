@@ -28,7 +28,7 @@
   import type { PlainMessage } from "@bufbuild/protobuf";
   import type { RenderCardResponse } from "@generated/klaus_pb";
   import { onMount } from "svelte";
-  import { cardBodyClass, cardFrameSrc, night, postToCard, renderCard } from "$lib/card";
+  import { cardBodyClass, cardFrameSrc, night, openCardLink, postToCard, renderCard } from "$lib/card";
   import Sidebar from "./Sidebar.svelte";
   import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
   import Columns3Icon from "@lucide/svelte/icons/columns-3";
@@ -106,6 +106,7 @@
     try {
       // Normalised the way Anki shows it, and validated before searching.
       const normalized = (await buildSearchString({ filter: { case: "parsableText", value: text } })).val;
+      if (seq !== searchSeq) return;
       search = normalized;
       const column = columns.find((c) => c.key === sortColumn);
       const order =
@@ -135,7 +136,8 @@
           rows.set(id, row);
           rowsVersion++;
         })
-        .catch(() => {});
+        // Fetched again the next time it scrolls into view.
+        .catch(() => fetching.delete(id));
     }
   });
 
@@ -293,6 +295,12 @@
     [Color.FLAG_PURPLE]: "bg-row-flag-purple",
   };
 
+  /** Back to the decks, saving the editor's pending edits first (its save is debounced). */
+  async function leave() {
+    await (editorFrame?.contentWindow as any)?.saveNow?.();
+    location.href = "/";
+  }
+
   async function sidebarSearch(node: PlainMessage<SearchNode>) {
     const text = (await buildSearchString(node)).val;
     await runSearch(text);
@@ -309,8 +317,9 @@
         // changed too), as Anki's table redraws after the op.
         else if (cmd === "noteUpdated") clearRows();
       } else if (event.source === previewFrame?.contentWindow && event.data?.klaus) {
-        const { key, cmd } = event.data;
+        const { key, cmd, openLink } = event.data;
         if (key === " " || key === "Enter" || cmd === "ans") flipPreview();
+        if (openLink !== undefined) openCardLink(openLink);
       }
     };
     const onKeydown = (event: KeyboardEvent) => {
@@ -318,8 +327,12 @@
       if (mod && event.shiftKey && event.key.toLowerCase() === "p") {
         event.preventDefault();
         openPreview();
-      } else if (event.key === "Escape" && !document.querySelector('[role="dialog"], [role="menu"]')) {
-        location.href = "/";
+      } else if (
+        event.key === "Escape" &&
+        !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) &&
+        !document.querySelector('[role="dialog"], [role="menu"]')
+      ) {
+        leave();
       }
     };
     addEventListener("message", onMessage);
@@ -338,7 +351,15 @@
 
 <div class="grid h-screen grid-cols-[14rem_minmax(0,1fr)_minmax(20rem,28rem)] grid-rows-[auto_minmax(0,1fr)]">
   <header class="col-span-full flex items-center gap-2 border-b px-3 py-2">
-    <Button href="/" variant="ghost" size="sm">
+    <Button
+      href="/"
+      variant="ghost"
+      size="sm"
+      onclick={(event: MouseEvent) => {
+        event.preventDefault();
+        leave();
+      }}
+    >
       <ArrowLeftIcon data-icon="inline-start" />
       Decks
     </Button>

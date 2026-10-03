@@ -1,14 +1,14 @@
 // Prevents an extra console window on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 use anki_proto::generic;
 use klaus_bridge::frontend::{AskUserRequest, OpenFilePickerRequest, ShowMessageBoxRequest};
 use klaus_bridge::{new_token, serve, Bridge, Hook, Secrets, WebDirs};
 use prost::Message;
-use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 fn main() {
@@ -62,33 +62,61 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Klaus");
 
-    let synced_on_close = Arc::new(AtomicBool::new(false));
+    // Anki syncs on close (autoSync); Klaus holds the window and the exit until the
+    // sync and its media sync are done. A full sync needs a choice, so it's left
+    // for the next sync rather than asked for while quitting.
+    let quit = Arc::new(AtomicU8::new(QUIT_IDLE));
     app.run(move |app, event| match event {
-        // Anki syncs on close (autoSync); Klaus holds the exit until the sync and
-        // its media sync are done. A full sync needs a choice, so it's left for
-        // the next sync rather than asked for while quitting.
-        RunEvent::ExitRequested { api, .. } => {
-            let bridge = app.state::<Arc<Bridge>>().inner().clone();
-            let account = bridge.sync_account();
-            if account.email.is_empty() || !account.auto_sync || synced_on_close.swap(true, Ordering::SeqCst) {
-                return;
+        // Closing the window quits; keep it up (titled "Syncing…") while syncing,
+        // or the app would sync invisibly and hold the Collection from a relaunch.
+        RunEvent::WindowEvent { event: WindowEvent::CloseRequested { api, .. }, .. } => {
+            if quit.load(Ordering::SeqCst) != QUIT_DONE && start_quit(app, &quit) {
+                api.prevent_close();
             }
-            api.prevent_exit();
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_title("Klaus — Syncing…");
-            }
-            let app = app.clone();
-            std::thread::spawn(move || {
-                // ponytail: 2 minutes for the whole quit; a huge first media upload resumes next time.
-                bridge.sync_before_quit(std::time::Duration::from_secs(120));
-                app.exit(0);
-            });
         }
+        RunEvent::ExitRequested { api, .. } => match quit.load(Ordering::SeqCst) {
+            QUIT_DONE => {}
+            // A second Cmd+Q waits for the sync already under way.
+            QUIT_SYNCING => api.prevent_exit(),
+            _ => {
+                if start_quit(app, &quit) {
+                    api.prevent_exit();
+                }
+            }
+        },
         RunEvent::Exit => {
             let _ = app.state::<Arc<Bridge>>().close_collection();
         }
         _ => {}
     });
+}
+
+const QUIT_IDLE: u8 = 0;
+const QUIT_SYNCING: u8 = 1;
+const QUIT_DONE: u8 = 2;
+
+/// Starts the sync on quit, if one is due; false means quit now.
+fn start_quit(app: &AppHandle, quit: &Arc<AtomicU8>) -> bool {
+    let bridge = app.state::<Arc<Bridge>>().inner().clone();
+    let account = bridge.sync_account();
+    if account.email.is_empty() || !account.auto_sync {
+        quit.store(QUIT_DONE, Ordering::SeqCst);
+        return false;
+    }
+    if quit.compare_exchange(QUIT_IDLE, QUIT_SYNCING, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return true;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_title("Klaus — Syncing…");
+    }
+    let (app, quit) = (app.clone(), Arc::clone(quit));
+    std::thread::spawn(move || {
+        // ponytail: 2 minutes for the whole quit; a huge first media upload resumes next time.
+        bridge.sync_before_quit(std::time::Duration::from_secs(120));
+        quit.store(QUIT_DONE, Ordering::SeqCst);
+        app.exit(0);
+    });
+    true
 }
 
 /// The Klaus Account sync key, in the macOS Keychain (Windows Credential Manager,

@@ -6,7 +6,7 @@
   import { CardAnswer_Rating, type QueuedCards_QueuedCard } from "@generated/anki/scheduler_pb";
   import type { RenderCardResponse } from "@generated/klaus_pb";
   import { onMount } from "svelte";
-  import { cardBodyClass, cardFrameSrc, night, postToCard, renderCard as render } from "$lib/card";
+  import { cardBodyClass, cardFrameSrc, night, openCardLink, postToCard, renderCard as render } from "$lib/card";
   import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
   import { Button } from "$lib/components/ui/button";
 
@@ -124,8 +124,9 @@
     frameReady = new Promise((resolve) => frame.addEventListener("load", () => resolve(), { once: true }));
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frame.contentWindow || !event.data?.klaus) return;
-      const { cmd, key, typedAnswer } = event.data;
+      const { cmd, key, typedAnswer, openLink } = event.data;
       if (typeof cmd === "string") onCommand(cmd);
+      if (openLink !== undefined) openCardLink(openLink);
       // Card JS can post these too, so only reveal/grade keys count from the frame.
       if (typeof key === "string" && [" ", "Enter", "1", "2", "3", "4"].includes(key)) onKey(key, false);
       if ("typedAnswer" in event.data) pendingTyped?.(typeof typedAnswer === "string" ? typedAnswer : null);

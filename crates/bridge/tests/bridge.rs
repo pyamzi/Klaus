@@ -286,6 +286,15 @@ fn settings_round_trip_and_persist() {
     assert_eq!(get(&bridge, "getMetaJson", "addTagsCollapsed"), "true");
     assert_eq!(get(&bridge, "getProfileConfigJson", "lastColour"), "\"#ff0000\"");
     assert_eq!(get(&bridge, "getMetaJson", "lastColour"), "null");
+
+    // A settings file that isn't a JSON object is replaced, not a panic.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("klaus-settings.json"), "[]").unwrap();
+    let bridge = Bridge::new().unwrap();
+    bridge.open_collection(dir.path()).unwrap();
+    let set = SetSettingJsonRequest { key: "lastColour".into(), value_json: b"1".to_vec() };
+    bridge.call("setProfileConfigJson", &set.encode_to_vec()).unwrap();
+    assert_eq!(get(&bridge, "getProfileConfigJson", "lastColour"), "1");
 }
 
 #[tokio::test]
@@ -916,10 +925,25 @@ fn signs_in_with_a_klaus_account_and_syncs() {
     let x = Arc::new(x);
     x.set_account_url(&fake_klaus_ink("normal"));
     let (base, _) = serve_bridge(x.clone());
-    let _: generic::String = call(&x, "klausAccountSignIn", Empty {});
+    let url: generic::String = call(&x, "klausAccountSignIn", Empty {});
     let forged = runtime().block_on(async { reqwest::get(format!("{base}/auth/callback?code=the-code&state=forged")).await.unwrap() });
     assert_eq!(forged.status(), 400);
     assert_eq!(call::<SyncAccount>(&x, "klausSyncAccount", Empty {}).email, "");
+    // …without cancelling the real sign-in.
+    let real = runtime().block_on(async { reqwest::get(url.val).await.unwrap() });
+    assert_eq!(real.status(), 200);
+    assert_eq!(call::<SyncAccount>(&x, "klausSyncAccount", Empty {}).email, "normal@example.com");
+    // A page can't send the sync key elsewhere by rewriting where it goes.
+    for key in ["syncUrl", "syncUser"] {
+        let set = SetSettingJsonRequest { key: key.into(), value_json: b"\"http://elsewhere/\"".to_vec() };
+        assert!(x.call("setProfileConfigJson", &set.encode_to_vec()).is_err(), "{key}");
+    }
+    // DNS rebinding: another name for 127.0.0.1 isn't served.
+    let port = base.rsplit(':').next().unwrap();
+    let rebound = runtime().block_on(async {
+        reqwest::Client::new().get(format!("{base}/")).header("Host", format!("evil.example:{port}")).send().await.unwrap()
+    });
+    assert_eq!(rebound.status(), 421);
 
     // Device A has a note and an image; a new account's first sync uploads it.
     add_tagged(&a, 1, ["Heart", "<img src=heart.png>"], &[]);

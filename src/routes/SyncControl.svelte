@@ -37,7 +37,6 @@
 
   // Each finished sync is handled once, whoever started it (the page or automatic sync).
   let handledId = 0;
-  let manualId = 0;
 
   async function poll() {
     outcome = await call("klausSyncOutcome", new Empty(), SyncOutcome);
@@ -57,8 +56,11 @@
   }
 
   function finished(result: SyncOutcome) {
-    const manual = result.id === manualId;
+    // The page started it (sync button, full sync); automatic syncs report only errors.
+    const manual = !result.background;
     if (result.error) {
+      // A failed full sync hands the dialog back, with its choices, to try again.
+      fullRunning = false;
       if (result.errorKind === BackendError_Kind.SYNC_AUTH_ERROR) {
         loadAccount();
         toast.error("Your Klaus Account sign-in has expired. Sign in again to keep syncing.");
@@ -89,7 +91,6 @@
     if (needsChoice) return askFullSync(outcome);
     await call("klausSync", new Empty(), Empty);
     await poll();
-    manualId = outcome.id;
   }
 
   async function watchMedia() {
@@ -122,7 +123,6 @@
     try {
       await call("klausFullSync", new FullSyncRequest({ upload, serverMediaUsn }), Empty);
       await poll();
-      manualId = outcome.id;
     } catch {
       fullRunning = false;
     }
