@@ -111,7 +111,6 @@ AUDIT_MODULES = (
     "heatmap",
     "dashboard",
     "background",
-    "pdf_notes",
     "lecture_view",
     # The remaining assistant layers are aqt-light by construction, so
     # nearly every function is reachable from its own test file. The

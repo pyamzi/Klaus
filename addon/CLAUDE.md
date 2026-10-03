@@ -1150,26 +1150,6 @@ same reason.
   reviewer context-menu toggle; never activateWindow — answer keys
   stay on the reviewer. The panel has no chrome (K-257's Record button
   was removed with recording in K-314).
-- `pdf_notes.py` (stdlib-only above a "pypdf glue" divider; K-134): the
-  per-PDF notes foundation — K-079's storage and layout, built as its
-  own module so it needed nothing from `pdf_handler.py` (another
-  session held that file). Sidecar `annotations/<safe>.notes.md`
-  (atomic tmp+os.replace; **whitespace-only text DELETES the file**,
-  which is what makes empty notes un-bake back to pristine), Helvetica
-  base-14 AFM widths where text becomes cp1252 bytes in exactly ONE
-  place so measurement and emission cannot disagree about a degraded
-  character, pure `wrap_lines`/`paginate`/`notes_pages` (30pt heading
-  reserve on page one only; a token wider than the column hard-splits),
-  and pure `notes_page_stream` returning content-stream BYTES —
-  testable without pypdf, which this machine's python3 cannot import
-  (vendor/pypdf needs typing_extensions from Anki's bundle). The lone
-  glue function `append_notes_pages(writer, text, display)` imports
-  pypdf lazily. **Still to wire in K-079**: the viewer pane, and ONE
-  call site in `bake_annotations` — whose TWO early returns (the
-  nothing-to-bake return and the un-bake branch) must learn about notes
-  or a notes-only PDF never bakes; `delete_context` also does not
-  unlink the sidecar, so a re-import under the same safe name would
-  inherit a stranger's notes.
 - `pdf_index.py` (aqt-free): persistent embedding index over one PDF,
   `card_index.py`'s sibling for the PDF side. **v2 (2026-09-15) is ONE
   VECTOR PER PAGE**: `PdfIndex.pages` is `(page_1based, text_hash)` per
