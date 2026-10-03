@@ -84,10 +84,12 @@ _ACTIVE_PDF_FILE = "active_pdf.txt"
 # failure handler, same as before this helper existed).
 
 
-def _atomic_write(path: str, write_fn) -> None:
+def _atomic_write(path: str, write_fn, durable: bool = False) -> None:
     """Write to ``path`` atomically: ``write_fn(f)`` writes into an open
     tmp file in ``path``'s directory, which is then ``os.replace``'d onto
-    ``path``. The tmp file is always cleaned up, success or failure."""
+    ``path``. The tmp file is always cleaned up, success or failure.
+    ``durable`` fsyncs the tmp before the rename — the annotations JSON
+    only (#29); UI-thread state writes stay cheap."""
     dest_dir = os.path.dirname(path) or "."
     os.makedirs(dest_dir, exist_ok=True)
     tmp = os.path.join(
@@ -96,11 +98,12 @@ def _atomic_write(path: str, write_fn) -> None:
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             write_fn(f)
-            # Durable before the rename (#29): a crash must not leave a
-            # renamed-in, empty marks file. ponytail: plain fsync, as
-            # page_store does; F_FULLFSYNC if macOS drive caches bite.
-            f.flush()
-            os.fsync(f.fileno())
+            if durable:
+                # A crash must not leave a renamed-in, empty marks file.
+                # ponytail: plain fsync, as page_store does; F_FULLFSYNC
+                # if macOS drive caches bite.
+                f.flush()
+                os.fsync(f.fileno())
         os.replace(tmp, path)
     finally:
         if os.path.isfile(tmp):
@@ -110,13 +113,13 @@ def _atomic_write(path: str, write_fn) -> None:
                 pass
 
 
-def _atomic_write_json(path: str, obj, **json_kwargs) -> None:
+def _atomic_write_json(path: str, obj, durable: bool = False, **json_kwargs) -> None:
     """Write ``obj`` as JSON to ``path`` atomically (tmp file + rename).
 
     ``**json_kwargs`` forwards to ``json.dump`` (e.g. ``separators=(",",
     ":")`` for a compact cache file).
     """
-    _atomic_write(path, lambda f: json.dump(obj, f, **json_kwargs))
+    _atomic_write(path, lambda f: json.dump(obj, f, **json_kwargs), durable)
 
 
 # ----------------------------- extraction --------------------------------
@@ -1884,7 +1887,7 @@ def save_annotations(
             highlights = _claim_edited_external(doc, highlights)
         doc["version"] = 1
         doc["highlights"] = highlights
-        _atomic_write_json(path, doc)  # a failed write never truncates the marks
+        _atomic_write_json(path, doc, durable=True)  # a failed write never truncates the marks
         return True
     except (OSError, TypeError, ValueError) as exc:
         print(f"[klaus_note] failed to save annotations {path}: {exc}")
@@ -1960,7 +1963,7 @@ def _update_doc_keys(user_files_dir: str, name: str, updates: dict) -> None:
         print(f"[klaus_note] annotations unreadable, keys not written: {path}")
         return
     doc.update(updates)
-    _atomic_write_json(path, doc)
+    _atomic_write_json(path, doc, durable=True)
 
 
 def add_suppressed(user_files_dir: str, name: str, record: dict) -> None:

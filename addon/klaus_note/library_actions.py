@@ -321,9 +321,18 @@ def import_files(paths: list[str], folder: str | None = None) -> int:
     reads, imports and indexes them — nothing slow on the main thread.
     Without one, the old one-by-one import runs. Returns how many."""
     paths = [p for p in paths if p.lower().endswith(".pdf") and os.path.isfile(p)]
-    if paths and pdf_handler.library_moving():  # #43: its copies would be stranded
-        tooltip(pdf_handler.LIBRARY_MOVING_MSG)
+    if not paths:
         return 0
+    # Held from choosing the root to the last copy (#43): a move starting
+    # in between would strand the copies in the old root.
+    with pdf_handler.library_writer() as ok:
+        if not ok:
+            tooltip(pdf_handler.LIBRARY_MOVING_MSG)
+            return 0
+        return _import_files(paths, folder)
+
+
+def _import_files(paths: list[str], folder: str | None) -> int:
     paths = _refuse_clashes(paths, folder)
     if not paths:
         return 0

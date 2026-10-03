@@ -564,9 +564,10 @@ def import_pdf_file(path: str, replace: bool = False) -> str | None:
         print(f"[klaus_note] page record seeding on import failed: {e}")
     if info["page_count"] == 0:
         showWarning(
-            "No text extracted from this PDF.\n"
-            "If it is a scan, Klaus Note reads garbled pages with the local Ollama "
-            "model glm-ocr once it is installed."
+            "KlausNote: no text was found in this PDF.\n"
+            "A scanned PDF with no text layer still can't be searched. Pages "
+            "whose text is garbled are read with OCR once the local Ollama "
+            "model glm-ocr is installed."
         )
     # Safe names are lossy; keep the original filename for the drive's
     # tree. Never let bookkeeping break an otherwise-good import.

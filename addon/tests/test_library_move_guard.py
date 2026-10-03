@@ -87,20 +87,28 @@ def failing_fsync(_fd):
     raise OSError("disk gone")
 
 
-target = os.path.join(uf, "library_map.json")
-ph.save_library_map(uf, {"keep": "keep.pdf"})
+marks = os.path.join(uf, "annotations", "lecture0.json")
+before = read(marks)
 ph.os.fsync = failing_fsync
 try:
-    raised = False
-    try:
-        ph.save_library_map(uf, {"new": "new.pdf"})
-    except OSError:
-        raised = True
+    written = ph.save_annotations(uf, "lecture0", [{"id": "a2", "page": 0, "rects": [[3, 3, 2, 2]],
+                                                    "color": "#fadc50", "note": ""}])
 finally:
     ph.os.fsync = real_fsync
-check("a failed fsync raises like a failed write", raised)
-check("...the target is untouched", ph.load_library_map(uf) == {"keep": "keep.pdf"})
-check("...and no tmp file is left", [n for n in os.listdir(uf) if n.endswith(".tmp")] == [])
+check("a failed fsync fails the save like a failed write", written is False, repr(written))
+check("...the marks file is untouched", read(marks) == before)
+check("...and no tmp file is left",
+      [n for n in os.listdir(os.path.dirname(marks)) if n.endswith(".tmp")] == [])
+
+fsyncs = []
+ph.os.fsync = lambda fd: fsyncs.append(fd)
+try:
+    ph.set_active_pdf(uf, "lecture0")
+    ph.touch_last_used(uf, "lecture0")
+    ph.save_library_map(uf, {"keep": "keep.pdf"})
+finally:
+    ph.os.fsync = real_fsync
+check("tab-state and map writes on the UI thread do not fsync", fsyncs == [], str(fsyncs))
 
 # ------------------------------------------------------------------ #28
 
@@ -314,6 +322,101 @@ check("the next sweep moves every PDF whole, under its own name",
       sorted(n for n in os.listdir(root) if not n.startswith(".")) == sorted(n + ".pdf" for n in NAMES)
       and all(read(ph.pdf_path_for(uf, n, root)) == b"%PDF-" + n.encode() for n in NAMES),
       str(os.listdir(root)))
+
+section("PR review: import_files holds the guard across root choice and copies")
+uf, root = world()
+ph._live_library_root = lambda: root
+seen = {}
+
+
+def probing_root():
+    # Another thread trying to start a move here must be refused.
+    t = threading.Thread(target=lambda: seen.update(free=not ph.library_moving()))
+    t.start()
+    t.join(5)
+    return root
+
+
+real_la_root = la._live_root
+la._live_root = probing_root
+real_kick = pdf_drive.start_library_rescan
+pdf_drive.start_library_rescan = lambda *a, **k: None
+try:
+    n_imported = la.import_files([src])
+finally:
+    la._live_root = real_la_root
+    pdf_drive.start_library_rescan = real_kick
+check("a move could not start while the import picked its root", seen.get("free") is False, str(seen))
+check("...and the import still copied the file", n_imported == 1 and "Fresh.pdf" in os.listdir(root))
+
+section("PR review: a tag-driven rename during a move changes nothing")
+uf, root = world()
+ph._live_library_root = lambda: root
+ph.migrate_to_root(uf, root, {})
+tag_sync = importlib.import_module("klaus_note.tag_sync")
+drive_store = importlib.import_module("klaus_note.drive_store")
+ts_tips, stored_writes = [], []
+tag_sync.tooltip = lambda msg, *a, **k: ts_tips.append(msg)
+real_set_stored = tag_sync.set_stored_tag
+tag_sync.set_stored_tag = lambda safe, tag: stored_writes.append((safe, tag))
+drive_before = drive_store.load(uf)
+open(os.path.join(uf, "contexts", "late.txt"), "w").write("ctx")
+open(os.path.join(uf, "pdfs", "late.pdf"), "wb").write(b"%PDF-late")
+try:
+    with PausedMove(uf, root):
+        moved_any = tag_sync._apply_moves([
+            {"kind": "rename", "safe": "lecture0", "folder": "Week 9", "display": "Renamed.pdf",
+             "new": "!Library::Week_9::Renamed"},
+            {"kind": "folder_rename", "old": "A", "new": "B", "safes": [], "tags": {"lecture1": "!Library::B::x"}},
+        ])
+finally:
+    tag_sync.set_stored_tag = real_set_stored
+check("nothing applied", moved_any is False and stored_writes == [], f"{moved_any} {stored_writes}")
+check("drive_store untouched", drive_store.load(uf) == drive_before)
+check("the file and map untouched", ph.load_library_map(uf).get("lecture0") == "lecture0.pdf"
+      and os.path.isfile(os.path.join(root, "lecture0.pdf")))
+check("the user is told", MOVING in ts_tips, str(ts_tips))
+
+section("PR review: a scan prepared for another root is not applied")
+uf, root = world()
+other = tempfile.mkdtemp(prefix="klaus-g4-other-")
+ph._live_library_root = lambda: root
+scan_ops, applied = [], []
+
+
+class HeldOp:
+    def __init__(self, parent=None, op=None, success=None):
+        self.op, self.ok = op, success
+        scan_ops.append(self)
+
+    def failure(self, fn):
+        return self
+
+    def without_collection(self):
+        return self
+
+    def run_in_background(self):
+        pass
+
+
+real_qop, real_rlr, real_mw = pdf_drive.QueryOp, pdf_drive.rescan_library_root, pdf_drive.mw
+pdf_drive.QueryOp = HeldOp
+pdf_drive.mw = type("MW", (), {"col": None})()
+pdf_drive.rescan_library_root = lambda prepared=None: (applied.append(prepared), {"moved": []})[1]
+done = []
+try:
+    pdf_drive.start_library_rescan(done.append)
+    first = scan_ops[0]
+    prepared = first.op(None)  # walked the old root...
+    ph._live_library_root = lambda: other  # ...and the Library moved before it finished
+    first.ok(prepared)
+    check("the stale scan is not applied", applied == [], str(applied))
+    check("a fresh scan is queued", len(scan_ops) == 2, str(len(scan_ops)))
+    scan_ops[1].ok(scan_ops[1].op(None))
+    check("the fresh scan, of the new root, is applied and reported",
+          len(applied) == 1 and applied[0].get("root") == other and done == [{"moved": []}], f"{applied} {done}")
+finally:
+    pdf_drive.QueryOp, pdf_drive.rescan_library_root, pdf_drive.mw = real_qop, real_rlr, real_mw
 
 ph._live_library_root = real_live_root
 raise SystemExit(report())

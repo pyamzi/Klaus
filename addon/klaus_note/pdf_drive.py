@@ -328,6 +328,11 @@ def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -
 
     def finish(prepared: dict | None, error: str = "") -> None:
         _rescan["running"] = False
+        if prepared is not None and prepared.get("root") != pdf_handler._live_library_root():
+            # Walked a root the Library has since left (a move landed
+            # mid-scan): applying it would map the old root's files.
+            start_library_rescan(on_done)
+            return
         if error:  # the scan itself is silent; only a failure reaches the bar
             _task(lambda t: (t.begin("rescan", error), t.end("rescan", error, error=True)))
         summary = rescan_library_root(prepared)
@@ -364,6 +369,7 @@ def _prepare(uf: str, root: str) -> dict:
     names = _dir_snapshot(root)
     prepared = pdf_handler.prepare_rescan(uf, root)
     prepared["names"] = names
+    prepared["root"] = root  # finish() drops it if the Library moved meanwhile
     return prepared
 
 
