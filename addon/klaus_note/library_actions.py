@@ -282,6 +282,9 @@ def rename_folder(parent, path: str) -> None:
             show_warning(clash, parent=parent)
             return
         ok, why = pdf_drive.apply_folder_change(settings.user_files(), _live_root(), path, new)
+        if not ok and why == "moving":
+            tooltip(pdf_handler.LIBRARY_MOVING_MSG)
+            return
         if not ok:
             show_warning(
                 "A folder with that name already exists there." if why == "exists"
@@ -318,6 +321,9 @@ def import_files(paths: list[str], folder: str | None = None) -> int:
     reads, imports and indexes them — nothing slow on the main thread.
     Without one, the old one-by-one import runs. Returns how many."""
     paths = [p for p in paths if p.lower().endswith(".pdf") and os.path.isfile(p)]
+    if paths and pdf_handler.library_moving():  # #43: its copies would be stranded
+        tooltip(pdf_handler.LIBRARY_MOVING_MSG)
+        return 0
     paths = _refuse_clashes(paths, folder)
     if not paths:
         return 0

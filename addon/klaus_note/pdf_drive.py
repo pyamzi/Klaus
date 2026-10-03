@@ -21,7 +21,7 @@ from typing import Any, Callable
 from aqt import mw
 from aqt.operations import QueryOp
 from aqt.qt import QFileSystemWatcher, QTimer
-from aqt.utils import showWarning
+from aqt.utils import showWarning, tooltip
 
 from . import drive_store, pdf_handler, tag_sync
 from . import settings
@@ -37,7 +37,7 @@ def apply_folder_change(
     snapped back live). Refuses merges: an occupied destination leaves
     everything untouched. Returns (ok, reason); reason is "exists" for
     an occupied destination, "invalid" for a bad name, "disk" when the
-    directory move itself failed."""
+    directory move itself failed, "moving" while a Library move runs."""
     new = (new or "").strip().strip("/")
     if not new or not drive_store._valid_folder(new):
         return False, "invalid"
@@ -57,6 +57,8 @@ def apply_folder_change(
     if occupied:
         return False, "exists"
     if src_dir is not None and os.path.isdir(src_dir):
+        if pdf_handler.library_moving():
+            return False, "moving"
         try:
             if not pdf_handler.rename_mapped_folder(user_files_dir, root, old, new):
                 return False, "disk"
@@ -98,7 +100,16 @@ def _move_to_trash(path: str) -> bool:
 
 def delete_pdf(safe: str) -> bool:
     """Delete one PDF from the Library, whichever surface asked: the
-    Library's own Delete…, or a confirmed sidebar tag delete (K-306)."""
+    Library's own Delete…, or a confirmed sidebar tag delete (K-306).
+    Refused (False, nothing touched) while a Library move runs (#43)."""
+    with pdf_handler.library_writer() as ok:
+        if not ok:
+            tooltip(pdf_handler.LIBRARY_MOVING_MSG)
+            return False
+        return _delete_pdf(safe)
+
+
+def _delete_pdf(safe: str) -> bool:
     uf = settings.user_files()
     display = drive_store.display_name(uf, safe)
     # Its marks go with it: no pending save may bake (or fail and toast)
@@ -388,6 +399,14 @@ def rescan_library_root(prepared: dict | None = None) -> dict | None:
     configured (or on any failure — this runs on profile open and on
     every Library refresh and must never break either).
     """
+    with pdf_handler.library_writer() as ok:
+        if not ok:  # #43: a Library move is rewriting the map
+            tooltip(pdf_handler.LIBRARY_MOVING_MSG)
+            return None
+        return _rescan_library_root(prepared)
+
+
+def _rescan_library_root(prepared: dict | None) -> dict | None:
     try:
         root = pdf_handler._live_library_root()
         if not root or not os.path.isdir(root):
