@@ -9,6 +9,7 @@
   import { toast } from "svelte-sonner";
   import { cardBodyClass, cardFrameSrc, night, openCardLink, postToCard, renderCard as render } from "$lib/card";
   import { IconArrowLeft as ArrowLeftIcon } from "@tabler/icons-svelte";
+  import { keyIsTaken } from "$lib/keys";
   import { Button } from "$lib/components/ui/button";
 
   const ratings = [CardAnswer_Rating.AGAIN, CardAnswer_Rating.HARD, CardAnswer_Rating.GOOD, CardAnswer_Rating.EASY];
@@ -118,10 +119,10 @@
 
   // Anki's reviewer shortcuts (aqt/reviewer.py _shortcutKeys), subset for #7.
   /** True if the key was a reviewer shortcut. */
-  function onKey(key: string, ctrl: boolean): boolean {
+  function onKey(key: string, ctrl: boolean, alt = false): boolean {
     if (key === "Escape") location.href = "/";
-    else if (ctrl && key === "z") undoLast();
-    else if (ctrl) return false;
+    else if (ctrl && !alt && key === "z") undoLast();
+    else if (ctrl || alt) return false;
     else if (key === " " || key === "Enter") side === "question" ? reveal() : grade(3);
     else if (["1", "2", "3", "4"].includes(key)) grade(Number(key));
     else if (key === "u") undoLast();
@@ -149,7 +150,8 @@
       if ("typedAnswer" in event.data) pendingTyped?.(typeof typedAnswer === "string" ? typedAnswer : null);
     };
     // A focused button would also activate on Space/Enter: handle the key once.
-    const onKeydown = (e: KeyboardEvent) => onKey(e.key, e.ctrlKey || e.metaKey) && e.preventDefault();
+    const onKeydown = (e: KeyboardEvent) =>
+      !keyIsTaken(e) && onKey(e.key, e.ctrlKey || e.metaKey, e.altKey) && e.preventDefault();
     addEventListener("message", onMessage);
     addEventListener("keydown", onKeydown);
     const deck = BigInt(new URLSearchParams(location.search).get("deck") ?? "1");
