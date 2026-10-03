@@ -488,7 +488,13 @@ same reason.
   `aqt.sync.sync_collection`**: Anki's opens its progress window on every
   run, a warning dialog on every error and the upload/download question
   for a full sync. Klaus fires `sync_will_start`/`sync_did_finish` around
-  it (its own handlers ignore that fire via `_quiet_running`), counts
+  it through `_fire`, and its own handlers ignore exactly that fire
+  (`_own_fire`). An Anki sync started during a quiet sync is still tracked
+  (`_anki_running`). A quiet sync that changed the collection defers
+  `mw.reset()` (`_try_reset`, re-checked every `RESET_POLL_MS`) until no
+  sync runs, the user is out of review, and they have either left the
+  editor or gone `RESET_QUIET_S` (10 s) without input. Focus alone never
+  holds it, and a profile close drops it. It counts
   errors silently (red entry at `FAIL_LIMIT` 3), clears auth on an AUTH
   error, and on any result but NO_CHANGES only marks **full sync
   pending** — the entry ("Full sync needed — click to choose") runs

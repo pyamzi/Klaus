@@ -418,6 +418,131 @@ check("a quiet sync shows syncing while it runs", during == ["syncing"], repr(du
 mw.col.sync_collection = real_sc
 A.remove_listener(seen.append)
 
+section("#34: an Anki sync started during a quiet sync is tracked")
+auth[0] = "AUTH"
+A._failures, A._full_pending, A._anki_running = 0, False, False
+A._last_attempt = -1e9
+A._quiet_running = True  # a quiet sync is in flight
+A._on_anki_sync_start()  # the user pressed Y meanwhile
+f = concurrent.futures.Future()
+f.set_result((out, ls[0], ls[0]))
+A._on_done(f)  # the quiet sync ends; Anki's is still running
+check("#34 after the quiet sync ends, the entry still says syncing",
+      A.entry_state()["state"] == "syncing", repr(A.entry_state()))
+check("#34 ...and no quiet sync may start", not A._ready())
+A._on_anki_sync_finish()
+check("#34 Anki's own finish clears it: quiet syncs resume", not A._anki_running and A._ready())
+A._failures, A._full_pending = 2, True
+A._fire(hooks.sync_will_start)
+check("#34 Klaus's own sync_will_start is not taken for Anki's", not A._anki_running)
+A._fire(hooks.sync_did_finish)
+check("#34 ...nor its sync_did_finish: failures and full-pending survive",
+      A._failures == 2 and A._full_pending)
+A._failures, A._full_pending = 0, False
+
+section("#17: a changed quiet sync never reloads an editor mid-typing")
+auth[0] = "AUTH"
+A._failures, A._full_pending, A._anki_running, A._quiet_running = 0, False, False, False
+mw.state = "deckBrowser"
+real_focus = getattr(A, "_editor_focused", None)
+real_sc = mw.col.sync_collection
+
+
+def typed_during_sync(a, m):  # input arrives while the sync runs
+    A._last_input = A.clock()
+    return real_sc(a, m)
+
+
+out.changed = True
+A._editor_focused = lambda: True  # the user is typing in an editor
+mw.col.sync_collection = typed_during_sync
+A._last_attempt = -1e9
+A._last_input = A.clock() - 999
+r0 = resets_box[0]
+A._tick()
+mw.col.sync_collection = real_sc
+check("#17 input during a changed sync: no reset at the finish", resets_box[0] == r0, str(resets_box))
+A._try_reset()
+check("#17 ...nor while typing in an editor", resets_box[0] == r0)
+A._last_input = A.clock() - A.RESET_QUIET_S - 1
+A._quiet_running = True
+A._try_reset()
+check("#17 ...nor while another sync runs", resets_box[0] == r0)
+A._quiet_running = False
+mw.state = "review"
+A._try_reset()
+check("#17 ...nor in review (never redraws the reviewer mid-card)", resets_box[0] == r0)
+mw.state = "overview"
+A._try_reset()
+check("#17 10 s without input runs it once, even with an editor still focused", resets_box[0] == r0 + 1)
+A._try_reset()
+check("#17 ...and only once", resets_box[0] == r0 + 1)
+
+# leaving the editor lets it run before the 10 s are up
+mw.col.sync_collection = typed_during_sync
+A._last_attempt = -1e9
+A._last_input = A.clock() - 999
+A._tick()
+mw.col.sync_collection = real_sc
+check("#17 typing in an editor: held", resets_box[0] == r0 + 1)
+A._editor_focused = lambda: False
+A._try_reset()
+check("#17 leaving the editor runs it at once", resets_box[0] == r0 + 2)
+
+# the timer path: a blocked check re-arms, a later one runs
+A._editor_focused = lambda: True
+mw.col.sync_collection = typed_during_sync
+A._last_attempt = -1e9
+A._last_input = A.clock() - 999
+A._tick()
+mw.col.sync_collection = real_sc
+check("#17 a held reset arms one re-check timer", A._reset_armed and resets_box[0] == r0 + 2)
+A._reset_timer_fired()
+check("#17 the timer fires while still blocked: re-armed, no reset", A._reset_armed and resets_box[0] == r0 + 2)
+A._last_input = A.clock() - A.RESET_QUIET_S - 1
+A._reset_timer_fired()
+check("#17 the timer fires once quiet: the reset runs, nothing re-armed",
+      not A._reset_armed and resets_box[0] == r0 + 3)
+A.RESET_POLL_MS = 0
+mw.col.sync_collection = typed_during_sync
+A._last_attempt = -1e9
+A._last_input = A.clock() - 999
+A._tick()
+mw.col.sync_collection = real_sc
+A._last_input = A.clock() - A.RESET_QUIET_S - 1
+app.processEvents()
+check("#17 a real QTimer drives it", resets_box[0] == r0 + 4 and not A._reset_armed, str(resets_box))
+A.RESET_POLL_MS = 1_000
+
+mw.col.sync_collection = typed_during_sync
+A._last_attempt = -1e9
+A._last_input = A.clock() - 999
+A._tick()
+mw.col.sync_collection = real_sc
+A._on_profile_close()
+A._last_input = A.clock() - 999
+A._try_reset()
+check("#17 profile close drops the pending reset", resets_box[0] == r0 + 4)
+
+mw.col.sync_collection = typed_during_sync
+A._last_attempt = -1e9
+A._last_input = A.clock() - 999
+A._tick()
+mw.col.sync_collection = real_sc
+A._last_input = A.clock() - 999
+real_col = mw.col
+mw.col = None
+A._try_reset()
+mw.col = real_col
+A._try_reset()
+check("#17 a closed collection drops it, never resets on it", resets_box[0] == r0 + 4)
+check("#17 pure rule: held only while typing in an editor",
+      A.reset_blocked(100, 95, True) and not A.reset_blocked(100, 95, False)
+      and not A.reset_blocked(100, 100 - A.RESET_QUIET_S, True))
+A._reset_armed = False
+A._editor_focused = real_focus
+out.changed = False
+
 section("sync_now")
 A.sync_now()
 check("deferred: nothing inside the call", clicked == [])

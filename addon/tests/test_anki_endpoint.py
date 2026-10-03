@@ -551,6 +551,23 @@ check("addTags behind approval", r["error"] is None and len(approvals) == 6 and 
 r = ac("removeTags", notes=[1], tags="a")
 check("removeTags behind approval", r["error"] is None and len(approvals) == 7 and col.tags.removed)
 
+# #16: the approval preview showed HTML-stripped NEW values only, so an edit
+# that dropped an image looked harmless. Note 3, so note 1's state (relied
+# on further down) is untouched. Mirrored without the server in
+# tests/test_endpoint_write_preview.py.
+col.notes[3] = Note2(fields={"Front": 'Q<img src="a.png">', "Back": "A"})
+col.notes[3].id = 3
+n_before = len(approvals)
+r = ac("updateNoteFields", note={"id": 3, "fields": {"Front": "Q"}})
+_shown = "\n".join(f"{k}: {v}" for k, v in approvals[-1][1])
+check("#16 updateNoteFields preview shows OLD (with a.png) and NEW raw values",
+      r["error"] is None and len(approvals) == n_before + 1 and 'OLD: Q<img src="a.png">' in _shown and "NEW: Q" in _shown, _shown)
+r = ac("updateNoteFields", note={"id": 404, "fields": {"Front": "x"}})
+check("#16 a missing note errors before any dialog", r["error"] and len(approvals) == n_before + 1, repr(r))
+r = ac("addNote", note={"deckName": "Default", "modelName": "Basic", "fields": {"Front": "x<img src=y onerror=z>", "Back": "b"}})
+check("#16 addNote preview keeps field markup visible",
+      any("x<img src=y onerror=z>" in s for _, s in approvals[-1][1]), repr(approvals[-1][1]))
+
 # Fix round 1, items 2+3: addNotes isolates a per-note failure instead of
 # aborting the whole batch (AnkiConnect's own list[noteId or null] result
 # shape), and — agent path, viewer active — applies the same klaus::from
@@ -705,8 +722,9 @@ section("pure helpers")
 check("similar_existing finds a note by the front's first words",
       ep.similar_existing(col, "Q changed words here") == "changed")
 secs = ep.preview_sections("addNote", {"note": {"deckName": "D", "modelName": "M", "fields": {"F": "<b>x</b>"}, "tags": ["t"], "options": {"sourcePage": 2}}}, similar="old front")
-check("preview strips html, names similar note and source page",
-      any("x" in s and "<b>" not in s for _, s in secs) and any("old front" in s for _, s in secs) and any("2" in s for _, s in secs))
+# #16: raw field HTML, never only the stripped form (this check used to pin stripping).
+check("preview keeps raw html, names similar note and source page",
+      any(s == "<b>x</b>" for _, s in secs) and any("old front" in s for _, s in secs) and any("2" in s for _, s in secs))
 
 section("registry")
 check("every ACTIONS entry is an Action with a schema and a run", all(hasattr(a, "schema") and callable(a.run) for a in ep.ACTIONS.values()))
