@@ -87,5 +87,5 @@ The sibling Anki add-on (`klausmate`) that runs inside Anki desktop and shares f
 _Avoid_: KlausMate, the plugin
 
 **Klaus Account**:
-The user's identity on klaus.ink, signed into from Klaus.
+The user's identity on klaus.ink, signed into from Klaus. Now the Klaus account at app.klaus.so, a shared OIDC provider (ADR-0008).
 _Avoid_: Klaus Plus, profile, login
