@@ -1,5 +1,7 @@
 # Material edits are a server-ordered history, Google Docs style
 
+> Domain superseded by ADR-0008: klaus.ink is now klaus.so (app.klaus.so for the Klaus account, note.klaus.so for the web app).
+
 So Materials can later be co-edited live, every edit to a Material (Page text, Document annotations and Links) is recorded as an operation in an edit history, the way Google Docs works: with a Klaus Account, klaus.ink orders and stores the history and is authoritative; offline edits queue locally and merge on reconnect; without an account the local history is authoritative. The `.md` and `.pdf` files are regenerated from the history after every change, and edits made to them by outside tools are detected, diffed, and folded back in as operations.
 
 ## Considered Options
