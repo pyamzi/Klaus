@@ -211,7 +211,19 @@ def _a_add_notes(col, p, ctx):
 def _a_update_note_fields(col, p, ctx):
     from . import anki_tools
     note = p.get("note") or {}
-    args = _tool_args("update_note", {("note_id", "id"): int(note.get("id") or 0), ("fields",): note.get("fields") or {}})
+    fields = note.get("fields") or {}
+    snapshot = ctx.get("preview_fields")
+    if snapshot is not None:
+        # Same op as the write, so check and write are atomic: a field that
+        # moved while the dialog was open (a sync, an edit in Browse) was
+        # never shown, so it must not be overwritten (#16).
+        try:
+            now = dict(col.get_note(int(note.get("id") or 0)).items())
+        except Exception as exc:
+            raise ActionError(f"note {note.get('id')} not found") from exc
+        if any(str(now.get(k, "")) != str(snapshot.get(k, "")) for k in fields):
+            raise ActionError("note changed since preview; retry")
+    args = _tool_args("update_note", {("note_id", "id"): int(note.get("id") or 0), ("fields",): fields})
     anki_tools._HANDLERS["update_note"](col, args, dict(ctx, confirm=lambda *a: True))
     return None
 
@@ -612,7 +624,9 @@ def _note_sections(note: dict, similar: str | None, agent: bool, pdf_safe: str |
     pdf_safe = (note.get("options") or {}).get("sourcePdf") or pdf_safe
     secs = [("Deck", str(note.get("deckName") or "")), ("Note type", str(note.get("modelName") or ""))]
     for k, v in (note.get("fields") or {}).items():
-        secs.append((str(k), strip_html(v)))
+        # Raw field HTML, never stripped (#16): stripping hid <img>, cloze
+        # and onerror markup. The dialog is a QPlainTextEdit, so it is inert.
+        secs.append((str(k), str(v)))  # str(v), exactly as create_note writes it
     tags = list(note.get("tags") or []) + (list(AGENT_TAGS) if agent else [])
     if agent and pdf_safe:
         tags.append(f"klaus::from::{pdf_safe}")
@@ -636,7 +650,7 @@ def _note_sections(note: dict, similar: str | None, agent: bool, pdf_safe: str |
 
 
 def preview_sections(action: str, params: dict, similar: str | list | None = None, agent: bool = False,
-                      pdf_safe: str | None = None) -> list[tuple[str, str]]:
+                      pdf_safe: str | None = None, current: dict | None = None) -> list[tuple[str, str]]:
     if action == "addNote":
         return _note_sections(params.get("note") or {}, similar, agent, pdf_safe)
     if action == "addNotes":
@@ -655,7 +669,16 @@ def preview_sections(action: str, params: dict, similar: str | list | None = Non
         return out
     if action == "updateNoteFields":
         note = params.get("note") or {}
-        return [("Note id", str(note.get("id")))] + [(str(k), strip_html(v)) for k, v in (note.get("fields") or {}).items()]
+        secs = [("Note id", str(note.get("id")))]
+        for k, v in (note.get("fields") or {}).items():
+            if current is None:
+                secs.append((str(k), str(v)))
+                continue
+            # Same comparison anki_tools' update_note writes by, so a field
+            # left out here is a field that is not written (#16).
+            if str(v) != str(current.get(k, "")):
+                secs.append((str(k), f"OLD: {current.get(k, '')}\nNEW: {v}"))
+        return secs
     if action in ("addTags", "removeTags"):
         return [("Notes", ", ".join(str(n) for n in params.get("notes") or [])), ("Tags", str(params.get("tags") or ""))]
     return [(action, json.dumps(params)[:2000])]
@@ -813,7 +836,29 @@ class Endpoint:
                             out.append(similar_existing(col, first))
                         return out
                     similar = self._main(_sims, self._read_timeout)
-                sections = preview_sections(action, params, similar, agent, ctx.get("pdf_safe"))
+                current = None
+                if action == "updateNoteFields":
+                    # The note's current fields, read on the main thread
+                    # like similar_existing, so the preview can show OLD
+                    # beside NEW (#16). A missing note fails here, before
+                    # any dialog opens.
+                    nid = (params.get("note") or {}).get("id")
+                    def _current():
+                        try:
+                            return dict(col.get_note(int(nid)).items())
+                        except Exception:
+                            return None
+                    current = self._main(_current, self._read_timeout)
+                    if current is None:
+                        raise ActionError(f"note {nid} not found")
+                    fields = (params.get("note") or {}).get("fields") or {}
+                    unknown = [k for k in fields if k not in current]
+                    if unknown:
+                        raise ActionError(f"Unknown field(s) {unknown}. Valid fields: {list(current)}")
+                    if all(str(v) == str(current[k]) for k, v in fields.items()):
+                        return {"result": None, "error": None}  # nothing to write, nothing to ask
+                    ctx["preview_fields"] = current
+                sections = preview_sections(action, params, similar, agent, ctx.get("pdf_safe"), current)
                 title = {"addNote": "KlausNote wants to add a card", "addNotes": "KlausNote wants to add cards",
                          "updateNoteFields": "KlausNote wants to edit a note"}.get(action, f"KlausNote wants to run {action}")
                 answer = self._ask(title, sections)

@@ -340,6 +340,9 @@ def setup_menus(main_window: "AnkiQt"):
     main_window.form.menuHelp.addAction(help_action)
 
 
+_deletion_hook = False
+
+
 def setup_main(main_window: "AnkiQt"):
     from aqt.gui_hooks import (
         browser_menus_did_init,
@@ -381,3 +384,13 @@ def setup_main(main_window: "AnkiQt"):
     card_will_show.append(on_card_will_show)
     reviewer_did_show_answer.append(on_reviewer_did_show_answer)
     state_shortcuts_will_change.append(on_mw_state_shortcuts)
+
+    # Klaus: deleting IO notes lets their diagram scenes go (#30); once only
+    global _deletion_hook
+    if not _deletion_hook:
+        from anki.hooks import notes_will_be_deleted
+
+        from .add import on_notes_will_be_deleted
+
+        notes_will_be_deleted.append(on_notes_will_be_deleted)
+        _deletion_hook = True

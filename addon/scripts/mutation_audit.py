@@ -113,7 +113,6 @@ AUDIT_MODULES = (
     "background",
     "pdf_notes",
     "lecture_view",
-    "projection",
     # The remaining assistant layers are aqt-light by construction, so
     # nearly every function is reachable from its own test file. The
     # 2026-09-01 list also
@@ -122,7 +121,6 @@ AUDIT_MODULES = (
     # Claude Code dock, and leaving them here made ALLOWED_TESTS name
     # four test files that no longer exist, so `--modules all` failed on
     # them (final review M2).
-    "card_forge",
     "anki_tools",
     # The index runner (K-152, added by K-162).  Its chain, queue and
     # status rendering are all aqt-free above its glue divider, so the

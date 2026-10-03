@@ -1,10 +1,11 @@
 """Image Occlusion 1/3: built into Klaus, guarded against the separate add-on.
 
-setup() registers IOE's hooks once (never when add-on 1374772155 is
-installed and enabled), the one setWebExports regex serves the subpackage's
+setup() registers IOE's hooks once (never when IOE, add-on 1374772155 or
+its .ankiaddon folder image_occlusion_enhanced, is installed and enabled), the one setWebExports regex serves the subpackage's
 web assets, the note type is created once, the note generators still write
 the masks the verbatim IOE wrote (fixtures made by running 31c3134's ngen),
-and occlude() hands svg-edit an initial mask in add mode.
+occlude() hands svg-edit an initial mask in add mode, and (#13) note IDs and
+image src values from a synced deck never reach a path outside media.
 
 Run: env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 tests/test_image_occlusion_setup.py
 """
@@ -98,6 +99,9 @@ def fake_main_window(mgr):
 tips = []
 io.tooltip = lambda msg, *a, **k: tips.append(msg)
 
+anki_hooks = sys.modules["anki.hooks"]
+anki_hooks.notes_will_be_deleted = Hook()
+
 section("conflict guard: the separate add-on installed and enabled")
 check("CONFLICT_ADDON is IOE's AnkiWeb id", io.CONFLICT_ADDON == "1374772155")
 mgr = Mgr(installed=["1374772155", "klaus_note"])
@@ -108,6 +112,7 @@ check("no gui_hooks callback is registered", all(getattr(gh, h) == [] for h in H
       str({h: getattr(gh, h) for h in HOOKS if getattr(gh, h)}))
 check("no menu action is added",
       mwin.form.menuTools.actions == [] and mwin.form.menuHelp.actions == [])
+check("no note-deletion hook is registered", anki_hooks.notes_will_be_deleted == [])
 check("exactly the conflict tooltip is shown", tips == [CONFLICT_TIP], str(tips))
 check("the guard runs before IOE's modules load",
       "klaus_note.image_occlusion.main" not in sys.modules)
@@ -117,11 +122,29 @@ check("occlude() does nothing while the guard is tripped",
       and "klaus_note.image_occlusion.main" not in sys.modules
       and "klaus_note.image_occlusion.add" not in sys.modules)
 
+section("#20 conflict guard: IOE installed from its .ankiaddon (image_occlusion_enhanced)")
+fresh_hooks()
+tips.clear()
+mgr = Mgr(installed=["image_occlusion_enhanced", "klaus_note"])
+mwin = fake_main_window(mgr)
+io.mw = mwin
+check("setup() returns False", io.setup() is False)
+check("no gui_hooks callback is registered", all(getattr(gh, h) == [] for h in HOOKS),
+      str({h: getattr(gh, h) for h in HOOKS if getattr(gh, h)}))
+check("no menu action is added",
+      mwin.form.menuTools.actions == [] and mwin.form.menuHelp.actions == [])
+check("exactly the conflict tooltip is shown", tips == [CONFLICT_TIP], str(tips))
+check("IOE's modules still don't load", "klaus_note.image_occlusion.main" not in sys.modules)
+check("the guard flag stays off", io._active is False)
+
 main = importlib.import_module("klaus_note.image_occlusion.main")
 main.QAction = Action
 
 for label, mgr in (("disabled", Mgr(installed=["1374772155"], disabled=["1374772155"])),
-                   ("absent", Mgr(installed=["klaus_note"]))):
+                   ("absent", Mgr(installed=["klaus_note"])),
+                   ("disabled (.ankiaddon folder)",
+                    Mgr(installed=["image_occlusion_enhanced"],
+                        disabled=["image_occlusion_enhanced"]))):
     section("setup with the separate add-on " + label)
     fresh_hooks()
     tips.clear()
@@ -144,6 +167,13 @@ for label, mgr in (("disabled", Mgr(installed=["1374772155"], disabled=["1374772
     check("Help keeps one Image Occlusion entry",
           [a.text for a in mwin.form.menuHelp.actions] == ["Image Occlusion Help…"],
           str([a.text for a in mwin.form.menuHelp.actions]))
+
+
+add_mod = sys.modules.get("klaus_note.image_occlusion.add")
+check("after three setups the note-deletion hook is registered exactly once",
+      add_mod is not None
+      and anki_hooks.notes_will_be_deleted == [add_mod.on_notes_will_be_deleted],
+      str(anki_hooks.notes_will_be_deleted))
 
 
 section("the one setWebExports regex")
@@ -425,5 +455,156 @@ except Exception as e:  # noqa: BLE001
 check("it does not raise", raised is None, repr(raised))
 check("it logs '[klaus_note] image occlusion profile setup failed: …'",
       "[klaus_note] image occlusion profile setup failed:" in out.getvalue(), out.getvalue())
+
+section("#13 getIONoteData accepts only <hex uniq_id>-<ao|oa|aa>-<n> note IDs")
+utils = importlib.import_module("klaus_note.image_occlusion.utils")
+nconvert = importlib.import_module("klaus_note.image_occlusion.nconvert")
+MODS = MODS + (utils,)
+base = tempfile.mkdtemp(prefix="io-paths-")
+media = os.path.join(base, "media")
+os.makedirs(os.path.join(media, "sub"))
+shutil.copy(PNG, os.path.join(media, "image.png"))
+shutil.copy(os.path.join(FIX, "abc-ao-O.svg"), os.path.join(media, "abc-ao-O.svg"))
+shutil.copy(PNG, os.path.join(media, "sub", "nested.png"))
+shutil.copy(PNG, os.path.join(base, "outside.png"))
+col = Col(media, model=io_model())
+use_col(col)
+ia = add.ImgOccAdd(types.SimpleNamespace(note=None), "editcurrent")
+BAD_ID = "Editing unavailable: Invalid image occlusion Note ID"
+
+
+def io_note(note_id, im='<img src="image.png">', om='<img src="abc-ao-O.svg">'):
+    n = Note()
+    n[cfg.IO_FLDS["id"]], n[cfg.IO_FLDS["im"]], n[cfg.IO_FLDS["om"]] = note_id, im, om
+    return n
+
+
+for good in ("abc-ao-1", "0123456789abcdef0123456789abcdef-oa-12", "abc-aa-3"):
+    ia.opref = {}
+    msg, path = ia.getIONoteData(io_note(good))
+    check("accepts %s" % good, msg is None and path == os.path.join(media, "image.png")
+          and ia.opref.get("uniq_id") == good.split("-")[0], str((msg, path)))
+for bad in ("../../evil-ao-1", "a/b-ao-1", "a\\b-ao-1", "..-ao-1", "abc-../x-1",
+            "abc-ao-1/..", "abc-xx-1", "ABC-ao-1", "abc-ao-", "-ao-1", "abc-ao-1x",
+            " abc-ao-1", "abc-ao-1\n", ""):
+    ia.opref = {}
+    msg, path = ia.getIONoteData(io_note(bad))
+    check("refuses %r with the invalid-ID message, opening nothing" % bad,
+          msg == BAD_ID and path is None and "uniq_id" not in ia.opref, str((msg, path)))
+
+section("#13 img_element_to_path resolves only to files directly in the media folder")
+check("a plain media name resolves",
+      utils.img_element_to_path('<img src="image.png">') == os.path.join(media, "image.png"))
+check("nameonly still returns the name",
+      utils.img_element_to_path('<img src="image.png">', True) == "image.png")
+for src in ("../outside.png", os.path.join(base, "outside.png"), "sub/../../outside.png",
+            "sub/nested.png"):
+    got = utils.img_element_to_path('<img src="%s">' % src)
+    check("refuses src=%r (None)" % src, got is None, str(got))
+check("nameonly refuses a src with a path too (None)",
+      utils.img_element_to_path('<img src="../outside.png">', True) is None)
+check("a URL src never resolves to a local file of the same base name",
+      utils.img_element_to_path('<img src="https://example.org/x/image.png">') is None
+      and utils.img_element_to_path('<img src="https://example.org/x/image.png">', True)
+      is None)
+os.symlink(os.path.join(base, "outside.png"), os.path.join(media, "link.png"))
+check("a media entry that resolves outside the folder is refused",
+      utils.img_element_to_path('<img src="link.png">') is None)
+msg, path = ia.getIONoteData(io_note("abc-ao-1", im='<img src="../outside.png">'))
+check("getIONoteData: an image outside media is a missing image",
+      path is None and msg == "Editing unavailable: Missing image or original mask", str(msg))
+
+section("#13 the note generators never write a mask outside the media folder")
+before = sorted(os.listdir(base))
+# A synced deck whose ID fields and mask ids all carry the same bad uniq_id:
+# no card is added or deleted, so updateNotes goes straight to the writes.
+notes = {}
+for nid, note_id in ((201, "../evil-ao-1"), (202, "../evil-ao-2")):
+    n = Note(nid=nid)
+    n[cfg.IO_FLDS["id"]] = note_id
+    notes[nid] = n
+col = Col(media, model=io_model(), notes=notes)
+use_col(col)
+evil = {"uniq_id": "../evil", "occl_tp": "ao", "omask": os.path.join(media, "abc-ao-O.svg"),
+        "note_id": "../evil-ao-1", "did": 1, "tags": []}
+gen = ngen.IoGenHideAllRevealOne(types.SimpleNamespace(parentWindow=None),
+                                 O_SVG.replace("abc-ao-", "../evil-ao-"), PNG, evil, [], {}, 1)
+ngen.tooltip = lambda *a, **k: None
+try:
+    r = gen.updateNotes(on_done=lambda s: None)
+except Exception as e:  # noqa: BLE001
+    r = e
+check("updateNotes with a uniq_id of '../evil' writes nothing above media",
+      sorted(os.listdir(base)) == before, str(sorted(os.listdir(base))))
+check("...and refuses (False) before touching any note",
+      r is False and col.removed == [], repr(r))
+
+section("#13 a sibling ID with junk after -<n>: refused before any note is deleted")
+media_before = sorted(os.listdir(media))
+notes = {}
+for nid, note_id in ((301, "abc-ao-1"), (302, "abc-ao-2"), (303, "abc-ao-../x")):
+    n = Note(nid=nid)
+    n[cfg.IO_FLDS["id"]] = note_id
+    notes[nid] = n
+col = Col(media, model=io_model(), notes=notes)
+use_col(col)
+Note.flushed = []
+asks = []
+ngen.io_ask = lambda parent, q, on_answer, **k: (asks.append(q), on_answer(True))
+ok_opref = {"uniq_id": "abc", "occl_tp": "ao", "omask": os.path.join(media, "abc-ao-O.svg"),
+            "note_id": "abc-ao-1", "did": 1, "tags": []}
+ed = types.SimpleNamespace(parentWindow=None,
+                           imgoccadd=types.SimpleNamespace(imgoccedit=None))
+gen = ngen.IoGenHideAllRevealOne(ed, O_SVG, PNG, ok_opref, [], {}, 1)
+try:
+    r = gen.updateNotes(on_done=lambda s: None)
+except Exception as e:  # noqa: BLE001
+    r = e
+check("updateNotes refuses (False)", r is False, repr(r))
+check("...no note deleted, none flushed, nothing asked",
+      col.removed == [] and Note.flushed == [] and asks == [],
+      "%s %s %s" % (col.removed, Note.flushed, asks))
+check("...and no mask written", sorted(os.listdir(media)) == media_before
+      and sorted(os.listdir(base)) == before)
+
+section("#13 nconvert reads the masks through their confined media paths")
+nconvert.mw = add.mw
+conv = nconvert.ImgOccNoteConverter(None)
+cn = Note()
+cn[cfg.IO_FLDS["qm"]] = cn[cfg.IO_FLDS["om"]] = '<img src="abc-ao-O.svg">'
+cwd = os.getcwd()
+os.chdir(base)  # a bare relative name would have resolved here, not in media
+try:
+    try:
+        tp = conv.getOcclTypeAndNodes(cn)
+    except Exception as e:  # noqa: BLE001
+        tp = e
+    check("masks in media are read from media (not the working directory)", tp == "ao", repr(tp))
+    shutil.copy(os.path.join(FIX, "abc-ao-O.svg"), os.path.join(base, "esc-O.svg"))
+    cn[cfg.IO_FLDS["qm"]] = cn[cfg.IO_FLDS["om"]] = '<img src="../esc-O.svg">'
+    try:
+        tp = conv.getOcclTypeAndNodes(cn)
+    except Exception as e:  # noqa: BLE001
+        tp = e
+    check("a mask src outside media: None (the note is skipped), nothing read", tp is None,
+          repr(tp))
+finally:
+    os.chdir(cwd)
+    if os.path.exists(os.path.join(base, "esc-O.svg")):
+        os.remove(os.path.join(base, "esc-O.svg"))
+for mod, label in ((ngen.ImgOccNoteGenerator, "ngen"), (nconvert.ImgOccNoteConverter, "nconvert")):
+    fake = types.SimpleNamespace(_media_path=media)
+    for name in ("../x", os.path.join(base, "x"), "sub/x"):
+        try:
+            mod._saveMask(fake, "<svg/>", name, "Q")
+            r = None
+        except ValueError as e:
+            r = e
+        check("%s._saveMask refuses note id %r" % (label, name), isinstance(r, ValueError)
+              and sorted(os.listdir(base)) == before
+              and not os.path.exists(os.path.join(media, "sub", "x-Q.svg")), repr(r))
+    check("%s._saveMask still writes a plain name into media" % label,
+          mod._saveMask(fake, "<svg/>", "abc-ao-9", "Q") == "abc-ao-9-Q.svg"
+          and os.path.isfile(os.path.join(media, "abc-ao-9-Q.svg")))
 
 raise SystemExit(report())

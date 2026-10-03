@@ -24,7 +24,6 @@ install()
 import klaus_note.settings as _settings  # noqa: E402
 
 ep = importlib.import_module("klaus_note.anki_endpoint")
-pdf_map = importlib.import_module("klaus_note.pdf_map")
 manage_models = importlib.import_module("klaus_note.manage_models")
 aqt = sys.modules["aqt"]
 operations = sys.modules["aqt.operations"]
@@ -194,18 +193,6 @@ check("ordinary reads stay on the main-thread path", calls == [] and main_calls)
 check("no run_op (tests, old callers) keeps the old main-thread path",
       ep.Endpoint(col_getter=FakeCol, run_on_main=lambda fn, timeout: fn(), approver=lambda t, s: True,
                   ctx_factory=lambda: {}, version="x")._run_op is None)
-
-section("map build: layout without the collection")
-FakeOp.made.clear()
-got = []
-pdf_map._load_graph = lambda: {"pdfs": [], "edges": []}
-filled = []
-pdf_map._fill_retention = lambda g: filled.append(g)
-pdf_map.start_graph_build(got.append, lambda e: got.append(("fail", e)))
-check("two ops", len(FakeOp.made) == 2)
-check("the layout op does not hold the collection", FakeOp.made[0].no_col)
-check("the retention fill does (it reads FSRS data)", not FakeOp.made[1].no_col and filled)
-check("the finished graph reaches done", got == [{"pdfs": [], "edges": []}])
 
 section("Preferences closes on profile switch without prompting")
 prompts, closed = [], []

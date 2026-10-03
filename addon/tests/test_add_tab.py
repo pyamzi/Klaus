@@ -64,9 +64,9 @@ check("no reader attribute on editors anywhere in the package",
       not any("_klaus_note_pdf_tabs" in open(os.path.join("klaus_note", f)).read() or "_klaus_note_sidebar" in open(os.path.join("klaus_note", f)).read()
               for f in os.listdir("klaus_note") if f.endswith(".py")))
 check("the deleted test file is gone", not os.path.exists("tests/test_pdf_dock.py"))
-check("the Duplicates strip is gone, its engine stays (manual indexing spec)",
+check("the Duplicates strip and its engine are gone",
       not os.path.exists("klaus_note/browse_toolkit.py") and "browse_toolkit" not in src_init
-      and not os.path.exists("tests/test_browse_toolkit.py") and os.path.exists("klaus_note/duplicates.py"))
+      and not os.path.exists("tests/test_browse_toolkit.py") and not os.path.exists("klaus_note/duplicates.py"))
 
 section("legacy placement keys are dropped on read and on save")
 json.dump({"placement": "float", "geom": [1, 2, 3, 4], "tabs": {"editor": ["A"]}},

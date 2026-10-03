@@ -2783,12 +2783,19 @@ def manage_models_dialog(*_args: Any) -> None:
     def _forget_dialog(_result: int) -> None:
         global _OPEN_DLG
         _OPEN_DLG = None
-        try:
-            from aqt import gui_hooks as _gui_hooks2
 
-            _gui_hooks2.profile_will_close.remove(_on_profile_will_close)
-        except Exception:
-            pass
+        def _unhook() -> None:
+            try:
+                from aqt import gui_hooks as _gui_hooks2
+
+                _gui_hooks2.profile_will_close.remove(_on_profile_will_close)
+            except Exception:
+                pass
+
+        # A tick later (#35): a profile close lands here from inside
+        # profile_will_close's own loop over its live list, and removing
+        # the running handler there skips the handler after it.
+        QTimer.singleShot(0, _unhook)
 
     dlg.finished.connect(_forget_dialog)
 

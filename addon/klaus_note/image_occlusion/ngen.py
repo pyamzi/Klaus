@@ -36,6 +36,7 @@ the collection.
 """
 
 import logging
+import re
 
 from aqt import mw
 from aqt.utils import tooltip
@@ -45,7 +46,7 @@ from xml.dom import minidom
 import uuid
 
 from .dialogs import io_ask
-from .utils import path_to_img_element
+from .utils import media_path, path_to_img_element
 from .config import *
 from .lang import _, ngettext
 
@@ -133,6 +134,9 @@ class ImgOccNoteGenerator(object):
         self.occl_id = "%s-%s" % (self.uniq_id, self.occl_tp)
 
         self._findAllNotes()
+        if not self._idsAreSafe():
+            tooltip(_("Editing unavailable: Invalid image occlusion Note ID"))
+            return False
         (svg_node, mlayer_node) = self._getMnodesAndSetIds(True)
         if not self.mnode_ids:
             tooltip(
@@ -304,6 +308,16 @@ class ImgOccNoteGenerator(object):
         logging.debug("res %s", res)
         logging.debug("nids %s", self.nids)
 
+    def _idsAreSafe(self):
+        """Klaus: the uniq_id is hex and every sibling ID is <old occl_id>-<n>,
+        checked before any note is deleted or written. Every mask name is
+        occl_id plus -<digits> from a new number or a sibling ID, so then it
+        is a plain media name (the IDs come from synced or shared decks)."""
+        old_occl_id = "%s-%s" % (self.uniq_id, self.opref["occl_tp"])
+        sibling = re.compile(re.escape(old_occl_id) + r"-[0-9]+")
+        return re.fullmatch(r"[0-9a-f]+", self.uniq_id or "") is not None and all(
+            sibling.fullmatch(note_id or "") for note_id in self.nids)
+
     def _deleteAndIdNotes(self, mlayer_node, then):
         """
         Determine which mask nodes have been deleted or newly created and, depending
@@ -464,7 +478,9 @@ class ImgOccNoteGenerator(object):
             _("!saving %(note_id)s, %(mtype)s"), {"note_id": note_id, "mtype": mtype}
         )
         mask_filename = "%s-%s.svg" % (note_id, mtype)
-        mask_path = os.path.join(self._media_path, mask_filename)
+        mask_path = media_path(self._media_path, mask_filename)
+        if mask_path is None:  # Klaus: never write outside the media folder
+            raise ValueError("invalid image occlusion note id: %r" % note_id)
         mask_data = mask.encode("utf8")
 
         with open(mask_path, "wb") as f:

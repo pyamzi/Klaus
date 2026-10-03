@@ -14,6 +14,8 @@ AFTER_REVIEW_S = 30        # leaving a review → sync this much later
 AFTER_REVIEW_QUIET_S = 5   # ...once there has been no input this long
 FAIL_LIMIT = 3             # failures in a row before the entry turns red
 TICK_MS = 10_000
+RESET_QUIET_S = 10         # a changed sync's mw.reset() waits for this much quiet
+RESET_POLL_MS = 1_000      # ...re-checked this often while it waits
 
 
 def due(now: float, *, last_input: float, last_attempt: float,
@@ -25,6 +27,14 @@ def due(now: float, *, last_input: float, last_attempt: float,
         return True
     return (review_left_at is not None and now - review_left_at >= AFTER_REVIEW_S
             and now - last_input >= AFTER_REVIEW_QUIET_S)
+
+
+def reset_blocked(now: float, last_input: float, editor_focused: bool) -> bool:
+    """Whether a changed sync's mw.reset() must wait (#17): it reloads every
+    open editor, so not while the user is typing in one. Leaving the editor
+    or RESET_QUIET_S without input ends the wait; focus alone never holds it,
+    or a stale editor could later save over a change from another device."""
+    return editor_focused and now - last_input < RESET_QUIET_S
 
 
 def ago(seconds: float) -> str:
@@ -138,6 +148,12 @@ _failures = 0
 _full_pending = False
 _quiet_running = False
 _anki_running = False
+# True only inside Klaus's own fire of sync_will_start/sync_did_finish, so
+# the handlers tell it from Anki's. _quiet_running could not: an Anki sync
+# started during a quiet sync was then never tracked (#34).
+_own_fire = False
+_reset_pending = False  # a changed quiet sync still owes mw.reset() (#17)
+_reset_armed = False    # a re-check timer is queued
 _drawn_logged_in: bool | None = None
 # Last sync, wall seconds. Cached: a sync holds the collection lock for its
 # whole run, so a main-thread read (every tick, every entry) would freeze the
@@ -280,7 +296,7 @@ def _run_quiet() -> None:
     _quiet_running = True
     _notify()  # the icon spins
     try:
-        gui_hooks.sync_will_start()
+        _fire(gui_hooks.sync_will_start)
         auth = mw.pm.sync_auth()
         col, media = mw.col, mw.pm.media_syncing_enabled()
 
@@ -298,7 +314,7 @@ def _run_quiet() -> None:
 
 
 def _on_done(fut) -> None:
-    global _failures, _full_pending, _quiet_running, _last_sync
+    global _failures, _full_pending, _quiet_running, _last_sync, _reset_pending
     from aqt import gui_hooks, mw
 
     if getattr(mw, "col", None) is None:
@@ -354,9 +370,9 @@ def _on_done(fut) -> None:
         # Reset only when the sync changed the collection: mw.reset() reloads
         # Browse's table and editor, and Add's notetype, every time it runs.
         steps = [lambda: mw.col.models._clear_cache()] if changed else []
-        steps.append(gui_hooks.sync_did_finish)  # while _quiet_running: our own fire
+        steps.append(lambda: _fire(gui_hooks.sync_did_finish))
         if changed:
-            steps.append(mw.reset)
+            _reset_pending = True  # run by _try_reset, never under a typing user
         steps.append(mw.toolbar.update_sync_status)
         for step in steps:
             try:
@@ -364,20 +380,81 @@ def _on_done(fut) -> None:
             except Exception as exc:  # noqa: BLE001
                 print(f"[klaus_note] auto sync finish step failed: {exc}")
         _quiet_running = False
+        _try_reset()
         _redraw_if_login_changed()
         _notify()
 
 
+def _editor_focused() -> bool:
+    """Whether keyboard focus is in an Anki editor (Browse, Edit Current, Add)."""
+    try:
+        from aqt.editor import EditorWebView
+        from aqt.qt import QApplication
+
+        w = QApplication.focusWidget()
+        while w is not None:
+            if isinstance(w, EditorWebView):
+                return True
+            w = w.parentWidget()
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+def _try_reset() -> None:
+    """Run a changed sync's deferred mw.reset() once nothing is in the way;
+    otherwise look again in RESET_POLL_MS. Idleness is checked right here,
+    immediately before the reset."""
+    global _reset_pending, _reset_armed
+    if not _reset_pending:
+        return
+    try:
+        from aqt import mw
+
+        if getattr(mw, "col", None) is None:
+            _reset_pending = False  # the profile closed: nothing to reload
+            return
+        if (_quiet_running or _anki_running or getattr(mw, "state", "") == "review"
+                or reset_blocked(clock(), _last_input, _editor_focused())):
+            if not _reset_armed:
+                from aqt.qt import QTimer
+
+                QTimer.singleShot(RESET_POLL_MS, _reset_timer_fired)
+                _reset_armed = True
+            return
+        _reset_pending = False
+        mw.reset()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klaus_note] auto sync reset failed: {exc}")
+
+
+def _reset_timer_fired() -> None:
+    global _reset_armed
+    _reset_armed = False
+    _try_reset()
+
+
+def _fire(hook) -> None:
+    """Klaus's own fire of a sync hook, which its handlers ignore."""
+    global _own_fire
+    _own_fire = True
+    try:
+        hook()
+    finally:
+        _own_fire = False
+
+
 def _on_anki_sync_start() -> None:
     global _anki_running
-    if not _quiet_running:
-        _anki_running = True
-        _notify()  # the icon spins
+    if _own_fire:
+        return
+    _anki_running = True
+    _notify()  # the icon spins
 
 
 def _on_anki_sync_finish() -> None:
     global _anki_running, _last_attempt, _failures, _full_pending
-    if _quiet_running:
+    if _own_fire:
         return
     _anki_running = False
     _last_attempt = clock()
@@ -449,6 +526,8 @@ def _on_profile_open() -> None:
 
 
 def _on_profile_close() -> None:
+    global _reset_pending
+    _reset_pending = False  # never reset against a closing collection
     if _quiet_running:
         try:
             from aqt import mw

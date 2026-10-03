@@ -1172,8 +1172,8 @@ tmp, pipe = new_world(names=("a", "b"))
 iq.request_pdf("b", announce=False)
 FakeTimer.drain()
 check("b is running", iq.state().name == "b")
-drive_store.set_excluded(tmp, "pdf", "b", True)
 pipe.finish_cards()
+drive_store.set_excluded(tmp, "pdf", "b", True)  # #31: during phase two
 os.makedirs(pdf_index.index_dir(tmp, "b"), exist_ok=True)  # what phase two writes
 pipe.finish_pdf()
 FakeTimer.drain()
@@ -1182,8 +1182,8 @@ check("a PDF excluded while its job ran keeps no index", not os.path.isdir(pdf_i
 tmp, pipe = new_world(names=("a", "b"))
 iq.request_pdf("b", announce=False)
 FakeTimer.drain()
-drive_store.set_excluded(tmp, "pdf", "b", True)
 pipe.finish_cards()
+drive_store.set_excluded(tmp, "pdf", "b", True)  # #31: during phase two
 pipe.finish_pdf()
 check("a PDF excluded mid-run is not matched against an index that was just deleted",
       ("ensure_matches", "b") not in pipe.calls and not iq.state().active, str(pipe.calls))
@@ -1192,8 +1192,8 @@ for _how in ("cancel", "fail"):
     tmp, pipe = new_world(names=("a", "b"))
     iq.request_pdf("b", announce=False)
     FakeTimer.drain()
-    drive_store.set_excluded(tmp, "pdf", "b", True)
     pipe.finish_cards()
+    drive_store.set_excluded(tmp, "pdf", "b", True)  # #31: during phase two
     os.makedirs(pdf_index.index_dir(tmp, "b"), exist_ok=True)  # phase two's save
     if _how == "cancel":
         iq.cancel_all()
@@ -1219,5 +1219,111 @@ check("config has no auto_index_on_add",
 _mm = open("klaus_note/manage_models.py", encoding="utf-8").read()
 check("a model change tooltips instead of prompting",
       "offer_model_sweep" not in _mm and "Press ⟳ in the Library to re-index for the new model." in _mm)
+
+# ---------------------------------------------- #22: a stranded queue restarts
+
+section("#22: after the busy-wait gives up, the queue is picked up again")
+
+
+def _strand(pipe):
+    """Index Now holds the token past the bounded wait; then it frees."""
+    pipe._busy = True
+    iq.request_pdf("a", announce=False)
+    for _ in range(iq.BUSY_WAIT_POLLS + 2):
+        FakeTimer.drain(limit=1)
+    assert FakeTimer.pending == [] and iq._current is None and iq.pending_names() == {"a"}
+    pipe._busy = False
+
+
+tmp, pipe = new_world(names=("a", "b"))
+_strand(pipe)
+iq.request_pdf("a", announce=False)
+FakeTimer.drain(limit=1)
+check("re-requesting a stranded PDF starts it",
+      pipe.calls == [("ensure_index", "")] and iq._current == (iq.JOB_PDF, "a"),
+      f"{pipe.calls} / {iq._current}")
+
+_tips22 = []
+iq.tooltip = lambda text="", **_k: _tips22.append(text)
+tmp, pipe = new_world(names=("a",))
+_strand(pipe)
+iq.refresh()
+FakeTimer.drain(limit=1)
+check("⟳ starts a stranded queue",
+      pipe.calls == [("ensure_index", "")] and iq._current == (iq.JOB_PDF, "a"),
+      f"{pipe.calls} / {iq._current}")
+check("...and never says 'Everything is indexed' while work is queued",
+      _tips22[-1:] == ["Indexing 1 PDF"], str(_tips22))
+
+tmp, pipe = new_world(names=("a",))
+iq.request_pdf("a", announce=False)
+FakeTimer.drain()
+iq.refresh()
+check("⟳ mid-run reports the running PDF, not 'Everything is indexed'",
+      _tips22[-1:] == ["Indexing 1 PDF"], str(_tips22))
+
+tmp, pipe = new_world(names=("a",))
+_strand(pipe)
+pipe._busy = True
+iq.request_pdf("a", announce=False)
+for _ in range(iq.BUSY_WAIT_POLLS + 2):
+    FakeTimer.drain(limit=1)
+check("a re-request while the token is still held waits, bounded, again",
+      FakeTimer.pending == [] and pipe.calls == [] and iq.pending_names() == {"a"})
+pipe._busy = False
+
+# ------------------------------- #31: excluding the running PDF ends it quietly
+
+section("#31: a PDF excluded while it runs ends as excluded, not as a failure")
+
+
+def _two_queued():
+    tmp, pipe = new_world(names=("a", "b"))
+    iq.request([(iq.JOB_PDF, "a"), (iq.JOB_PDF, "b")], announce=False)
+    FakeTimer.drain()
+    return tmp, pipe
+
+
+def _b_runs_on(pipe):
+    FakeTimer.drain()
+    return iq._current == (iq.JOB_PDF, "b") and pipe.calls[-1] == ("ensure_index", "")
+
+
+tmp, pipe = _two_queued()
+pipe.finish_cards()
+pipe.finish_pdf()
+drive_store.set_excluded(tmp, "pdf", "a", True)
+os.makedirs(pdf_index.index_dir(tmp, "a"), exist_ok=True)
+pipe.raise_in("matches", RuntimeError("“a” isn't embedded yet."))
+check("excluded during matching: no failure is published", not iq.state().failed, str(iq.state()))
+check("...its index is gone", not os.path.isdir(pdf_index.index_dir(tmp, "a")))
+check("...and the job queued behind it still runs", _b_runs_on(pipe), f"{pipe.calls} / {iq._current}")
+
+tmp, pipe = _two_queued()
+pipe.finish_cards()
+drive_store.set_excluded(tmp, "pdf", "a", True)
+os.makedirs(pdf_index.index_dir(tmp, "a"), exist_ok=True)
+pipe.raise_in("pdf", RuntimeError("Ollama hiccup"))
+check("excluded during PDF embedding, then an error: no failure, the queue goes on",
+      not iq.state().failed and not os.path.isdir(pdf_index.index_dir(tmp, "a")) and _b_runs_on(pipe),
+      f"{iq.state()} / {pipe.calls}")
+
+tmp, pipe = _two_queued()
+drive_store.set_excluded(tmp, "pdf", "a", True)
+pipe.finish_cards()
+check("excluded during the card-index phase: the PDF is never embedded",
+      ("ensure_pdf_index", "a") not in pipe.calls and not iq.state().failed, str(pipe.calls))
+check("...and the queue goes on", _b_runs_on(pipe), f"{pipe.calls} / {iq._current}")
+
+tmp, pipe = _two_queued()
+pipe.finish_cards()
+pipe.finish_pdf()
+drive_store.set_excluded(tmp, "pdf", "a", True)
+os.makedirs(pdf_index.index_dir(tmp, "a"), exist_ok=True)  # matches.json lands in it
+pipe.finish_matches()
+check("excluded during matching that completes: no tags written, no index kept, the queue goes on",
+      ("tag_sync", "a") not in pipe.calls and not os.path.isdir(pdf_index.index_dir(tmp, "a"))
+      and not iq.state().failed and _b_runs_on(pipe),
+      f"{pipe.calls} / {iq.state()}")
 
 raise SystemExit(report())

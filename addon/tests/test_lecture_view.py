@@ -637,37 +637,16 @@ check("public open exists", callable(lecture_view.open_lecture_view))
 check("setup exists", callable(lecture_view.setup))
 
 
-section("the card-index directory is spelled three times — they must agree")
-# CARD_INDEX_SUBDIR is one of three INDEPENDENT copies of the same on-disk
-# path (curation.index_dir(), lecture_view.CARD_INDEX_SUBDIR,
-# pdf_graph.CARD_INDEX_SUBDIR). Every fixture in this file builds its
-# directory FROM the constant, so the constant defines both the code and
+section("the card-index directory is spelled twice — they must agree")
+# CARD_INDEX_SUBDIR is one of two INDEPENDENT copies of the same on-disk
+# path (curation.index_dir(), lecture_view.CARD_INDEX_SUBDIR). Every
+# fixture in this file builds its directory FROM the constant, so the constant defines both the code and
 # the test and the two can never disagree — a self-referential pin, the
 # K-135 shape (K-139 mutation audit, finding 7: even collapsing it to
 # "MUT" survived). What is actually at risk is DRIFT between the copies:
 # if one moves, the Lecture panel reads an empty directory and says "No
 # lecture page available" forever, with a green suite. So compare the
-# imported constant against the OTHER two modules' own literals.
-
-
-def _module_str_const(path, name):
-    """The last string literal in module-level `name = ...` of `path`.
-
-    Parsed, not grepped: curation spells it inside an os.path.join(), and
-    a regex over source text would also match the word in a comment.
-    """
-    with open(path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read())
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(isinstance(t, ast.Name) and t.id == name
-                   for t in node.targets):
-            continue
-        strings = [n.value for n in ast.walk(node.value)
-                   if isinstance(n, ast.Constant) and isinstance(n.value, str)]
-        return strings[-1] if strings else None
-    return None
+# imported constant against curation's own literal.
 
 
 def _func_str_const(path, name):
@@ -683,16 +662,14 @@ def _func_str_const(path, name):
 
 
 _cur_dir = _func_str_const("klaus_note/curation.py", "index_dir")
-_graph_dir = _module_str_const("klaus_note/pdf_graph.py", "CARD_INDEX_SUBDIR")
-check("all three copies are still there to be compared — a copy that "
+check("both copies are still there to be compared — a copy that "
       "vanishes must fail loudly, not quietly compare nothing",
       isinstance(_cur_dir, str) and _cur_dir
-      and isinstance(_graph_dir, str) and _graph_dir
       and isinstance(lecture_view.CARD_INDEX_SUBDIR, str))
-check("curation.index_dir(), lecture_view.CARD_INDEX_SUBDIR and "
-      "pdf_graph.CARD_INDEX_SUBDIR name the SAME directory — the writer, "
-      "the reviewer's reader and the map's reader must not drift apart",
-      lecture_view.CARD_INDEX_SUBDIR == _cur_dir == _graph_dir)
+check("curation.index_dir() and lecture_view.CARD_INDEX_SUBDIR name the "
+      "SAME directory — the writer and the reviewer's reader must not "
+      "drift apart",
+      lecture_view.CARD_INDEX_SUBDIR == _cur_dir)
 
 
 section("setup(): registers every hook, exactly once")

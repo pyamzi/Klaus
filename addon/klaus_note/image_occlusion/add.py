@@ -35,8 +35,10 @@ Add notes.
 """
 
 import atexit
+import html
 import json
 import os
+import re
 import shutil
 import tempfile
 
@@ -53,7 +55,7 @@ from .dialogs import guarded, io_critical, io_info
 from .editor import ImgOccEdit
 from .lang import _
 from .ngen import *
-from .utils import get_image_dimensions, img_element_to_path, path_to_url
+from .utils import get_image_dimensions, img_element_to_path, media_path, path_to_url
 
 # SVG-Edit configuration
 svg_edit_dir = os.path.join(os.path.dirname(__file__), "svg-edit", "editor")
@@ -81,6 +83,65 @@ def _current_deck_id(editor) -> int:
         return mw.col.defaults_for_adding(current_review_card=None).deck_id
     except Exception:
         return mw.col.decks.get_current_id()
+
+
+def drop_unused_sidecar(image_name, exclude=(), col=None) -> bool:
+    """Klaus: the one way a diagram's _<image_name>.excalidraw leaves media.
+    Moved to Anki's media trash (syncs as a deletion; Check Media can
+    restore it), and only once no note's fields contain image_name, plain
+    or HTML-escaped, other than the note ids in exclude (notes about to be
+    deleted). Collection only, no Qt, never raises. True when it went."""
+    try:
+        col = col or mw.col
+        sidecar = "_%s.excalidraw" % image_name
+        path = media_path(col.media.dir(), sidecar) if image_name else None
+        if path is None or media_path(col.media.dir(), image_name) is None:
+            return False
+        if not os.path.isfile(path):
+            return False
+        exclude = {int(nid) for nid in exclude}
+        for name in {image_name, html.escape(image_name)}:
+            like = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            users = col.db.list(
+                "select id from notes where flds like ? escape '\\'", "%" + like + "%")
+            if any(nid not in exclude for nid in users):
+                return False
+        col.media.trash_files([sidecar])
+    except Exception as e:  # noqa: BLE001 - a kept file is the safe failure
+        print("[klaus_note] draw: the old scene was kept: %s" % e)
+        return False
+    return True
+
+
+def on_notes_will_be_deleted(col, ids) -> None:
+    """Klaus (anki.hooks.notes_will_be_deleted): the scenes of the IO notes
+    being deleted go once no other note names their image. Runs inside
+    col.remove_notes before the delete, maybe on the op's thread: the
+    collection only, no Qt, and it never raises (that would break the
+    deletion)."""
+    try:
+        gone = {int(nid) for nid in ids}
+        model = col.models.by_name(IO_MODEL_NAME) if gone else None
+        if not model:
+            return
+        conf = col.get_config("imgocc") or {}
+        im = (conf.get("flds") or {}).get("im", IO_FLDS["im"])
+        names = [f["name"] for f in model["flds"]]
+        if im not in names:
+            return
+        idx = names.index(im)
+        images = set()
+        for flds in col.db.list(
+                "select flds from notes where mid = ? and id in (%s)"
+                % ",".join(str(nid) for nid in gone), model["id"]):
+            fields = flds.split("\x1f")
+            name = img_element_to_path(fields[idx], True) if idx < len(fields) else None
+            if name:
+                images.add(name)
+        for name in sorted(images):
+            drop_unused_sidecar(name, exclude=gone, col=col)
+    except Exception as e:  # noqa: BLE001 - never break note deletion
+        print("[klaus_note] draw: scenes of deleted notes were kept: %s" % e)
 
 
 class ImgOccAdd(object):
@@ -184,17 +245,19 @@ class ImgOccAdd(object):
         image_path = img_element_to_path(note[self.ioflds["im"]])
         omask = img_element_to_path(note[self.ioflds["om"]])
 
-        if note_id is None or note_id.count("-") != 2:
+        # Klaus: the parts become mask file names, and the field may come
+        # from a synced or shared deck: <uuid4 hex>-<ao|oa|legacy aa>-<n> only.
+        match = re.fullmatch(r"([0-9a-f]+)-(ao|oa|aa)-([0-9]+)", note_id or "")
+        if match is None:
             msg = _("Editing unavailable: Invalid image occlusion Note ID")
             return msg, None
         elif not omask or not image_path:
             msg = _("Editing unavailable: Missing image or original mask")
             return msg, None
 
-        note_id_grps = note_id.split("-")
         self.opref["note_id"] = note_id
-        self.opref["uniq_id"] = note_id_grps[0]
-        self.opref["occl_tp"] = note_id_grps[1]
+        self.opref["uniq_id"] = match.group(1)
+        self.opref["occl_tp"] = match.group(2)
         self.opref["image"] = image_path
         self.opref["omask"] = omask
 
@@ -373,6 +436,8 @@ class ImgOccAdd(object):
         # carry masks over from, Add allowed.
         self.excal_sidecar = None
         self.excal_scene = None
+        if self.imgoccedit.draw_tab is not None:  # its changes no longer count (#19)
+            self.imgoccedit.draw_tab.dirty = False
         self.imgoccedit.set_add_enabled(True)
 
     def _draw_folder(self):
@@ -466,10 +531,20 @@ class ImgOccAdd(object):
             print("[klaus_note] draw: the scene was not saved: %s" % e)
             tooltip(_("KlausNote: the cards were saved, but the drawing couldn't be saved for editing"))
 
+    def _drawing_unused(self, closing=True):
+        """Klaus: True, with a tooltip, before a first "Use drawing", or when
+        closing would drop drawing changes not yet used (the Close gate asks;
+        the actions that write notes and close refuse)."""
+        dialog = self.imgoccedit
+        dirty = dialog.draw_tab is not None and dialog.draw_tab.dirty
+        if dialog.add_blocked or (closing and dirty):
+            tooltip(_("Press Use drawing first"), parent=dialog)
+            return True
+        return False
+
     def onAddNotesButton(self, choice, close):
         dialog = self.imgoccedit
-        if dialog.add_blocked:  # Klaus: a draw session before "Use drawing"
-            tooltip(_("Press Use drawing first"), parent=dialog)
+        if self._drawing_unused(close):
             return
         # If the user is in in-group editing mode (i.e. editing a shape that
         # is grouped with other shapes) svgCanvasToString() doesn't work and
@@ -517,6 +592,8 @@ class ImgOccAdd(object):
 
     def onEditNotesButton(self, choice):
         dialog = self.imgoccedit
+        if self._drawing_unused():
+            return
         # See the comment above in addNotesButton() about
         # the call to `leaveContext()`.
         dialog.svg_edit.evalWithCallback(
@@ -541,10 +618,15 @@ class ImgOccAdd(object):
         )
         # Klaus: updateNotes may ask first (window-modal); the rest runs
         # once the notes are written. A used drawing's scene goes beside the
-        # new image's name (old notes keep the old image and its scene).
+        # new image's name; the old image's scene goes once no note shows
+        # that image any more (other batches may still use it).
+        old_name = os.path.basename(self.opref.get("image") or "")
+
         def done(r):
             if self.excal_sidecar is not None:
                 self._save_sidecar(gen.media_name)
+            if old_name and gen.media_name != old_name:
+                drop_unused_sidecar(old_name)
             self._afterEditNotes(dialog, r)
 
         gen.updateNotes(done)

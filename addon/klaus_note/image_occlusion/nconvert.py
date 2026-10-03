@@ -42,7 +42,7 @@ from xml.dom import minidom
 
 from .config import *
 from .dialogs import dialog_msg, io_ask
-from .utils import img_element_to_path, path_to_img_element
+from .utils import img_element_to_path, media_path, path_to_img_element
 
 
 class ImgOccNoteConverter(object):
@@ -65,6 +65,10 @@ class ImgOccNoteConverter(object):
                 skipped += 1
                 continue
             occl_tp = self.getOcclTypeAndNodes(note)
+            if occl_tp is None:  # Klaus: a mask outside media, or missing
+                logging.debug("Skipping note whose masks aren't in media: %s", nid)
+                skipped += 1
+                continue
             occl_id = uniq_id + "-" + occl_tp
             if occl_id == self.occl_id_last:
                 logging.debug("Skipping note that we've just converted: %s", nid)
@@ -182,7 +186,10 @@ class ImgOccNoteConverter(object):
         mnode_idxs = {}
         svg_mlayer = {}
         for i in ["qm", "om"]:  # om second, so that end vars are correct
-            svg_file = img_element_to_path(note[self.ioflds[i]], True)
+            # Klaus: the confined full path, never a name relative to the cwd
+            svg_file = img_element_to_path(note[self.ioflds[i]])
+            if svg_file is None:
+                return None
             svg_node = self.readSvg(svg_file)
             svg_mlayer = self.layerNodesFrom(svg_node)[-1]  # topmost layer
             mnode_idxs = self.getMaskNodes(svg_mlayer)
@@ -234,7 +241,9 @@ class ImgOccNoteConverter(object):
             _("!saving %(node_id)s, %(mtype)s"), {"node_id": note_id, "mtype": mtype}
         )
         mask_filename = "%s-%s.svg" % (note_id, mtype)
-        mask_path = os.path.join(self._media_path, mask_filename)
+        mask_path = media_path(self._media_path, mask_filename)
+        if mask_path is None:  # Klaus: never write outside the media folder
+            raise ValueError("invalid image occlusion note id: %r" % note_id)
         mask_data = mask.encode("utf8")
 
         with open(mask_path, "wb") as f:

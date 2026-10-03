@@ -488,7 +488,13 @@ same reason.
   `aqt.sync.sync_collection`**: Anki's opens its progress window on every
   run, a warning dialog on every error and the upload/download question
   for a full sync. Klaus fires `sync_will_start`/`sync_did_finish` around
-  it (its own handlers ignore that fire via `_quiet_running`), counts
+  it through `_fire`, and its own handlers ignore exactly that fire
+  (`_own_fire`). An Anki sync started during a quiet sync is still tracked
+  (`_anki_running`). A quiet sync that changed the collection defers
+  `mw.reset()` (`_try_reset`, re-checked every `RESET_POLL_MS`) until no
+  sync runs, the user is out of review, and they have either left the
+  editor or gone `RESET_QUIET_S` (10 s) without input. Focus alone never
+  holds it, and a profile close drops it. It counts
   errors silently (red entry at `FAIL_LIMIT` 3), clears auth on an AUTH
   error, and on any result but NO_CHANGES only marks **full sync
   pending** — the entry ("Full sync needed — click to choose") runs
@@ -1012,8 +1018,8 @@ same reason.
   The Library window (`DriveWindow`), the embedded main-window screen
   (`library_tab.py`), its tree styling (`library_explorer.py`,
   `theme.library_qss`), the top-bar Library link and the map button were
-  all deleted in K-308 — do not resurrect them; `pdf_map`/`pdf_graph`
-  remain with no entry point for now.
+  all deleted in K-308 — do not resurrect them. The map's modules
+  (`pdf_map`, `pdf_graph`, `projection`) were deleted afterwards (#27).
   - `library_sidebar.py`: `on_build_tree` claims the sidebar's TAGS
     stage (builds Anki's own `_tag_tree`, there is no after-hook) and
     lifts the `!Library` branch into its OWN first section with
@@ -1131,93 +1137,6 @@ same reason.
   reviewer context-menu toggle; never activateWindow — answer keys
   stay on the reviewer. The panel has no chrome (K-257's Record button
   was removed with recording in K-314).
-- `projection.py` (aqt-free, pure stdlib): top-2 PCA by power iteration +
-  deflation over one packed `array('d')` buffer (`math.sumprod` on
-  memoryview slices, strided slices for the transpose — never the d×d
-  covariance matrix). Numeric foundation for the embedding map (Phase D).
-- `pdf_graph.py` (aqt-free at module top): assembles the embedding-map
-  graph dict — PDF nodes at their matched notes' 2D centroid, edges to
-  every note at/above threshold. `retention` (which imports aqt) is
-  imported lazily inside `build_graph_data`. Since K-138 it positions
-  EVERY note: `projection` fits its components on a `DEFAULT_FIT_ROWS`
-  stride sample but projects all rows, so a PDF's centroid is computed
-  over all of its matches rather than whichever ones landed in a
-  sample. **The layout is CACHED since K-167** — `user_files/map_layout/
-  layout.bin`, keyed on `retention.card_index_digest` plus the
-  embedding signature (compared through `embeddings.signature_matches`,
-  never a tuple `==`), atomic tmp+os.replace, corrupt or truncated
-  reads as ABSENT so a bad cache rebuilds rather than serving a wrong
-  picture. That is the whole reason opening the Library is instant:
-  cold 25.6s, warm 0.060s, positions bit-identical. The PCA is 99% of
-  a cold build, and its FIT — on a 4,000-row sample — is 29 of those
-  seconds while scoring all 28,670 rows is 2. **Do not "tune"
-  `MAX_ITERATIONS`**: all three components run the full 40, the
-  convergence test at 1e-9 never fires, and truncating moves points
-  hundreds of pixels NON-MONOTONICALLY. The reason is that there is no
-  eigengap — component stddevs 0.1332/0.1236/0.1190 — so PC3 separates
-  at 0.93 per pass (0.93^40 = 0.05) and never converges, and PC2/PC3
-  SWAP between samples of the same data. Only the 3-D subspace is
-  stable. Two consequences: the fit is NOT reusable across an index
-  change (measured: 150px median movement on a pure resample, which is
-  why K-167 caches positions and not the fit), and the map reshuffles
-  on every re-index (K-171). The canvas is `pdf_map.py`.
-- `pdf_map.py` (aqt-free above its aqt-glue divider; K-123/K-124): the
-  **embedding map window** — Phase D2. Pure viewport model on top
-  (world↔screen transform, `fit_to_view`, cursor-anchored `zoom_at`
-  whose fixed-point derivation is in its docstring, `hit_test`,
-  `node_radius`, `pdf_note_ids`/`links_for`, `focus_order`, LOD
-  `labels_visible`); glue is a
-  singleton top-level window (show() never exec, raise_ never
-  activateWindow, WA_DeleteOnClose clearing the singleton) painting
-  `pdf_graph.build_graph_data` with K-115-guarded QPainter.
-  **It is a VIBE, not a census (K-158, Pouya: "make it look like I'm
-  accessing the matrix" and "it needs to be immediate")**: the note
-  layer is SAMPLED — `SAMPLE_NOTES` across the collection plus a
-  `SAMPLE_PER_PDF` stride over each PDF's own matches, so no PDF can
-  be sampled out of its own cloud — and ONE PDF is lit at a time,
-  every other a `GHOST_ALPHA` ghost. Focus is what makes the K-058
-  centroid rule survivable: a PDF sits at the MEAN of its matched
-  notes, so PDFs with overlapping note sets land in one knot, and
-  ghosting is why that no longer reads as a defect. Arrow keys are
-  the picker and the only thing that can separate two stacked
-  centroids. Since K-174, stars are hard, square-capped `drawPoints`
-  — one C++ call per depth band, antialiasing off — and a focused
-  PDF's spokes are crisp, batched 1px lines. The constellation itself
-  is `constellation_links` in mode `"constellation"`: a Prim
-  spanning-tree backbone (connected by construction, exempt from
-  `LINK_MAX`) unioned with kNN density, computed ONCE per canvas and
-  deterministic (`link_seed`) — O(n²) on the sampled cloud, ~25 ms at
-  520 points and quadratic from there, so the real ceiling today is
-  `SAMPLE_NOTES + SAMPLE_PER_PDF × PDFs` until K-199 lands a linear
-  replacement. **Since 2026-09-01 the map is a DIM constellation on
-  the panel's own ground**: it reads the HOST palette — no
-  always-dark special case, no card, no vignette, no border
-  (`c = dict(host, bg=host["chrome"])`) — rests at `DIM_LIT` and
-  ramps to 1.0 under the pointer (`lit` pyqtProperty, `LIT_MS`,
-  quantised into the pen-cache key), lights only the SELECTED PDF's
-  ring, core and spokes plus its bare name — no plate, no halo
-  (`node_lines` is the display name alone; the hover-only preview is
-  `text_muted` and dims with the rest of the field) — and SWAYS
-  `±SWAY_AMP` (0.28 rad) over `SWAY_PERIOD_MS` at `CAM_DISTANCE` 2.0
-  instead of turning, never crossing ±90° so `band_order`'s flip
-  never fires (`sweep_bounds` frames the swept arc, and K-201's pins
-  in `scripts/k201_gate.py` make that framing load-bearing). Frame
-  time: 1.1–1.4 ms median at 1100×660, floor 4 ms. The light palette
-  is now an inverted, faint field on white, not a forced night sky.
-  Labels show for the focused or hovered PDF only (K-138 —
-  Pouya's call, which reversed K-133's always-on labels the same day).
-  `select_pdf(safe)` is the seam for the Library dock: a known name
-  selects and recentres only if off-view, an unknown or empty name
-  CLEARS, no window is a silent no-op. `label_anchor` places the drawn
-  name right of its node and mirrors it left at the canvas edge; one muted `HINT_TEXT` line beside the
-  caption says what the shapes are and what the mouse does (its QLabel
-  raises the window's minimum width to ~625, measured). The viewport is
-  range-agnostic (`graph_bounds` measures the data) because projection
-  emits [-1,1] per axis. Entry point: the Library caption row's **Map**
-  button (`pdf_drive._open_map`, guarded import). Retention fills in
-  lazily from the open collection; headless it stays None and the
-  tooltip omits the line. The map uses the same matched-card retention
-  calculation as the Library after D2 removed judge filtering.
 - `pdf_notes.py` (stdlib-only above a "pypdf glue" divider; K-134): the
   per-PDF notes foundation — K-079's storage and layout, built as its
   own module so it needed nothing from `pdf_handler.py` (another
@@ -1290,8 +1209,9 @@ same reason.
   ported to Klaus rules. `setup()` (called once from `__init__`) registers
   IOE's hooks, "Image Occlusion Options…" in Tools and "Image Occlusion
   Help…" in Help, never `setConfigAction` (Klaus keeps its Config button).
-  **Conflict guard**: with add-on `1374772155` installed AND enabled
-  (`allAddons()` first: `isEnabled` is True for a missing folder) it
+  **Conflict guard**: with IOE installed AND enabled under either folder
+  name, `1374772155` (AnkiWeb) or `image_occlusion_enhanced` (its
+  .ankiaddon) (`allAddons()` first: `isEnabled` is True for a missing folder), it
   registers nothing and shows one tooltip a second later. `occlude(editor,
   image_path, initial_svg=None)` opens svg-edit; `initial_svg` loads as
   the starting masks in add mode. Note type, mask SVGs and the `imgocc`
@@ -1314,8 +1234,9 @@ same reason.
   outside the new image. Only a label NEW to the scene gets a new mask (id
   `klaus-new-<n>`, which ngen reads as a new card); one the old scene had
   keeps what the user left, a resized mask stays theirs and a deleted one
-  stays deleted (R22). The PNG gets a new media name; the old image and its
-  scene stay for notes not yet updated.
+  stays deleted (R22). The PNG gets a new media name; the old image's scene
+  stays while any note still names that image, then goes to Anki's media
+  trash (`add.drop_unused_sidecar`, the one removal path).
 - `web/copilot.js`: injected into editor webviews; shadow-DOM-aware
   (`composedPath`). Ghost text and Ask are gone — this file now only tracks
   field focus (for PDF page-insert targeting) and the image-crop dblclick
@@ -1358,7 +1279,7 @@ same reason.
     cards, no error). **Never delete this module**:
     `retention.py` imports it at module top for `index_dir()` (the card
     index folder under `settings.user_files()`), `_fail` and `_busy`, the ONE re-entrancy token every
-    embedding phase holds; manage_models, tag_sync and pdf_map read it
+    embedding phase holds; manage_models and tag_sync read it
     too. Gone with K-146: `run_curation`, `_preview_in_browse`,
     `last_run`, `suggest_deck_name`, `_escape_search` (and long before
     them, the `!Library::Curating` temp tag K-064 retired — CLAUDE.md
@@ -1557,8 +1478,8 @@ same reason.
     deck/model/field) can't sink the notes on either side of it,
     returning `list[noteId or null]` exactly as AnkiConnect's own
     contract does. The duplicate check in that preview is Anki's own
-    text search over the front's first eight words (R2) — not the
-    embedding ranker `card_forge` uses, which would be a paid network
+    text search over the front's first eight words (R2) — not an
+    embedding ranker, which would be a paid network
     call inside a modal dialog, and **the dialog's DEFAULT button is
     Cancel** — it is window-modal on `mw` and takes keyboard focus the
     instant it opens, so with Approve as the default (QDialogButtonBox's
@@ -1625,8 +1546,8 @@ same reason.
   (`026eb36`), `assistant_session.py` (`1fcdba2`), and the Library's
   short-lived third-pane assistant-panel module (`fed3a33`, guarded
   `451a753`) that the later dock replaced (itself removed in D3).
-  `card_forge.py` (`120293f`) and `anki_tools.py` (`e1c023c`) survive
-  from the same plan; the retained endpoint still uses `anki_tools`.
+  `anki_tools.py` (`e1c023c`) survives from the same plan (`card_forge.py`
+  was deleted in #27); the retained endpoint still uses `anki_tools`.
   `settings.LEGACY_KEYS_DROPPED` (moved from `__init__.py` on 2026-09-30) scrubs
   `assistant_api_key`/`assistant_backend`/`assistant_token` (retired
   2026-09-01): there was never a separate assistant credential to keep;
@@ -1634,7 +1555,8 @@ same reason.
   Historical note, 2026-09-15: API-first removed `page_ocr.py` and the
   Ollama client/runtime/setup modules, and retired local-runtime config.
   The 2026-09-19 implementation restores managed Ollama and migrates its
-  keys back. OCR and Voyage remain out of scope. D1-D3 retired Plus, judge
+  keys back. Garbled-page OCR through local Ollama (`glm-ocr`) shipped later
+  (`pdf_handler.repair_garbled_pages`); Voyage remains out of scope. D1-D3 retired Plus, judge
   and assistant settings; D4 removed the final cloud client and cost module.
   Current defaults are in `config.json`; preserve migration coverage.
   Historical note, 2026-10-01 (PDF reader 5/5): the native renderer is

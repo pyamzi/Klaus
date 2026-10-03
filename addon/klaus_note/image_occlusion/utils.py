@@ -58,17 +58,33 @@ def path_to_img_element(path: str) -> str:
     return '<img src="%s" />' % fname
 
 
+def media_path(media_dir: str, name: str) -> Optional[str]:
+    """Klaus: media_dir/name, or None unless name is a plain file name that
+    resolves inside media_dir (note fields come from synced or shared decks)."""
+    if not name or os.path.basename(name) != name:
+        return None
+    root = os.path.realpath(media_dir)
+    if not os.path.realpath(os.path.join(root, name)).startswith(root + os.sep):
+        return None
+    return os.path.join(media_dir, name)
+
+
 def img_element_to_path(img_element: str, nameonly: bool = False) -> Optional[str]:
-    """Extract path or file name out of HTML img element"""
+    """Extract path or file name out of HTML img element. Klaus: src must be
+    a plain media file name (no path, no URL), and the path is always inside
+    the media folder."""
     imgpatt = r"""<img.*?src=(["'])(.*?)\1"""
     imgregex = re.compile(imgpatt, flags=re.I | re.M | re.S)
     fname = imgregex.search(img_element)
     if not fname:
         return None
+    name = fname.group(2)
+    if not name or os.path.basename(name) != name:
+        return None
     if nameonly:
-        return fname.group(2)
-    fpath = os.path.join(mw.col.media.dir(), fname.group(2))
-    if not os.path.isfile(fpath):
+        return name
+    fpath = media_path(mw.col.media.dir(), name)
+    if not fpath or not os.path.isfile(fpath):
         return None
     return fpath
 

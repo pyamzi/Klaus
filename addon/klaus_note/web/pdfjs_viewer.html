@@ -752,12 +752,18 @@ function touchPage(num) {
   state.lru.add(num);
 }
 
+/* A render that outlives its document (teardown + a new open while it
+   awaited) stops at the next await without touching state.rendered,
+   state.lru or the DOM: those belong to the new document now, which may
+   already hold its own claim for this page number. */
 async function renderPage(num, div) {
-  if (state.rendered.has(num) || !state.doc) return;
+  const doc = state.doc;
+  if (state.rendered.has(num) || !doc) return;
   state.rendered.set(num, {});   // claim before await (re-entrancy)
   touchPage(num);
   try {
-    const page = await state.doc.getPage(num);
+    const page = await doc.getPage(num);
+    if (state.doc !== doc) return;
     const viewport = page.getViewport({ scale: state.scale });
     div.style.width = Math.floor(viewport.width) + "px";
     div.style.height = Math.floor(viewport.height) + "px";
@@ -774,6 +780,7 @@ async function renderPage(num, div) {
       transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null,
       annotationMode: pdfjsLib.AnnotationMode.DISABLE,
     }).promise;
+    if (state.doc !== doc) return;
     if (num === 1 && state.t0 !== null) {
       post("firstpage:" + Math.round(performance.now() - state.t0));
       state.t0 = null;
@@ -789,14 +796,16 @@ async function renderPage(num, div) {
     div.appendChild(canvas);
     div.appendChild(textLayer);
     const textContent = await page.getTextContent();
+    if (state.doc !== doc) return;
     const task = pdfjsLib.renderTextLayer({
       textContentSource: textContent,
       container: textLayer,
       viewport: viewport,
     });
     if (task && task.promise) { try { await task.promise; } catch (e) {} }
+    if (state.doc !== doc) return;
     const spans = Array.from(textLayer.querySelectorAll("span"));
-    state.rendered.set(num, { canvas, textLayer, spans,
+    state.rendered.set(num, { canvas, textLayer, spans, page,
       ptW: viewport.width / viewport.scale, ptH: viewport.height / viewport.scale });
     renderAnnotLayers(num, div);
     if (state.find.matches.length) highlightCurrentMatchIfVisible();
@@ -806,6 +815,7 @@ async function renderPage(num, div) {
       refreshPage(num, div);
     }
   } catch (e) {
+    if (state.doc !== doc) return;   // the new document's claim, not ours
     state.rendered.delete(num);
     state.lru.delete(num);
     post("log:render " + num + " failed: " + e.message);
@@ -821,6 +831,17 @@ function teardownPage(num, div) {
   }
   state.rendered.delete(num);
   state.lru.delete(num);
+  /* pdf.js keeps decoded images and operator lists per page until
+     cleanup() (it defers while a render task still runs, so a page being
+     refreshed or drawn elsewhere is safe). An in-zone page is about to
+     be redrawn (relayout), so its caches are kept. */
+  if (r.page && !state.inZone.has(num)) r.page.cleanup();
+}
+
+/* After an off-screen render (thumbnail, copy): drop the page's pdf.js
+   caches unless the main view has it rendered or rendering. */
+function releaseOffscreen(page, num) {
+  if (!state.rendered.has(num)) page.cleanup();
 }
 
 async function teardown() {
@@ -1356,6 +1377,7 @@ async function copyPageImage(page0) {
     canvas.width = Math.floor(viewport.width);
     canvas.height = Math.floor(viewport.height);
     await page.render({ canvasContext: canvas.getContext("2d"), viewport, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
+    releaseOffscreen(page, page0 + 1);
     post("copy-image:" + canvas.toDataURL("image/png").split(",", 2)[1]);
   } catch (e) { post("log:copy page image failed: " + e.message); }
 }
@@ -1370,6 +1392,7 @@ async function renderRegionCanvas(page0, xPt, yPt, wPt, hPt) {
   full.width = Math.floor(viewport.width);
   full.height = Math.floor(viewport.height);
   await page.render({ canvasContext: full.getContext("2d"), viewport, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
+  releaseOffscreen(page, page0 + 1);
   const out = document.createElement("canvas");
   out.width = Math.max(1, Math.floor(wPt * q));
   out.height = Math.max(1, Math.floor(hPt * q));
@@ -1983,7 +2006,7 @@ async function refreshPage(num, div) {
     }
     textLayer.style.visibility = "";
     const spans = Array.from(textLayer.querySelectorAll("span"));
-    state.rendered.set(num, { canvas, textLayer, spans,
+    state.rendered.set(num, { canvas, textLayer, spans, page,
       ptW: viewport.width / viewport.scale, ptH: viewport.height / viewport.scale });
     renderAnnotLayers(num, div);
     if (state.find.matches.length) highlightCurrentMatchIfVisible();
@@ -2962,6 +2985,7 @@ async function renderThumb(num) {
     canvas.width = Math.floor(viewport.width);
     canvas.height = Math.floor(viewport.height);
     await page.render({ canvasContext: canvas.getContext("2d"), viewport, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
+    releaseOffscreen(page, num);
     t.insertBefore(canvas, t.firstChild);
   } catch (e) { post("log:thumb " + num + " failed: " + e.message); }
 }
@@ -3084,8 +3108,12 @@ async function relayout() {
     d.style.width = Math.floor(base.width * state.scale) + "px";
     d.style.height = Math.floor(base.height * state.scale) + "px";
   }
-  state.rendered.clear();
-  state.lru.clear();
+  /* The IntersectionObserver reports transitions only: a page in the
+     render zone before and after this resize gets no new entry, so it is
+     redrawn here or stays blank. Mid-render claims survived teardownPage
+     and are kept (dropping them rendered the page twice); their render
+     sees the scale change and refreshes itself. */
+  for (const n of state.inZone) renderPage(n, state.pageDivs[n - 1]);
   /* teardownPage never touches the editor (it is not one of the four
      layers it removes), so a panel resize mid-sentence leaves the box
      alive — at the OLD scale until this lands it again (K-150). */

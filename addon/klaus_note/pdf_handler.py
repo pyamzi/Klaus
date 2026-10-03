@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 import uuid
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 _HERE = Path(__file__).parent
@@ -84,10 +84,12 @@ _ACTIVE_PDF_FILE = "active_pdf.txt"
 # failure handler, same as before this helper existed).
 
 
-def _atomic_write(path: str, write_fn) -> None:
+def _atomic_write(path: str, write_fn, durable: bool = False) -> None:
     """Write to ``path`` atomically: ``write_fn(f)`` writes into an open
     tmp file in ``path``'s directory, which is then ``os.replace``'d onto
-    ``path``. The tmp file is always cleaned up, success or failure."""
+    ``path``. The tmp file is always cleaned up, success or failure.
+    ``durable`` fsyncs the tmp before the rename — the annotations JSON
+    only (#29); UI-thread state writes stay cheap."""
     dest_dir = os.path.dirname(path) or "."
     os.makedirs(dest_dir, exist_ok=True)
     tmp = os.path.join(
@@ -96,6 +98,12 @@ def _atomic_write(path: str, write_fn) -> None:
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             write_fn(f)
+            if durable:
+                # A crash must not leave a renamed-in, empty marks file.
+                # ponytail: plain fsync, as page_store does; F_FULLFSYNC
+                # if macOS drive caches bite.
+                f.flush()
+                os.fsync(f.fileno())
         os.replace(tmp, path)
     finally:
         if os.path.isfile(tmp):
@@ -105,13 +113,13 @@ def _atomic_write(path: str, write_fn) -> None:
                 pass
 
 
-def _atomic_write_json(path: str, obj, **json_kwargs) -> None:
+def _atomic_write_json(path: str, obj, durable: bool = False, **json_kwargs) -> None:
     """Write ``obj`` as JSON to ``path`` atomically (tmp file + rename).
 
     ``**json_kwargs`` forwards to ``json.dump`` (e.g. ``separators=(",",
     ":")`` for a compact cache file).
     """
-    _atomic_write(path, lambda f: json.dump(obj, f, **json_kwargs))
+    _atomic_write(path, lambda f: json.dump(obj, f, **json_kwargs), durable)
 
 
 # ----------------------------- extraction --------------------------------
@@ -224,6 +232,34 @@ def pdf_lock(safe: str):
     """The re-entrant lock (a context manager) for one PDF's safe name."""
     with _PDF_LOCKS_GUARD:
         return _PDF_LOCKS.setdefault(safe, threading.RLock())
+
+
+# One Library move at a time, and no other library_map.json writer while
+# it runs (#43): the move holds it for its whole run; every other writer
+# (rescan, import, rename, move, folder rename, delete) takes it without
+# waiting through ``library_writer`` and skips when it is busy. Re-entrant
+# because the rescan holds it around its own straggler sweep. Lock order:
+# this before any pdf_lock — nothing ever WAITS for it while holding one.
+_LIBRARY_MOVE = threading.RLock()
+LIBRARY_MOVING_MSG = "KlausNote: the Library is moving; try again in a moment."
+
+
+@contextmanager
+def library_writer():
+    """Yields True while this thread may write the library map, False
+    (write nothing) while a Library move holds it elsewhere."""
+    got = _LIBRARY_MOVE.acquire(blocking=False)
+    try:
+        yield got
+    finally:
+        if got:
+            _LIBRARY_MOVE.release()
+
+
+def library_moving() -> bool:
+    """A Library move is running on another thread right now."""
+    with library_writer() as ok:
+        return not ok
 
 
 def file_stat(path: str) -> tuple | None:
@@ -456,6 +492,11 @@ class ReplaceRefused(OSError):
     nothing was changed, and the message says so in plain words."""
 
 
+class LibraryMoving(ReplaceRefused):
+    """An import while a Library move runs (#43): nothing was changed.
+    A ReplaceRefused so ``import_pdf_file`` shows the message as is."""
+
+
 def name_in_library(user_files_dir: str, name: str) -> str | None:
     """The safe name an import of ``name`` would clash with (#10): one
     already mapped or ingested, including names that sanitize alike
@@ -474,7 +515,11 @@ def replace_blocker(user_files_dir: str, name: str, root: str | None) -> str | N
     """Why a Replace import of ``name`` must be refused, or None (#10).
     A mapped file that can't be reached (Library folder unavailable, or
     the file gone from it): Replace would trash nothing and still wipe
-    its marks. Callers ask before closing readers; ``save_pdf`` asks too."""
+    its marks. Callers ask before closing readers; ``save_pdf`` asks too.
+    Refused too while a Library move runs (#43), so no reader closes for
+    an import that will not happen."""
+    if library_moving():
+        return LIBRARY_MOVING_MSG
     safe = name_in_library(user_files_dir, name)
     mapped = load_library_map(user_files_dir).get(safe) if safe else None
     if not mapped:
@@ -521,7 +566,15 @@ def save_pdf(
 
     Returns ``name`` (the safe name used), ``page_count``, ``txt_path``
     and ``filename``, the stored file's name for the Library display.
+    :class:`LibraryMoving`, changing nothing, while a Library move runs.
     """
+    with library_writer() as ok:  # #43: an import never lands mid-move
+        if not ok:
+            raise LibraryMoving(LIBRARY_MOVING_MSG)
+        return _save_pdf(user_files_dir, name, raw_path, root, replace)
+
+
+def _save_pdf(user_files_dir, name, raw_path, root, replace) -> dict:
     pages = repair_garbled_pages(raw_path, extract_pages(raw_path))
     pdf_dir = os.path.join(user_files_dir, "pdfs")
     os.makedirs(pdf_dir, exist_ok=True)
@@ -991,94 +1044,110 @@ def migrate_to_root(
     """
     folders = folders or {}
     result: dict = {"moved": [], "skipped": [], "failed": {}}
+    # The whole move holds the Library-move lock (#43), so no rescan,
+    # import or Library action writes the map mid-move; each file's
+    # copy -> map -> remove holds its pdf_lock (#28), so a bake commits
+    # wholly before the copy or re-resolves to the mapped file after.
+    with _LIBRARY_MOVE:
+        for fname in list_contexts(user_files_dir):
+            safe = fname[:-4] if fname.endswith(".txt") else fname
+            with pdf_lock(safe):
+                _migrate_one(user_files_dir, root, safe, folders, old_root, result)
+    return result
+
+
+def _migrate_one(
+    user_files_dir: str, root: str, safe: str, folders: dict, old_root: str | None, result: dict
+) -> None:
+    """One file of ``migrate_to_root``, recorded into ``result``. The map
+    is read fresh: a write since the move began must never be lost."""
     library_map = load_library_map(user_files_dir)
-    pdf_dir = os.path.join(user_files_dir, "pdfs")
+    source = os.path.join(user_files_dir, "pdfs", safe + ".pdf")
 
-    for fname in list_contexts(user_files_dir):
-        safe = fname[:-4] if fname.endswith(".txt") else fname
-        source = os.path.join(pdf_dir, safe + ".pdf")
-
-        mapped_rel = library_map.get(safe)
-        if mapped_rel and os.path.isfile(os.path.join(root, mapped_rel)):
-            # Already migrated, possibly by an earlier interrupted run —
-            # just tidy up a leftover legacy copy, if any.
-            if os.path.isfile(source):
-                try:
-                    os.remove(source)
-                except OSError:
-                    pass
-            result["skipped"].append(safe)
-            continue
-
-        if not os.path.isfile(source) and mapped_rel and old_root:
-            # Root CHANGE: the file already left the legacy store on an
-            # earlier run and now lives under the previous root. Treat
-            # that as the source; everything below (destination layout,
-            # collision suffixing, size verify, map-then-delete order)
-            # is identical whichever root the bytes come from.
-            previous = os.path.join(old_root, mapped_rel)
-            if os.path.isfile(previous):
-                source = previous
-
-        if not os.path.isfile(source):
-            result["skipped"].append(safe)  # nothing stored to move
-            continue
-
-        entry = folders.get(safe) or {}
-        folder = entry.get("folder")
-        display = entry.get("display") or safe
-        dest_dir = root
-        if isinstance(folder, str) and folder.strip():
-            for part in folder.split("/"):
-                part = part.strip()
-                if part and part != "..":
-                    dest_dir = os.path.join(dest_dir, part)
-        filename = _library_filename(display, safe)
-
-        try:
-            os.makedirs(dest_dir, exist_ok=True)
-        except OSError as exc:
-            result["failed"][safe] = str(exc)
-            continue
-
-        dest_path = _unique_path(dest_dir, filename)
-        try:
-            src_size = os.path.getsize(source)
-            shutil.copy2(source, dest_path)
-            if os.path.getsize(dest_path) != src_size:
-                raise OSError(f"size mismatch copying {safe} to {dest_path}")
-        except OSError as exc:
-            if os.path.isfile(dest_path):
-                try:
-                    os.remove(dest_path)
-                except OSError:
-                    pass
-            result["failed"][safe] = str(exc)
-            continue
-
-        rel = os.path.relpath(dest_path, root)
-        library_map[safe] = rel
-        try:
-            save_library_map(user_files_dir, library_map)
-        except OSError as exc:
-            library_map.pop(safe, None)
+    mapped_rel = library_map.get(safe)
+    if mapped_rel and os.path.isfile(os.path.join(root, mapped_rel)):
+        # Already migrated, possibly by an earlier interrupted run —
+        # just tidy up a leftover legacy copy, if any.
+        if os.path.isfile(source):
             try:
-                os.remove(dest_path)
+                os.remove(source)
             except OSError:
                 pass
-            result["failed"][safe] = str(exc)
-            continue
+        result["skipped"].append(safe)
+        return
 
+    if not os.path.isfile(source) and mapped_rel and old_root:
+        # Root CHANGE: the file already left the legacy store on an
+        # earlier run and now lives under the previous root. Treat
+        # that as the source; everything below (destination layout,
+        # collision suffixing, size verify, map-then-delete order)
+        # is identical whichever root the bytes come from.
+        previous = os.path.join(old_root, mapped_rel)
+        if os.path.isfile(previous):
+            source = previous
+
+    if not os.path.isfile(source):
+        result["skipped"].append(safe)  # nothing stored to move
+        return
+
+    entry = folders.get(safe) or {}
+    folder = entry.get("folder")
+    display = entry.get("display") or safe
+    dest_dir = root
+    if isinstance(folder, str) and folder.strip():
+        for part in folder.split("/"):
+            part = part.strip()
+            if part and part != "..":
+                dest_dir = os.path.join(dest_dir, part)
+    filename = _library_filename(display, safe)
+
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+    except OSError as exc:
+        result["failed"][safe] = str(exc)
+        return
+
+    dest_path = _unique_path(dest_dir, filename)
+    # Copy to a hidden tmp and rename it in only once whole: a crash
+    # mid-copy must never leave a truncated file under the real name.
+    tmp = os.path.join(dest_dir, f".{filename}.{uuid.uuid4().hex}.tmp")
+    try:
+        src_size = os.path.getsize(source)
+        shutil.copy2(source, tmp)
+        if os.path.getsize(tmp) != src_size:
+            raise OSError(f"size mismatch copying {safe} to {dest_path}")
+        os.replace(tmp, dest_path)
+    except OSError as exc:
+        result["failed"][safe] = str(exc)
+        return
+    finally:
+        if os.path.isfile(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    rel = os.path.relpath(dest_path, root)
+    library_map[safe] = rel
+    try:
+        save_library_map(user_files_dir, library_map)
+    except OSError as exc:
+        library_map.pop(safe, None)
         try:
-            os.remove(source)
-        except OSError as exc:
-            print(
-                f"[klaus_note] migration: moved {safe} but could not remove "
-                f"the old copy: {exc}"
-            )
-        result["moved"].append(safe)
+            os.remove(dest_path)
+        except OSError:
+            pass
+        result["failed"][safe] = str(exc)
+        return
 
-    return result
+    try:
+        os.remove(source)
+    except OSError as exc:
+        print(
+            f"[klaus_note] migration: moved {safe} but could not remove "
+            f"the old copy: {exc}"
+        )
+    result["moved"].append(safe)
 
 
 # ------------------------------------------------- Anki -> disk moves
@@ -1092,28 +1161,31 @@ def move_mapped_file(
     instead of reverting it on the next pass. Returns the new rel, the
     unchanged rel when already in place, or None when nothing is mapped
     or the file is missing (legacy store, unplugged root — no-op)."""
-    with pdf_lock(safe):
-        mapping = load_library_map(user_files_dir)
-        rel = mapping.get(safe)
-        if not rel:
+    with library_writer() as ok:  # #43: never mid-move
+        if not ok:
             return None
-        src = os.path.join(root, rel)
-        if not os.path.isfile(src):
-            return None
-        dest_dir = root
-        if isinstance(folder, str) and folder.strip():
-            for part in folder.split("/"):
-                part = part.strip()
-                if part and part != "..":
-                    dest_dir = os.path.join(dest_dir, part)
-        if os.path.realpath(dest_dir) == os.path.realpath(os.path.dirname(src)):
-            return rel
-        os.makedirs(dest_dir, exist_ok=True)
-        dest = _unique_path(dest_dir, os.path.basename(rel))
-        shutil.move(src, dest)
-        mapping[safe] = os.path.relpath(dest, root)
-        save_library_map(user_files_dir, mapping)
-        return mapping[safe]
+        with pdf_lock(safe):
+            mapping = load_library_map(user_files_dir)
+            rel = mapping.get(safe)
+            if not rel:
+                return None
+            src = os.path.join(root, rel)
+            if not os.path.isfile(src):
+                return None
+            dest_dir = root
+            if isinstance(folder, str) and folder.strip():
+                for part in folder.split("/"):
+                    part = part.strip()
+                    if part and part != "..":
+                        dest_dir = os.path.join(dest_dir, part)
+            if os.path.realpath(dest_dir) == os.path.realpath(os.path.dirname(src)):
+                return rel
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = _unique_path(dest_dir, os.path.basename(rel))
+            shutil.move(src, dest)
+            mapping[safe] = os.path.relpath(dest, root)
+            save_library_map(user_files_dir, mapping)
+            return mapping[safe]
 
 
 def rename_mapped_file(
@@ -1123,22 +1195,25 @@ def rename_mapped_file(
     ``move_mapped_file``. The filename follows ``_library_filename`` —
     the same normalizer the rescan uses to decide a display still
     corresponds to its file, so rename and rescan can never disagree."""
-    with pdf_lock(safe):
-        mapping = load_library_map(user_files_dir)
-        rel = mapping.get(safe)
-        if not rel:
+    with library_writer() as ok:  # #43: never mid-move
+        if not ok:
             return None
-        src = os.path.join(root, rel)
-        if not os.path.isfile(src):
-            return None
-        filename = _library_filename(display, safe)
-        if os.path.basename(rel) == filename:
-            return rel
-        dest = _unique_path(os.path.dirname(src), filename)
-        shutil.move(src, dest)
-        mapping[safe] = os.path.relpath(dest, root)
-        save_library_map(user_files_dir, mapping)
-        return mapping[safe]
+        with pdf_lock(safe):
+            mapping = load_library_map(user_files_dir)
+            rel = mapping.get(safe)
+            if not rel:
+                return None
+            src = os.path.join(root, rel)
+            if not os.path.isfile(src):
+                return None
+            filename = _library_filename(display, safe)
+            if os.path.basename(rel) == filename:
+                return rel
+            dest = _unique_path(os.path.dirname(src), filename)
+            shutil.move(src, dest)
+            mapping[safe] = os.path.relpath(dest, root)
+            save_library_map(user_files_dir, mapping)
+            return mapping[safe]
 
 
 def rename_mapped_folder(
@@ -1148,36 +1223,39 @@ def rename_mapped_folder(
     merge into an existing destination (returns False, tree-only rename
     stands and the next rescan re-derives from disk). Rewrites every
     mapping rel under the old prefix."""
-    src = os.path.join(root, *[p for p in old.split("/") if p])
-    dst = os.path.join(root, *[p for p in new.split("/") if p])
-    if not os.path.isdir(src) or os.path.exists(dst):
-        return False
-    old_prefix = old.rstrip("/") + "/"
-    # Every PDF under the folder, locked in name order so two folder
-    # actions can never wait on each other.
-    under = sorted(
-        safe
-        for safe, rel in load_library_map(user_files_dir).items()
-        if rel.replace(os.sep, "/").startswith(old_prefix)
-    )
-    with ExitStack() as held:
-        for safe in under:
-            held.enter_context(pdf_lock(safe))
-        parent = os.path.dirname(dst)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        os.rename(src, dst)
-        mapping = load_library_map(user_files_dir)
-        changed = False
-        for safe, rel in list(mapping.items()):
-            rel_fwd = rel.replace(os.sep, "/")
-            if rel_fwd.startswith(old_prefix):
-                tail = rel_fwd[len(old_prefix):]
-                mapping[safe] = os.path.join(*[p for p in (new + "/" + tail).split("/") if p])
-                changed = True
-        if changed:
-            save_library_map(user_files_dir, mapping)
-        return True
+    with library_writer() as ok:  # #43: never mid-move
+        if not ok:
+            return False
+        src = os.path.join(root, *[p for p in old.split("/") if p])
+        dst = os.path.join(root, *[p for p in new.split("/") if p])
+        if not os.path.isdir(src) or os.path.exists(dst):
+            return False
+        old_prefix = old.rstrip("/") + "/"
+        # Every PDF under the folder, locked in name order so two folder
+        # actions can never wait on each other.
+        under = sorted(
+            safe
+            for safe, rel in load_library_map(user_files_dir).items()
+            if rel.replace(os.sep, "/").startswith(old_prefix)
+        )
+        with ExitStack() as held:
+            for safe in under:
+                held.enter_context(pdf_lock(safe))
+            parent = os.path.dirname(dst)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            os.rename(src, dst)
+            mapping = load_library_map(user_files_dir)
+            changed = False
+            for safe, rel in list(mapping.items()):
+                rel_fwd = rel.replace(os.sep, "/")
+                if rel_fwd.startswith(old_prefix):
+                    tail = rel_fwd[len(old_prefix):]
+                    mapping[safe] = os.path.join(*[p for p in (new + "/" + tail).split("/") if p])
+                    changed = True
+            if changed:
+                save_library_map(user_files_dir, mapping)
+            return True
 
 
 # ------------------------------------------------- folder -> Anki sync
@@ -1809,7 +1887,7 @@ def save_annotations(
             highlights = _claim_edited_external(doc, highlights)
         doc["version"] = 1
         doc["highlights"] = highlights
-        _atomic_write_json(path, doc)  # a failed write never truncates the marks
+        _atomic_write_json(path, doc, durable=True)  # a failed write never truncates the marks
         return True
     except (OSError, TypeError, ValueError) as exc:
         print(f"[klaus_note] failed to save annotations {path}: {exc}")
@@ -1885,7 +1963,7 @@ def _update_doc_keys(user_files_dir: str, name: str, updates: dict) -> None:
         print(f"[klaus_note] annotations unreadable, keys not written: {path}")
         return
     doc.update(updates)
-    _atomic_write_json(path, doc)
+    _atomic_write_json(path, doc, durable=True)
 
 
 def add_suppressed(user_files_dir: str, name: str, record: dict) -> None:

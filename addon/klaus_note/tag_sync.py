@@ -1337,6 +1337,21 @@ def _move_pdf(safe: str, folder: str | None, display: str | None = None) -> None
 
 
 def _apply_moves(actions: list[dict]) -> bool:
+    from . import pdf_handler
+
+    if not any(a["kind"] in ("rename", "folder_rename") for a in actions):
+        return False
+    # Nothing changes while a Library move runs (#43): the file and map
+    # moves would be refused, leaving drive_store and the stored tags
+    # saying moved. The tag rename stands and is applied on a later pass.
+    with pdf_handler.library_writer() as ok:
+        if not ok:
+            tooltip(pdf_handler.LIBRARY_MOVING_MSG)
+            return False
+        return _apply_moves_now(actions)
+
+
+def _apply_moves_now(actions: list[dict]) -> bool:
     from . import curation
 
     moved = False
