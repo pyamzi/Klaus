@@ -126,9 +126,9 @@ fn on_hook(app: &AppHandle, method: &str, input: &[u8]) -> Option<Vec<u8>> {
             }
             None
         }
-        // The import page's Close button, and deck options after a save or a
-        // confirmed discard; the deck list reloads its counts.
-        "importDialogRequireClose" | "deckOptionsRequireClose" => {
+        // The import page's Close button, deck options after a save or a
+        // confirmed discard, and the current editor; the deck list reloads its counts.
+        "importDialogRequireClose" | "deckOptionsRequireClose" | "closeEditCurrent" => {
             navigate(app, "");
             None
         }

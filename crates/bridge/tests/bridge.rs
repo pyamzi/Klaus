@@ -19,7 +19,7 @@ use anki_proto::notes::{
     note_fields_check_response::State, AddNoteRequest, AddNoteResponse, DeckAndNotetype, DefaultsForAddingRequest, Note,
     NoteFieldsCheckResponse, NoteId,
 };
-use anki_proto::notetypes::{NotetypeId, NotetypeNames};
+use anki_proto::notetypes::{ChangeNotetypeInfo, GetChangeNotetypeInfoRequest, NotetypeId, NotetypeNames};
 use klaus_bridge::frontend::{ConvertPastedImageRequest, ConvertPastedImageResponse, SetSettingJsonRequest};
 use klaus_bridge::klaus::{RenderCardRequest, RenderCardResponse};
 use klaus_bridge::{new_token, serve, Bridge, CallError, Hook, WebDirs};
@@ -286,6 +286,100 @@ fn settings_round_trip_and_persist() {
     assert_eq!(get(&bridge, "getMetaJson", "addTagsCollapsed"), "true");
     assert_eq!(get(&bridge, "getProfileConfigJson", "lastColour"), "\"#ff0000\"");
     assert_eq!(get(&bridge, "getMetaJson", "lastColour"), "null");
+}
+
+#[tokio::test]
+async fn change_notetype_saves_and_closes_only_on_success() {
+    let (_dir, bridge) = open_temp();
+    let names: NotetypeNames = call(&bridge, "getNotetypeNames", Empty {});
+    let basic = names.entries.iter().find(|n| n.name == "Basic").unwrap().id;
+    let reversed = names.entries.iter().find(|n| n.name == "Basic (and reversed card)").unwrap().id;
+    let mut note: Note = call(&bridge, "newNote", NotetypeId { ntid: basic });
+    note.fields = vec!["Front".into(), "Back".into()];
+    let added: AddNoteResponse = call(&bridge, "addNote", AddNoteRequest { note: Some(note.clone()), deck_id: 1 });
+    let untouched: AddNoteResponse = call(&bridge, "addNote", AddNoteRequest { note: Some(note), deck_id: 1 });
+    let info: ChangeNotetypeInfo = call(
+        &bridge,
+        "getChangeNotetypeInfo",
+        GetChangeNotetypeInfoRequest { old_notetype_id: basic, new_notetype_id: reversed },
+    );
+    let mut change = info.input.unwrap();
+    change.note_ids = vec![added.note_id];
+    change.new_fields = vec![1, 0];
+    let bridge = Arc::new(bridge);
+    let web_dir = tempfile::tempdir().unwrap();
+    let web = WebDirs {
+        klaus: web_dir.path().into(),
+        anki: web_dir.path().into(),
+        anki_static: web_dir.path().into(),
+    };
+    let (tx, mut hooks) = tokio::sync::mpsc::unbounded_channel();
+    let hook: Hook = Arc::new(move |method, input| {
+        tx.send((method.to_owned(), input.to_vec())).unwrap();
+        None
+    });
+    let token = new_token();
+    let (addr, server) = serve(bridge.clone(), web, token.clone(), hook).await.unwrap();
+    tokio::spawn(server);
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    let base = format!("http://{addr}");
+    let grant = client.get(format!("{base}/?t={token}")).send().await.unwrap();
+    let cookie = grant.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
+    let post = |method: &str, body: Vec<u8>| {
+        client
+            .post(format!("{base}/_anki/{method}"))
+            .header("Content-Type", "application/binary")
+            .header("Cookie", cookie)
+            .body(body)
+            .send()
+    };
+    for method in ["changeNotetype", "closeEditCurrent"] {
+        let denied = client
+            .post(format!("{base}/_anki/{method}"))
+            .header("Content-Type", "application/binary")
+            .body(change.encode_to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), 403);
+        let denied = client
+            .post(format!("{base}/_anki/{method}"))
+            .header("Cookie", cookie)
+            .body(change.encode_to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), 403);
+    }
+    assert_eq!(post("changeNotetype", vec![0xff]).await.unwrap().status(), 500);
+    assert!(hooks.try_recv().is_err());
+    assert_eq!(post("changeNotetype", change.encode_to_vec()).await.unwrap().status(), 204);
+    let (method, input) = tokio::time::timeout(std::time::Duration::from_secs(5), hooks.recv()).await.unwrap().unwrap();
+    assert_eq!(method, "closeEditCurrent");
+    assert!(input.is_empty());
+    let saved: Note = call(&bridge, "getNote", NoteId { nid: added.note_id });
+    assert_eq!(saved.notetype_id, reversed);
+    assert_eq!(saved.fields, ["Back", "Front"]);
+    let saved: Note = call(&bridge, "getNote", NoteId { nid: untouched.note_id });
+    assert_eq!(saved.notetype_id, basic);
+    assert_eq!(saved.fields, ["Front", "Back"]);
+
+    change.new_notetype_id = 0;
+    assert_eq!(post("changeNotetype", change.encode_to_vec()).await.unwrap().status(), 204);
+    let (method, input) = tokio::time::timeout(std::time::Duration::from_secs(5), hooks.recv()).await.unwrap().unwrap();
+    assert_eq!(method, "showMessageBox");
+    let error = klaus_bridge::frontend::ShowMessageBoxRequest::decode(input.as_slice()).unwrap();
+    assert_eq!(error.r#type, 2);
+    assert!(!error.text.is_empty());
+    assert!(hooks.try_recv().is_err());
+    let saved: Note = call(&bridge, "getNote", NoteId { nid: added.note_id });
+    assert_eq!(saved.notetype_id, reversed);
+    assert_eq!(saved.fields, ["Back", "Front"]);
+
+    assert_eq!(post("closeEditCurrent", vec![]).await.unwrap().status(), 204);
+    let (method, input) = hooks.recv().await.unwrap();
+    assert_eq!(method, "closeEditCurrent");
+    assert!(input.is_empty());
 }
 
 #[tokio::test]

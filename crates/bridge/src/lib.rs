@@ -199,6 +199,7 @@ const HOOKS: &[&str] = &[
     "importDialogRequireClose",
     "searchInBrowser",
     "closeAddCards",
+    "closeEditCurrent",
     "openFilePicker",
     "askUser",
     "showMessageBox",
@@ -1196,11 +1197,25 @@ fn save_deck_configs(state: AppState, body: Bytes) -> Response {
     let compute_all = req.mode() == UpdateDeckConfigsMode::ComputeAllParams;
     // ponytail: no progress window during the save (Anki shows one); the page's own
     // Optimize button has progress. Add an overlay polling latestProgress if saves drag.
-    tokio::task::spawn_blocking(move || match state.bridge.call_trusted("updateDeckConfigs", &body) {
-        Ok(_) if !compute_all => {
-            (state.hook)("deckOptionsRequireClose", &[]);
+    save_in_background(state, "updateDeckConfigs", body, (!compute_all).then_some("deckOptionsRequireClose"))
+}
+
+/// Like Anki's change-notetype dialog: apply the mapping, then close on success.
+fn change_notetype(state: AppState, body: Bytes) -> Response {
+    if anki_proto::notetypes::ChangeNotetypeRequest::decode(body.as_ref()).is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "invalid changeNotetype request").into_response();
+    }
+    state.bridge.touch();
+    save_in_background(state, "changeNotetype", body, Some("closeEditCurrent"))
+}
+
+fn save_in_background(state: AppState, method: &'static str, body: Bytes, close: Option<&'static str>) -> Response {
+    tokio::task::spawn_blocking(move || match state.bridge.call_trusted(method, &body) {
+        Ok(_) => {
+            if let Some(close) = close {
+                (state.hook)(close, &[]);
+            }
         }
-        Ok(_) => {}
         Err(err) => {
             let text = match err {
                 CallError::Backend(msg) => msg,
@@ -1267,6 +1282,9 @@ async fn anki_method(
     }
     if method == "updateDeckConfigs" {
         return save_deck_configs(state, body);
+    }
+    if method == "changeNotetype" {
+        return change_notetype(state, body);
     }
     // Polls don't count as activity, or the app would never look quiet to auto sync.
     if !matches!(method.as_str(), "klausSyncOutcome" | "latestProgress" | "mediaSyncStatus" | "klausSyncAccount") {
