@@ -120,22 +120,45 @@ impl Bridge {
             backup_folder = folder;
         }
         let media_usn = server_media_usn.filter(|_| self.sync_account().sync_media);
-        let req = anki_proto::sync::FullUploadOrDownloadRequest { auth: Some(auth), upload, server_usn: media_usn };
+        let req = anki_proto::sync::FullUploadOrDownloadRequest { auth: Some(auth.clone()), upload, server_usn: media_usn };
         match self.run_raw("fullUploadOrDownload", &req.encode_to_vec()) {
             Err(err) => self.sync_failed(err),
             Ok(_) => {
-                // rslib's upload stamps the last sync, then its transaction stamps the
-                // collection's mtime a moment later; across a millisecond, syncStatus
-                // reports changes that a normal sync (server mtime equal) never clears,
-                // and auto sync would run every minute. Settle it as rslib's full
-                // download does. A bare query: dbproxy's Commit would stamp mtime again.
                 if upload {
-                    let _ = self.backend.run_db_command_bytes(
-                        br#"{"kind":"query","sql":"update col set ls=mod","args":[],"first_row_only":false}"#,
-                    );
+                    self.settle_after_upload(auth);
                 }
                 klaus::SyncOutcome { state: klaus::sync_outcome::State::Done as i32, backup_folder, ..Default::default() }
             }
+        }
+    }
+
+    /// rslib's full upload stamps the last sync, then its transaction stamps the
+    /// collection's mtime a moment later; across a millisecond, syncStatus reports
+    /// changes that a normal sync (server mtime equal) never clears, and auto sync
+    /// would run every minute. Settles it as rslib's full download does (ls=mod),
+    /// but only for the mtime the server confirms it holds: an edit can slip in
+    /// once the upload lets go of the Collection, and must stay unsynced. The upload
+    /// itself succeeded, so a failed check only leaves the extra syncs.
+    fn settle_after_upload(&self, auth: anki_proto::sync::SyncAuth) {
+        // Bare queries: dbproxy's Commit would stamp the mtime again.
+        let db = |sql: &str, args: serde_json::Value| {
+            let req = serde_json::json!({ "kind": "query", "sql": sql, "args": args, "first_row_only": true });
+            let out = self.backend.run_db_command_bytes(&serde_json::to_vec(&req).unwrap()).ok();
+            out.and_then(|out| serde_json::from_slice::<serde_json::Value>(&out).ok())
+        };
+        let Some(row) = db("select mod, ls from col", serde_json::json!([])) else { return debug_assert!(false) };
+        let (modified, last_sync) = (row[0][0].as_i64(), row[0][1].as_i64());
+        debug_assert!(modified.is_some() && last_sync.is_some(), "{row}");
+        if modified == last_sync {
+            return;
+        }
+        // NoChanges: the server holds `modified` (an edit since would have synced,
+        // settling the stamps itself).
+        let req = anki_proto::sync::SyncCollectionRequest { auth: Some(auth), sync_media: false };
+        let Ok(out) = self.rpc::<_, anki_proto::sync::SyncCollectionResponse>("syncCollection", req) else { return };
+        if out.required() == anki_proto::sync::sync_collection_response::ChangesRequired::NoChanges {
+            let settled = db("update col set ls=mod where mod=?", serde_json::json!([modified]));
+            debug_assert!(settled.is_some());
         }
     }
 
