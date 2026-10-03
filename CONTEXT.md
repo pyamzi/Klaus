@@ -91,8 +91,12 @@ The table of Cards or Notes with search, columns and bulk actions, Anki's browse
 _Avoid_: Browse (as a noun), card list, search page
 
 **Sidebar**:
-The column of decks, Materials and tags on the left of Home and the Browser on desktop and web; on a phone it becomes the tab bar.
+The column of decks, Materials and tags on the left of the Browser (and the Library, when it exists) on desktop and web. Home has none: its navigation is the top bar's chips, as in the add-on.
 _Avoid_: Nav, drawer, side panel
+
+**Dashboard**:
+Home's main pane: the grid of widgets (Decks, Review Heatmap, later stats) a person arranges in Edit Widgets, the same screen as the add-on's deck screen.
+_Avoid_: Deck browser, widget area, home page
 
 **Command Palette**:
 The searchable list of every action, opened with ⌘K, each with its shortcut.
