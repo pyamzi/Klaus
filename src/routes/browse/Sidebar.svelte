@@ -101,7 +101,8 @@
       });
     tags = tagItems(tagRoot, "");
   }
-  onMount(refresh);
+  // A failed load was already alerted by the bridge.
+  onMount(() => void refresh().catch(() => {}));
 
   // Saving needs a name: a small inline form rather than prompt(), which has no UI here.
   let naming = $state(false);

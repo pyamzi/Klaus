@@ -14,7 +14,7 @@ use anki_proto::collection::{CloseCollectionRequest, OpenCollectionRequest};
 use anki_proto::generic;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -314,7 +314,8 @@ impl Bridge {
         self.run("openCollection", &req.encode_to_vec())?;
         let settings = std::fs::read(dir.join(SETTINGS_FILE))
             .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .filter(Value::is_object)
             .unwrap_or_else(|| serde_json::json!({}));
         *self.settings.lock().unwrap() = settings;
         *self.dir.lock().unwrap() = Some(dir.to_owned());
@@ -401,6 +402,10 @@ impl Bridge {
             }
             _ => {
                 let req = SetSettingJsonRequest::decode(input).map_err(bad)?;
+                // Where the sync key goes is the account's business, not the page's.
+                if section == "profile" && account::ACCOUNT_KEYS.contains(&req.key.as_str()) {
+                    return Err(CallError::NotAllowed);
+                }
                 let value: Value = serde_json::from_slice(&req.value_json)
                     .map_err(|e| CallError::Backend(e.to_string()))?;
                 self.set_setting(section, &req.key, value)?;
@@ -411,6 +416,9 @@ impl Bridge {
 
     fn set_setting(&self, section: &str, key: &str, value: Value) -> Result<(), CallError> {
         let mut settings = self.settings.lock().unwrap();
+        if !settings[section].is_object() {
+            settings[section] = Value::Object(Default::default());
+        }
         settings[section][key] = value;
         let dir = self.dir.lock().unwrap().clone().ok_or_else(|| CallError::Backend("no Collection open".into()))?;
         std::fs::write(dir.join(SETTINGS_FILE), serde_json::to_vec_pretty(&*settings).unwrap())
@@ -655,7 +663,12 @@ pub async fn serve(
     let mut app = Router::new()
         // Axum's default 2 MiB cap would reject pasted photos (convertPastedImage,
         // addMediaFile carry the bytes); the caller is already cookie-authenticated.
-        .route("/_anki/{method}", post(anki_method).layer(DefaultBodyLimit::max(MAX_BODY)))
+        .route(
+            "/_anki/{method}",
+            post(anki_method)
+                .layer(DefaultBodyLimit::max(MAX_BODY))
+                .layer(middleware::from_fn_with_state(state.clone(), require_cookie)),
+        )
         // klaus.ink's sign-in redirect, from the system browser: no session cookie
         // there, the one-shot OAuth state is the check.
         .route("/auth/callback", get(auth_callback))
@@ -676,6 +689,7 @@ pub async fn serve(
     let app = app
         .fallback(move |state: State<AppState>, req: Request| root_or_media(state, req, klaus.clone(), klaus_dir.clone()))
         .layer(middleware::from_fn_with_state(state.clone(), grant_cookie))
+        .layer(middleware::from_fn_with_state(state.clone(), own_host_only))
         .with_state(state);
     Ok((addr, async move { axum::serve(listener, app).await }))
 }
@@ -880,12 +894,21 @@ async fn auth_callback(State(state): State<AppState>, Query(query): Query<Callba
     (status, Html(page)).into_response()
 }
 
-async fn anki_method(
-    State(state): State<AppState>,
-    UrlPath(method): UrlPath<String>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
+/// DNS rebinding: a web page whose name resolves to 127.0.0.1 reaches this port
+/// with its own name as Host. Only the bridge's own origin is served.
+async fn own_host_only(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok());
+    if host.is_some_and(|h| state.origin.strip_prefix("http://") == Some(h)) {
+        next.run(req).await
+    } else {
+        StatusCode::MISDIRECTED_REQUEST.into_response()
+    }
+}
+
+/// `/_anki` callers must hold the session cookie, checked before the (up to
+/// MAX_BODY) body is read.
+async fn require_cookie(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let headers = req.headers();
     let has_token = headers
         .get_all(header::COOKIE)
         .iter()
@@ -897,6 +920,10 @@ async fn anki_method(
     if !has_token || !binary {
         return StatusCode::FORBIDDEN.into_response();
     }
+    next.run(req).await
+}
+
+async fn anki_method(State(state): State<AppState>, UrlPath(method): UrlPath<String>, body: Bytes) -> Response {
     if HOOKS.contains(&method.as_str()) {
         let hook = state.hook.clone();
         return match tokio::task::spawn_blocking(move || hook(&method, &body)).await {

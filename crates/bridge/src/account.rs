@@ -35,6 +35,8 @@ impl Secrets for MemorySecrets {
 }
 
 pub(crate) const SYNC_KEY: &str = "klaus-account-sync-key";
+/// Profile settings only the bridge writes: the sync key is sent to `syncUrl`.
+pub(crate) const ACCOUNT_KEYS: &[&str] = &["syncUrl", "syncUser"];
 const DEFAULT_ACCOUNT_URL: &str = "https://klaus.ink";
 
 /// The account half of [`Bridge`].
@@ -98,8 +100,12 @@ impl Bridge {
     /// klaus.ink's redirect back: checks the state (one-shot), exchanges the code
     /// for the account's sync key, and stores it.
     pub(crate) async fn finish_sign_in(&self, code: &str, state: &str) -> Result<String, String> {
-        let pending = self.account.pending_sign_in.lock().unwrap().take();
-        let Some((expected, verifier, redirect)) = pending.filter(|(expected, ..)| expected == state) else {
+        // Consumed only by its own state, so a stray callback can't cancel it.
+        let pending = {
+            let mut pending = self.account.pending_sign_in.lock().unwrap();
+            pending.take_if(|(expected, ..)| expected == state)
+        };
+        let Some((expected, verifier, redirect)) = pending else {
             return Err("This sign-in link has expired. Start again from KlausNote.".into());
         };
         let _ = expected;

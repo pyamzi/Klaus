@@ -28,19 +28,24 @@
   let mediaStatus = $state("");
   let now = $state(Date.now());
 
-  const call = <T extends object>(method: string, input: object, output: { fromBinary(b: Uint8Array): T }) =>
-    postProto(method, input as never, output as never) as Promise<T>;
-  const loadAccount = async () => (account = await call("klausSyncAccount", new Empty(), SyncAccount));
+  const call = <T extends object>(
+    method: string,
+    input: object,
+    output: { fromBinary(b: Uint8Array): T },
+    options?: { alertOnError?: boolean },
+  ) => postProto(method, input as never, output as never, options) as Promise<T>;
+  // Background reads: polled, so a failure mustn't alert() on every tick.
+  const quiet = { alertOnError: false };
+  const loadAccount = async () => (account = await call("klausSyncAccount", new Empty(), SyncAccount, quiet));
   const running = $derived(outcome.state === State.RUNNING);
   /** The last sync needs the user's choice (a full sync). */
   const needsChoice = $derived(outcome.state === State.DONE && !outcome.error && outcome.required >= Required.FULL_SYNC);
 
   // Each finished sync is handled once, whoever started it (the page or automatic sync).
   let handledId = 0;
-  let manualId = 0;
 
   async function poll() {
-    outcome = await call("klausSyncOutcome", new Empty(), SyncOutcome);
+    outcome = await call("klausSyncOutcome", new Empty(), SyncOutcome, quiet);
     now = Date.now();
     if (outcome.state === State.RUNNING) {
       const p = (await latestProgress({}, { alertOnError: false }).catch(() => undefined))?.value;
@@ -57,10 +62,13 @@
   }
 
   function finished(result: SyncOutcome) {
-    const manual = result.id === manualId;
+    // The page started it (sync button, full sync); automatic syncs report only errors.
+    const manual = !result.background;
     if (result.error) {
+      // A failed full sync hands the dialog back, with its choices, to try again.
+      fullRunning = false;
       if (result.errorKind === BackendError_Kind.SYNC_AUTH_ERROR) {
-        loadAccount();
+        loadAccount().catch(() => {});
         toast.error("Your Klaus account sign-in has expired. Sign in again to keep syncing.");
       } else if (manual) {
         toast.error(result.error);
@@ -87,9 +95,13 @@
     if (running) return;
     if (!account.email) return signIn();
     if (needsChoice) return askFullSync(outcome);
-    await call("klausSync", new Empty(), Empty);
-    await poll();
-    manualId = outcome.id;
+    try {
+      await call("klausSync", new Empty(), Empty, quiet);
+    } catch (err) {
+      toast.error("Couldn't start syncing", { description: (err as Error).message });
+      return;
+    }
+    await poll().catch(() => {});
   }
 
   async function watchMedia() {
@@ -122,7 +134,6 @@
     try {
       await call("klausFullSync", new FullSyncRequest({ upload, serverMediaUsn }), Empty);
       await poll();
-      manualId = outcome.id;
     } catch {
       fullRunning = false;
     }
@@ -139,12 +150,17 @@
   let signInOpen = $state(false);
   let signInUrl = $state("");
   async function signIn() {
-    signInUrl = (await call("klausAccountSignIn", new Empty(), PbString)).val;
+    try {
+      signInUrl = (await call("klausAccountSignIn", new Empty(), PbString, quiet)).val;
+    } catch (err) {
+      toast.error("Couldn't start signing in", { description: (err as Error).message });
+      return;
+    }
     openLink(signInUrl);
     signInOpen = true;
     while (signInOpen) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      await loadAccount();
+      await loadAccount().catch(() => {});
       if (account.email) {
         signInOpen = false;
         toast.success(`Signed in as ${account.email}.`);
@@ -157,12 +173,23 @@
   }
 
   async function toggle(key: "autoSync" | "syncMedia", value: boolean) {
-    await setProfileConfigJson({ key, valueJson: new TextEncoder().encode(JSON.stringify(value)) });
-    await loadAccount();
+    try {
+      await setProfileConfigJson({ key, valueJson: new TextEncoder().encode(JSON.stringify(value)) }, quiet);
+    } catch (err) {
+      toast.error("Couldn't change the sync setting", { description: (err as Error).message });
+      return;
+    }
+    // Saved; a failed reload only leaves the menu showing the old value.
+    await loadAccount().catch(() => {});
   }
   async function signOut() {
-    await call("klausSyncSignOut", new Empty(), Empty);
-    await loadAccount();
+    try {
+      await call("klausSyncSignOut", new Empty(), Empty, quiet);
+    } catch (err) {
+      toast.error("Couldn't sign out", { description: (err as Error).message });
+      return;
+    }
+    await loadAccount().catch(() => {});
   }
 
   const statusText = $derived.by(() => {
@@ -179,13 +206,15 @@
   });
 
   onMount(() => {
-    loadAccount();
+    loadAccount().catch(() => {});
     // A sync that finished before this page opened isn't news; a full sync still
     // waiting for a choice is asked about again.
-    call("klausSyncOutcome", new Empty(), SyncOutcome).then((current) => {
-      handledId = current.state === State.DONE && current.required < Required.FULL_SYNC ? current.id : 0;
-      poll();
-    });
+    call("klausSyncOutcome", new Empty(), SyncOutcome, quiet)
+      .then((current) => {
+        handledId = current.state === State.DONE && current.required < Required.FULL_SYNC ? current.id : 0;
+        return poll();
+      })
+      .catch(() => {});
     const timer = setInterval(() => poll().catch(() => {}), 2000);
     return () => clearInterval(timer);
   });

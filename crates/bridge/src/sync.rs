@@ -27,6 +27,8 @@ pub(crate) struct Sync {
     pub(crate) outcome: Mutex<klaus::SyncOutcome>,
     /// When the page last did something (Unix ms); automatic sync waits for quiet.
     pub(crate) last_activity: std::sync::atomic::AtomicI64,
+    /// Set by sync_before_quit: no automatic sync may start after it.
+    pub(crate) quitting: std::sync::atomic::AtomicBool,
 }
 
 impl Bridge {
@@ -126,9 +128,15 @@ impl Bridge {
     }
 
     /// Marks a sync as running (false if one already is), numbered for the page.
+    /// No sync but the quit sync starts once quitting (begin_quit) has begun.
     fn begin_sync(&self, background: bool) -> Option<u32> {
+        self.claim_sync(background, false)
+    }
+
+    fn claim_sync(&self, background: bool, for_quit: bool) -> Option<u32> {
         let mut outcome = self.sync.outcome.lock().unwrap();
-        if outcome.state() == klaus::sync_outcome::State::Running {
+        // Read under the lock begin_quit sets it under: no sync slips in after.
+        if outcome.state() == klaus::sync_outcome::State::Running || (self.is_quitting() && !for_quit) {
             return None;
         }
         let id = outcome.id + 1;
@@ -177,7 +185,7 @@ impl Bridge {
     pub fn auto_sync_tick(&self) -> bool {
         let quiet = now_ms() - self.sync.last_activity.load(std::sync::atomic::Ordering::Relaxed) >= QUIET_MS;
         let Some(auth) = self.sync_auth() else { return false };
-        if !self.should_auto_sync() || !quiet {
+        if !self.should_auto_sync() || !quiet || self.is_quitting() {
             return false;
         }
         let pending_full = {
@@ -200,7 +208,7 @@ impl Bridge {
     /// Syncs now on a background thread (on open, Anki's sync when the profile
     /// loads); the page sees it through klausSyncOutcome. Returns whether one started.
     pub fn sync_in_background(self: &Arc<Self>) -> bool {
-        if !self.should_auto_sync() {
+        if !self.should_auto_sync() || self.is_quitting() {
             return false;
         }
         let Some(id) = self.begin_sync(true) else { return false };
@@ -230,7 +238,11 @@ impl Bridge {
             return;
         }
         let deadline = std::time::Instant::now() + limit;
+        let past_deadline = || std::time::Instant::now() >= deadline;
+        self.begin_quit();
         let done = Arc::new(AtomicBool::new(false));
+        // Past the deadline, keeps aborting until this returns: an abort before
+        // rslib registers a sync's abort handle does nothing.
         let watchdog = {
             let (bridge, done) = (Arc::clone(self), Arc::clone(&done));
             std::thread::spawn(move || {
@@ -238,20 +250,19 @@ impl Bridge {
                     if std::time::Instant::now() >= deadline {
                         let _ = bridge.call_trusted("abortSync", &[]);
                         let _ = bridge.call_trusted("abortMediaSync", &[]);
-                        return;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             })
         };
-        // Claim the sync slot, waiting out a sync already running (the watchdog
-        // aborts it at the deadline).
+        // Claim the sync slot, waiting out a sync already running; never start one
+        // past the deadline.
         let id = loop {
-            if let Some(id) = self.begin_sync(true) {
-                break Some(id);
-            }
-            if std::time::Instant::now() >= deadline {
+            if past_deadline() {
                 break None;
+            }
+            if let Some(id) = self.claim_sync(true, true) {
+                break Some(id);
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
         };
@@ -259,11 +270,22 @@ impl Bridge {
             let result = self.sync();
             self.end_sync(id, true, result);
         }
-        while std::time::Instant::now() < deadline && self.media_sync_active() {
+        while !past_deadline() && self.media_sync_active() {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
         done.store(true, Ordering::SeqCst);
         let _ = watchdog.join();
+    }
+
+    /// From here on, only sync_before_quit may start a sync. The shell calls it
+    /// from the quit event itself, before anything else can claim the slot.
+    pub fn begin_quit(&self) {
+        let _slot = self.sync.outcome.lock().unwrap();
+        self.sync.quitting.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn is_quitting(&self) -> bool {
+        self.sync.quitting.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn media_sync_active(&self) -> bool {
