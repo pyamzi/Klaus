@@ -18,10 +18,10 @@
 			"has": [
 				{
 					"type": "host",
-					"value": "www.klaus.ink"
+					"value": "(?:www\\.)?klaus\\.ink"
 				}
 			],
-			"destination": "https://klaus.ink/$1",
+			"destination": "https://klausnote.com/$1",
 			"permanent": true
 		}
 	],
