@@ -22,5 +22,5 @@ export const site = {
 
 	discord: 'https://discord.gg/uFRgE8RtDY',
 	appRepo: 'https://github.com/pyamzi/klaus-note',
-	addonRepo: 'https://github.com/pyamzi/klaus-note-addon'
+	addonRepo: 'https://github.com/pyamzi/klaus-note/tree/main/addon'
 };

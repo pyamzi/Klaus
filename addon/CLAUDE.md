@@ -83,12 +83,12 @@ holds API keys) stay ignored — never stage those.
   working tree — every mutation is applied in a sandbox copy, and the repo is
   hashed before the run and re-hashed in a `finally`.
 - **Issues** (see "Issue tracker" below): `gh issue list --repo
-  pyamzi/klaus-note-addon --label ready-for-agent`
+  pyamzi/klaus-note --label addon --label ready-for-agent`
 - No linter is configured in this repo.
 
 ## Issue tracker
 
-Add-on work lives in GitHub Issues on `pyamzi/klaus-note-addon` (via
+Add-on work lives in GitHub Issues on `pyamzi/klaus-note`, label `addon` (via
 `gh`; see `docs/agents/issue-tracker.md`). Every issue carries one
 category label (`bug`/`enhancement`), one state label (`needs-triage`,
 `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`; see

@@ -412,7 +412,7 @@ No numpy either — Anki's venv doesn't have it, so `card_index.py`/
 
 #### Issue tracker
 
-Issues live in GitHub Issues on `pyamzi/klaus-note-addon` (via `gh`). See `docs/agents/issue-tracker.md`. The kanban board in `board/` is retired; `board/ARCHIVE.md` keeps its history.
+Issues live in GitHub Issues on `pyamzi/klaus-note` with the `addon` label (via `gh`). See `docs/agents/issue-tracker.md`. The kanban board in `board/` is retired; `board/ARCHIVE.md` keeps its history.
 
 #### Triage labels
 
