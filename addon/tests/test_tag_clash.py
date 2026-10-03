@@ -396,7 +396,7 @@ check("...while the shared tag drops the renamed PDF's note (rebuilt from the ke
 ts.set_stored_tag("s2", "!Library::Onc::Shared_A")
 live["col"] = AnkiCol({1: {"!Library::Onc::Shared_A"}, 2: {"!Library::Onc::Shared_A"}})
 ts._cached_matches_many = lambda safes, cfg: {s: None for s in safes}
-ts.sync_after_rename(None, "s2")
+ts.sync_after_folder_rename(None, ["s2"])
 check("cold cache: nothing is copied, the new tag is registered empty",
       "!Library::Onc::Shared_B" not in live["col"].notes[1] | live["col"].notes[2]
       and "!Library::Onc::Shared_B" in live["col"].tags.all(), str((live["col"].notes, live["col"].tags.all())))
