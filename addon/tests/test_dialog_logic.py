@@ -418,8 +418,9 @@ check("revert re-applies from config via the addon's OWN profile-open "
 check("...and that applier really is a top-level name in __init__, or "
       "the revert above would fail silently into its except",
       "\ndef _apply_color_theme() -> None:" in _init_src)
-check("the background paint seam honours the preview",
-      "background.resolve(background.effective_cfg(_config()))" in _tb_src)
+check("the background paint seam honours the preview (top_bar's _config applies it)",
+      "background.resolve(_config())" in _tb_src
+      and "return background.effective_cfg(settings.read())" in _tb_src)
 
 print("== the API-first page list and its two save_* writers (D1) ==")
 check("Local models has endpoint and model fields", '"Local models", "Local models"' in _src2 and "endpoint_edit" in _src2 and "embed_model_edit" in _src2)
