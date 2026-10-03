@@ -565,7 +565,8 @@ def import_pdf_file(path: str, replace: bool = False) -> str | None:
     if info["page_count"] == 0:
         showWarning(
             "No text extracted from this PDF.\n"
-            "It might be a scanned image — OCR is not yet supported."
+            "If it is a scan, Klaus Note reads garbled pages with the local Ollama "
+            "model glm-ocr once it is installed."
         )
     # Safe names are lossy; keep the original filename for the drive's
     # tree. Never let bookkeeping break an otherwise-good import.

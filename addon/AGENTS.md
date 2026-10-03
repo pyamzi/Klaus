@@ -487,15 +487,16 @@ companion podcast-script generator (`podcast.py`) — all deleted
 2026-09-02 when Pouya converged the design onto hosting the Claude Code
 CLI instead (`assistant_dock.py`: one dock, one engine). Config keys
 `assistant_api_key` / `assistant_backend` / `assistant_token` were
-dropped with them. `card_forge.py` and `anki_tools.py` survived; the
+dropped with them. `anki_tools.py` survived (`card_forge.py` was deleted in #27); the
 embedded assistant that followed was itself removed in D3 on 2026-09-19.
 
 Historical note, 2026-09-15: the API-first turn removed Ollama and OCR
 and introduced page records, page-level vectors and cloud adapters.
 Reverted by the approved 2026-09-18 local-model design: D1-D3 have removed
 Plus, the judge and assistant; D4 restores managed Ollama, D6's local
-transcription came and went (removed in K-314), and D5 exposes the retained endpoint. OCR and Voyage are
-not part of the approved restoration. The superseded specs retain the
+transcription came and went (removed in K-314), and D5 exposes the retained endpoint. Voyage is
+not part of the approved restoration; garbled-page OCR through local Ollama
+(`glm-ocr`) shipped later. The superseded specs retain the
 original design history.
 
 ---
