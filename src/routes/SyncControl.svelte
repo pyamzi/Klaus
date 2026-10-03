@@ -9,10 +9,10 @@
   import { Empty, String as PbString } from "@generated/anki/generic_pb";
   import { FullSyncRequest, SyncAccount, SyncOutcome, SyncOutcome_State as State } from "@generated/klaus_pb";
   import { postProto } from "@generated/post";
-  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-  import CloudAlertIcon from "@lucide/svelte/icons/cloud-alert";
-  import CloudCheckIcon from "@lucide/svelte/icons/cloud-check";
-  import UserIcon from "@lucide/svelte/icons/circle-user";
+  import { IconRefresh as RefreshCwIcon } from "@tabler/icons-svelte";
+  import { IconCloudExclamation as CloudAlertIcon } from "@tabler/icons-svelte";
+  import { IconCloudCheck as CloudCheckIcon } from "@tabler/icons-svelte";
+  import { IconUserCircle as UserIcon } from "@tabler/icons-svelte";
   import { onMount } from "svelte";
   import { toast } from "svelte-sonner";
   import { Button } from "$lib/components/ui/button";
