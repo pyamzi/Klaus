@@ -669,9 +669,10 @@ class _CloseFilter(QObject):
     deletes it, so a tick later the dock is removed and the orphan reaped
     once the registry shows it closed."""
 
-    def __init__(self, kind: str) -> None:
+    def __init__(self, kind: str, dock=None) -> None:
         super().__init__()
         self._kind = kind
+        self._dock = dock  # Edit: the dock this instance was built in
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt override
         try:
@@ -683,7 +684,8 @@ class _CloseFilter(QObject):
                 event.ignore()
                 _back()
                 return True
-            QTimer.singleShot(0, lambda: _reap_edit(obj))
+            dock = self._dock
+            QTimer.singleShot(0, lambda: _reap_edit(obj, dock))
         except Exception as exc:  # noqa: BLE001
             print(f"[klaus_note] single window close filter failed: {exc}")
         return False
@@ -702,20 +704,24 @@ def _registry_instance(names) -> object | None:
     return None
 
 
-def _reap_edit(inst, attempt: int = 0) -> None:
-    """Remove the Edit dock once Anki's async close has marked the dialog
-    closed; retry briefly while its note is still saving."""
-    if _registry_instance(EDIT_NAMES) is inst and attempt < 25:
-        QTimer.singleShot(200, lambda: _reap_edit(inst, attempt + 1))
+def _reap_edit(inst, dock, attempt: int = 0) -> None:
+    """Remove ``dock``, the one ``inst`` was built in, once Anki's async
+    close has marked the dialog closed; retry briefly while its note is
+    still saving. ``inst`` None (the window is already destroyed) skips the
+    wait. A newer Edit dock under ``"edit"`` is never touched (#24)."""
+    if inst is not None and _registry_instance(EDIT_NAMES) is inst and attempt < 25:
+        QTimer.singleShot(200, lambda: _reap_edit(inst, dock, attempt + 1))
         return
-    dock = _state.docks.pop("edit", None)
-    _state.editcurrent = None
-    if dock is not None:
-        try:
-            _state.mw.removeDockWidget(dock)
-            dock.deleteLater()  # takes the orphan with it
-        except RuntimeError:
-            pass
+    if dock is None:
+        return
+    if _state.docks.get("edit") is dock:
+        del _state.docks["edit"]
+        _state.editcurrent = None
+    try:
+        _state.mw.removeDockWidget(dock)
+        dock.deleteLater()  # takes the orphan with it
+    except RuntimeError:  # already gone
+        pass
     _push_active_links()
 
 
@@ -825,10 +831,11 @@ def _on_editor_did_init(editor) -> None:
         _hide_menu_bar(win)
         _drop_placeholders(dock.widget())
         _state.editcurrent = win
-        flt = _CloseFilter("edit")
+        flt = _CloseFilter("edit", dock)
         win._klaus_note_close_filter = flt
         win.installEventFilter(flt)
-        win.destroyed.connect(lambda *_: _reap_edit(None))
+        # A tick later: never inside the dying dock's own teardown.
+        win.destroyed.connect(lambda *_: QTimer.singleShot(0, lambda: _reap_edit(None, dock)))
         dock.show()
         dock.raise_()
     except Exception as exc:  # noqa: BLE001
@@ -1108,6 +1115,11 @@ def _init_main() -> None:
         register(mw)
         _state.recorder = host_keys.setup(mw, focus_in_editor)
         _state.host.listeners.append(_on_tab_switch)
+        from . import browse_toggles
+
+        # An auto-loaded profile fired profile_did_open before this host
+        # existed, so the top-bar toggles attach here (idempotent, #25).
+        browse_toggles._listen_to_tabs()
         gui_hooks.browser_will_show.append(_on_browser_will_show)
         gui_hooks.add_cards_did_init.append(_on_add_cards_did_init)
         gui_hooks.editor_did_init.append(_on_editor_did_init)

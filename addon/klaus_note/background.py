@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
+from urllib.parse import quote
 
 from . import theme as _theme
 
@@ -245,9 +246,11 @@ def safe_image_name(name: str) -> str:
 
 
 def image_url(addon: str, name: str) -> str:
-    """Web-export URL for a stored background image."""
+    """Web-export URL for a stored background image. The name is
+    percent-encoded (', #, ?, %, space…) so it embeds in a single-quoted
+    CSS ``url()``; the media server matches the decoded path (#26)."""
     safe = safe_image_name(name)
-    return f"/_addons/{addon}/user_files/{IMAGE_DIR}/{safe}" if safe else ""
+    return f"/_addons/{addon}/user_files/{IMAGE_DIR}/{quote(safe, safe='')}" if safe else ""
 
 
 # ── On-screen gradient editing (transient, never persisted) ──────────
