@@ -34,7 +34,7 @@ npx tauri build --bundles app && ditto target/release/bundle/macos/Klaus.app /Ap
 
 ### Issue tracker
 
-Issues live in GitHub Issues on `pyamzi/Klaus` (via `gh`). See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues on `pyamzi/klaus-note` (via `gh`). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
