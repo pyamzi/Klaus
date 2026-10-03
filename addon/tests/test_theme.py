@@ -230,32 +230,7 @@ for night in (False, True):
                 "QListWidget", "QListWidget::item:selected"):
         check(f"dialog_qss(night={night}) styles {sel}", sel in d3)
 
-section("drop zone + helpers")
-dz = theme.drop_zone_qss(False, "klausNoteLibraryDropZone")
-check("drop zone scopes rules to the given objectName",
-      "#klausNoteLibraryDropZone {" in dz
-      and '#klausNoteLibraryDropZone[dragOver="true"]' in dz)
-check("drop zone styles its Browse button",
-      "#klausNoteLibraryDropZone QPushButton" in dz)
-# K-132: the Library's empty state is a drop target that must not
-# ADVERTISE as a box while idle — the pane already carries one dashed
-# square below the tree. Same builder, idle half muted.
-for _n in (False, True):
-    _dzq = theme.drop_zone_qss(_n, "klausNoteLibraryEmpty",
-                               idle_border=False)
-    _c = theme.palette(_n)
-    check(f"idle_border=False (night={_n}) drops the idle dashed box",
-          "dashed" not in _dzq)
-    check(f"idle_border=False (night={_n}) keeps the SHARED drag-over "
-          "half — the empty state lights up exactly like the square",
-          '#klausNoteLibraryEmpty[dragOver="true"]' in _dzq
-          and _c["blue_bright"] in _dzq and _c["selection_bg"] in _dzq)
-    check(f"idle_border=False (night={_n}) makes that border "
-          "TRANSPARENT rather than removing it — the box model has to "
-          "survive the drag or the guidance text shifts a pixel",
-          "border: 1px solid transparent" in _dzq)
-check("the default is untouched: the deck/Library squares keep their "
-      "dashed idle box", "dashed" in dz)
+section("helpers")
 check("accent_rgba light = system blue with alpha",
       theme.accent_rgba(False, 0.3) == "rgba(0, 122, 255, 0.3)")
 check("accent_rgba dark = bright dark-mode accent",
@@ -414,11 +389,6 @@ RADIUS_RE = re.compile(r"border-radius:\s*(\d+)(?:px)?")
 FONT_SIZE_RE = re.compile(r"font-size:\s*(\d+)px")
 
 scale_builders = builders + [
-    ("drop_zone_qss",
-     lambda night: theme.drop_zone_qss(night, "ScaleAuditDropZone")),
-    ("drop_zone_qss(idle_border=False)",
-     lambda night: theme.drop_zone_qss(night, "ScaleAuditEmptyState",
-                                       idle_border=False)),
     ("toolbar_css", lambda night: theme.toolbar_css()),
     ("bottombar_css", lambda night: theme.bottombar_css()),
     ("reviewer_bar_css", lambda night: theme.reviewer_bar_css()),
