@@ -1,6 +1,7 @@
 # Image Occlusion in Klaus — design
 
-Date: 2026-10-01. Status: approved in conversation (approach 1, sections 1–4); awaiting written-spec review.
+Date: 2026-10-01. Approved in conversation (approach 1, sections 1–4).
+Status: implemented and shipped; kept as a historical record. The code is the source of truth, and paths use the old package name `klausmate` (now `klaus_note`).
 
 ## Goal
 

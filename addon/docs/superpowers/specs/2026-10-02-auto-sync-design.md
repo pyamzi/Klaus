@@ -1,6 +1,6 @@
 # Automatic sync — design
 
-Date: 2026-10-02. Status: draft for review.
+Date: 2026-10-02. Status: implemented and shipped; kept as a historical record. The code is the source of truth, and paths use the old package name `klausmate` (now `klaus_note`).
 
 ## Intent
 
@@ -112,11 +112,13 @@ never goes through `sync_collection`:
      - If the result is `NO_CHANGES`, `mw.media_syncer.start_monitoring()`.
      - Otherwise set **full sync pending**. Nothing more is sent, and
        auto sync pauses until a sync started by the user clears it.
-   - In every case:
-     - `mw.col.models._clear_cache()`
-     - `gui_hooks.sync_did_finish()`
-     - `mw.reset()`, which is what Anki does after a sync
-     - `mw.toolbar.update_sync_status()`
+   - In every case: `gui_hooks.sync_did_finish()` and
+     `mw.toolbar.update_sync_status()`.
+   - Only when the sync changed the collection: `mw.col.models._clear_cache()`
+     and a deferred `mw.reset()` (what Anki does after a sync). The reset waits
+     until no sync is running, the user isn't reviewing, and no editor has
+     focus or recent typing, so it never reloads an editor under the user.
+     Unchanged and failed runs don't reset.
 
 Anki's own syncs (the `y` key, a status-entry click, Log In, profile
 open/close) are watched through `sync_will_start` and `sync_did_finish`.

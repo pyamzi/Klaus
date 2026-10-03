@@ -1,5 +1,7 @@
 # PDF Reader Implementation Plan
 
+> **Historical record: shipped, do not execute.** This plan was carried out and the work is in the code, which is the source of truth. It predates two changes: the package `klausmate/` is now `klaus_note/`, and the local board (`board/board.py`) is retired in favour of GitHub Issues (see `docs/agents/issue-tracker.md`). Unchecked boxes are not open work.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** One fast pdf.js reader, identical in every host, that stays in two-way sync with the Library folder.

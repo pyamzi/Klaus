@@ -1,6 +1,7 @@
 # PDF reader: one fast reader, two-way sync with the Library folder
 
-Date: 2026-09-30. Status: design approved in conversation, awaiting spec review.
+Date: 2026-09-30. Design approved in conversation.
+Status: implemented and shipped; kept as a historical record. The code is the source of truth, and paths use the old package name `klausmate` (now `klaus_note`).
 Supersedes the open pdf.js cutover cards K-095 (umbrella) and K-101 (cutover).
 
 ## Goal
@@ -83,6 +84,11 @@ handler's value JSON-encoded to `cb` (verified in `aqt/webview.py`'s `pycmd` shi
 - Every request carries the document generation `gen`; a request from an older
   generation is refused, so a tab switch never mixes bytes from two files.
 - Ranges are bounded to the file size and capped at 1 MB per call.
+- As shipped, `DocSource(path, snapshot_dir)` hard-links the opened PDF into
+  `user_files/reading` and reads that snapshot, so Klaus's own `os.replace`
+  saves never make the open document stale; it reads the live path only when
+  the link can't be made (another volume, no hard links). Leftover snapshots
+  are swept on first load.
 
 **Memory.** `teardown()` calls `doc.destroy()` and aborts any open transport.
 
