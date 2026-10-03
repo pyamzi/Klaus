@@ -38,7 +38,7 @@
         <a
           href="/review?deck={deck.deckId}"
           class="font-medium hover:underline"
-          class:text-primary={deck.filtered}>{deck.name}</a
+          class:text-link={deck.filtered}>{deck.name}</a
         >
       </div>
     </Table.Cell>
