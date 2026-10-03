@@ -68,4 +68,13 @@ except Stop:
 check("the argument is callable", len(got) == 1 and callable(got[0]), repr(got))
 curation.embeddings.provider_from_config = real_provider
 
+section("the HTML stripper the card index embeds through (characterization)")
+strip = curation._strip_html
+check("empty in, empty out", strip("") == "" and strip(None) == "")
+check("block tags and <br> become newlines, other tags vanish, entities decode",
+      strip("<div>Hello</div><br>World&nbsp;<b>bold</b> &amp; &lt;x&gt; &quot;q&quot;")
+      == 'Hello\n\nWorld bold & <x> "q"', repr(strip("<div>Hello</div><br>World&nbsp;<b>bold</b> &amp; &lt;x&gt; &quot;q&quot;")))
+check("runs of blank lines collapse to one, ends trimmed",
+      strip("  <p>a</p><p></p><p></p><p>b</p>  ") == "a\n\nb", repr(strip("  <p>a</p><p></p><p></p><p>b</p>  ")))
+
 raise SystemExit(report())

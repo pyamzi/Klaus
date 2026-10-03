@@ -39,6 +39,7 @@ embeddings.py. Long work runs on QueryOp workers; the embedding phases run
 from __future__ import annotations
 
 import os
+import re
 import threading
 from typing import Any, Callable
 
@@ -83,10 +84,21 @@ _busy = False
 ProgressFn = Callable[[str, int, int], None]  # (label, done, total)
 
 
-def _pkg():
-    import importlib
-
-    return importlib.import_module(__package__)
+def _strip_html(s: str) -> str:
+    """Strip HTML tags so sibling-field content goes into prompts as plain text."""
+    if not s:
+        return ""
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"</?(div|p|span|li|ul|ol|h[1-6])\b[^>]*>", "\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"<[^>]+>", "", s)
+    # Common HTML entities (don't pull in html.parser just for this).
+    s = (s.replace("&nbsp;", " ")
+           .replace("&amp;", "&")
+           .replace("&lt;", "<")
+           .replace("&gt;", ">")
+           .replace("&quot;", '"'))
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
 
 
 # ------------------------------------------------------------ pure helpers
@@ -110,7 +122,7 @@ def _snapshot_with_col(col, force_rebuild: bool):
     rows = col.db.all("select id, mod, flds from notes")
     mods = {int(r[0]): int(r[1]) for r in rows}
     flds = {int(r[0]): str(r[2]) for r in rows}
-    strip = _pkg()._strip_html
+    strip = _strip_html
 
     def text_fn(nid: int) -> str:
         return card_index.note_text(flds[nid].split(_FIELD_SEP), strip)

@@ -51,23 +51,6 @@ settings.current_profile = lambda: getattr(mw, "col", None)
 # ----------------------------- card context ------------------------------
 
 
-def _strip_html(s: str) -> str:
-    """Strip HTML tags so sibling-field content goes into prompts as plain text."""
-    if not s:
-        return ""
-    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
-    s = re.sub(r"</?(div|p|span|li|ul|ol|h[1-6])\b[^>]*>", "\n", s, flags=re.IGNORECASE)
-    s = re.sub(r"<[^>]+>", "", s)
-    # Common HTML entities (don't pull in html.parser just for this).
-    s = (s.replace("&nbsp;", " ")
-           .replace("&amp;", "&")
-           .replace("&lt;", "<")
-           .replace("&gt;", ">")
-           .replace("&quot;", '"'))
-    s = re.sub(r"\n{3,}", "\n\n", s)
-    return s.strip()
-
-
 def _set_target_field(editor: Editor, field_name: str) -> None:
     """Point Anki's own ``editor.currentField`` at the field the user last
     clicked, for PDF page insert.
