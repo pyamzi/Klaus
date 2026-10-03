@@ -103,13 +103,10 @@ const ALLOWED: &[&str] = &[
     "describeNextStates",
     "answerCard",
     "undo",
-    "getUndoStatus",
     "congratsInfo",
-    // Sync progress and cancelling (the sync itself goes through Klaus's methods,
-    // which keep the AnkiWeb key out of the page).
+    // Sync progress (the sync itself goes through Klaus's methods, which keep
+    // the AnkiWeb key out of the page).
     "mediaSyncStatus",
-    "abortSync",
-    "abortMediaSync",
     // Klaus's deck list (Anki's deckbrowser.py and filtered deck dialog).
     "newDeck",
     "addDeck",
