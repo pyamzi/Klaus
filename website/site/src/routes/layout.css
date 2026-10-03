@@ -1,0 +1,148 @@
+@import 'tailwindcss';
+@import "tw-animate-css";
+@import "shadcn-svelte/tailwind.css";
+@import "@fontsource-variable/atkinson-hyperlegible-next";
+
+/* Excalifont (MIT, from Excalidraw): the hand-drawn face of the Klaus mark, used for
+   wordmarks and headings. static/fonts holds a Latin subset built with pyftsubset. */
+@font-face {
+	font-family: "Excalifont";
+	src: url("/fonts/Excalifont.woff2") format("woff2");
+	font-display: swap;
+}
+
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+/* Klaus palette: a ruled index card. Paper, ink, the app icon's blue, the card's
+   blue rules and red margin line, and the review counts' colours from the app. */
+:root {
+	--paper: #f5f8fc;
+	--ink: #0e1a2b;
+	--klaus: #2393f4;
+	--klaus-ink: #0b65b8;
+	--rule: #d3e3f5;
+	--margin: #d93a40;
+	--count-new: #1d4ed8;
+	--count-learn: #b91c1c;
+	--count-due: #15803d;
+
+	--background: var(--paper);
+	--foreground: var(--ink);
+	--card: #ffffff;
+	--card-foreground: var(--ink);
+	--popover: #ffffff;
+	--popover-foreground: var(--ink);
+	--primary: var(--klaus-ink);
+	--primary-foreground: #ffffff;
+	--secondary: #e7eef7;
+	--secondary-foreground: var(--ink);
+	--muted: #e7eef7;
+	--muted-foreground: #4f5f74;
+	--accent: #e1edfb;
+	--accent-foreground: var(--ink);
+	--destructive: var(--margin);
+	--border: #d5dfeb;
+	--input: #c9d6e6;
+	--ring: var(--klaus);
+	--radius: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--paper: #0a1322;
+		--ink: #e6edf6;
+		--klaus-ink: #6cb8ff;
+		--rule: #1d3352;
+		--margin: #f07a7e;
+		--count-new: #93c5fd;
+		--count-learn: #fca5a5;
+		--count-due: #86efac;
+
+		--card: #111e33;
+		--popover: #111e33;
+		--primary: var(--klaus-ink);
+		--primary-foreground: #06121f;
+		--secondary: #172741;
+		--muted: #172741;
+		--muted-foreground: #9fb0c6;
+		--accent: #17304f;
+		--border: #20324d;
+		--input: #2a3f5e;
+	}
+}
+
+@theme inline {
+	--font-sans: 'Atkinson Hyperlegible Next Variable', system-ui, sans-serif;
+	--font-display: 'Excalifont', 'Atkinson Hyperlegible Next Variable', system-ui, sans-serif;
+	--font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+	--font-hand: var(--font-display);
+	--color-klaus: var(--klaus);
+	--color-klaus-ink: var(--klaus-ink);
+	--color-rule: var(--rule);
+	--color-margin: var(--margin);
+	--color-count-new: var(--count-new);
+	--color-count-learn: var(--count-learn);
+	--color-count-due: var(--count-due);
+	--color-ring: var(--ring);
+	--color-input: var(--input);
+	--color-border: var(--border);
+	--color-destructive: var(--destructive);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-accent: var(--accent);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-muted: var(--muted);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-secondary: var(--secondary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-primary: var(--primary);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-popover: var(--popover);
+	--color-card-foreground: var(--card-foreground);
+	--color-card: var(--card);
+	--color-foreground: var(--foreground);
+	--color-background: var(--background);
+	--radius-sm: calc(var(--radius) * 0.6);
+	--radius-md: calc(var(--radius) * 0.8);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) * 1.4);
+	--radius-2xl: calc(var(--radius) * 1.8);
+	--radius-3xl: calc(var(--radius) * 2.2);
+	--radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	body {
+		@apply bg-background text-foreground;
+	}
+	/* Links inside running text must look like links (Tailwind's reset removes it). */
+	:where(p, li, dd) a {
+		text-decoration: underline;
+		text-underline-offset: 0.2em;
+	}
+	/* Browser surfaces, themed from the palette. */
+	::selection {
+		background: color-mix(in oklab, var(--klaus) 28%, transparent);
+	}
+	input {
+		caret-color: var(--klaus);
+	}
+	input::placeholder {
+		color: var(--muted-foreground);
+		opacity: 1;
+	}
+	@media (prefers-reduced-motion: no-preference) {
+		html {
+			scroll-behavior: smooth;
+		}
+	}
+	html {
+		scrollbar-color: color-mix(in oklab, var(--ink) 25%, transparent) transparent;
+	}
+	html {
+		@apply font-sans;
+		color-scheme: light dark;
+	}
+}

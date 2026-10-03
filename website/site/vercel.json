@@ -1,0 +1,39 @@
+{
+	"cleanUrls": true,
+	"trailingSlash": false,
+	"redirects": [
+		{
+			"source": "/(.*)",
+			"has": [
+				{
+					"type": "host",
+					"value": "www.klausnote.com"
+				}
+			],
+			"destination": "https://klausnote.com/$1",
+			"permanent": true
+		},
+		{
+			"source": "/(.*)",
+			"has": [
+				{
+					"type": "host",
+					"value": "www.klaus.ink"
+				}
+			],
+			"destination": "https://klaus.ink/$1",
+			"permanent": true
+		}
+	],
+	"headers": [
+		{
+			"source": "/_app/immutable/(.*)",
+			"headers": [
+				{
+					"key": "Cache-Control",
+					"value": "public, max-age=31536000, immutable"
+				}
+			]
+		}
+	]
+}
