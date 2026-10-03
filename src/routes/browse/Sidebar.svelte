@@ -10,8 +10,8 @@
   } from "@generated/anki/search_pb";
   import type { PlainMessage } from "@bufbuild/protobuf";
   import { onMount } from "svelte";
-  import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
-  import XIcon from "@lucide/svelte/icons/x";
+  import { IconChevronDown as ChevronDownIcon } from "@tabler/icons-svelte";
+  import { IconX as XIcon } from "@tabler/icons-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as Collapsible from "$lib/components/ui/collapsible";
   import { Input } from "$lib/components/ui/input";

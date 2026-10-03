@@ -38,7 +38,7 @@ fn main() {
             let sync = app.state::<Arc<Bridge>>().inner().clone();
             sync.sync_in_background();
             sync.start_auto_sync();
-            println!("Klaus bridge listening on {addr}");
+            println!("KlausNote bridge listening on {addr}");
 
             let base: Url = format!("http://{addr}/").parse()?;
             app.manage(base.clone());
@@ -52,15 +52,15 @@ fn main() {
             url.set_query(Some(&format!("{query}t={token}")));
             // Lets a dev browser drive the same pages; never in release builds.
             #[cfg(debug_assertions)]
-            println!("Klaus dev URL: {url}");
+            println!("KlausNote dev URL: {url}");
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-                .title("Klaus")
+                .title("KlausNote")
                 .inner_size(1100.0, 750.0)
                 .build()?;
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Klaus");
+        .expect("error while building KlausNote");
 
     // Anki syncs on close (autoSync); Klaus holds the window and the exit until the
     // sync and its media sync are done. A full sync needs a choice, so it's left
@@ -108,7 +108,7 @@ fn start_quit(app: &AppHandle, quit: &Arc<AtomicU8>) -> bool {
     }
     bridge.begin_quit();
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_title("Klaus — Syncing…");
+        let _ = window.set_title("KlausNote — Syncing…");
     }
     let (app, quit) = (app.clone(), Arc::clone(quit));
     std::thread::spawn(move || {

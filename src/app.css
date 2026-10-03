@@ -3,48 +3,52 @@
 @import "tw-animate-css";
 @import "shadcn-svelte/tailwind.css";
 @import "@fontsource-variable/inter";
+@import "@fontsource-variable/dm-sans";
 
 /* Klaus follows the system appearance (no in-app toggle). */
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
+/* The Klaus design system (the "Apple HIG" artifact, tokens.json), which is the
+   shadcn-svelte preset b2GUtMueeu (Nova, Zinc, bold menu accent) with the HIG
+   layers, a darker ring and Anki's colours. Keep the two in step: change the
+   design system, then regenerate these two blocks from its tokens. */
 :root {
-	--background: oklch(1 0 0);
-	--foreground: oklch(0.145 0 0);
-	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.145 0 0);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.145 0 0);
-	--primary: oklch(0.559 0.169 254.9); /* #1a73d4, Klaus blue at 4.7:1 */
-	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.97 0 0);
-	--secondary-foreground: oklch(0.205 0 0);
-	--muted: oklch(0.97 0 0);
-	--muted-foreground: oklch(0.556 0 0);
-	--accent: oklch(0.97 0 0);
-	--accent-foreground: oklch(0.205 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
-	--border: oklch(0.922 0 0);
-	--input: oklch(0.922 0 0);
-	--ring: oklch(0.652 0.173 250.4);
-	--chart-1: oklch(0.87 0 0);
-	--chart-2: oklch(0.556 0 0);
-	--chart-3: oklch(0.439 0 0);
-	--chart-4: oklch(0.371 0 0);
-	--chart-5: oklch(0.269 0 0);
+	--background: #ffffff;
+	--foreground: #09090b;
+	--card: #ffffff;
+	--card-foreground: #09090b;
+	--popover: #ffffff;
+	--popover-foreground: #09090b;
+	--primary: #18181b;
+	--primary-foreground: #fafafa;
+	--secondary: #f4f4f5;
+	--secondary-foreground: #18181b;
+	--muted: #f4f4f5;
+	--muted-foreground: #71717b;
+	--accent: #18181b;
+	--accent-foreground: #fafafa;
+	--destructive: #e7000b;
+	--border: #e4e4e7;
+	--input: #e4e4e7;
+	--ring: #71717b;
+	--chart-1: #d4d4d8;
+	--chart-2: #71717b;
+	--chart-3: #52525c;
+	--chart-4: #3f3f46;
+	--chart-5: #27272a;
+	--sidebar: #fafafa;
+	--sidebar-foreground: #09090b;
+	--sidebar-primary: #18181b;
+	--sidebar-primary-foreground: #fafafa;
+	--sidebar-accent: #18181b;
+	--sidebar-accent-foreground: #fafafa;
+	--sidebar-border: #e4e4e7;
+	--sidebar-ring: #71717b;
 	--radius: 0.625rem;
-	--sidebar: oklch(0.985 0 0);
-	--sidebar-foreground: oklch(0.145 0 0);
-	--sidebar-primary: oklch(0.559 0.169 254.9);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
-	--sidebar-accent: oklch(0.97 0 0);
-	--sidebar-accent-foreground: oklch(0.205 0 0);
-	--sidebar-border: oklch(0.922 0 0);
-	--sidebar-ring: oklch(0.652 0.173 250.4);
-	/* Anki's meanings, at ≥4.5:1 on the background: new / learning / due counts. */
+	/* Anki's meanings, at ≥4.5:1 on the background: new / learning / due counts; browser row states. */
 	--count-new: #1d4ed8;
 	--count-learn: #b91c1c;
 	--count-review: #15803d;
-	/* Browser row states (Anki's backend_color_to_aqt_color). */
 	--row-marked: #e9d5ff;
 	--row-suspended: #fef08a;
 	--row-buried: #e5e7eb;
@@ -59,37 +63,38 @@
 
 @media (prefers-color-scheme: dark) {
 	:root {
-		--background: oklch(0.145 0 0);
-		--foreground: oklch(0.985 0 0);
-		--card: oklch(0.205 0 0);
-		--card-foreground: oklch(0.985 0 0);
-		--popover: oklch(0.205 0 0);
-		--popover-foreground: oklch(0.985 0 0);
-		--primary: oklch(0.652 0.173 250.4); /* #2393f4, the logo blue */
-		--primary-foreground: oklch(0.145 0 0);
-		--secondary: oklch(0.269 0 0);
-		--secondary-foreground: oklch(0.985 0 0);
-		--muted: oklch(0.269 0 0);
-		--muted-foreground: oklch(0.708 0 0);
-		--accent: oklch(0.269 0 0);
-		--accent-foreground: oklch(0.985 0 0);
-		--destructive: oklch(0.704 0.191 22.216);
-		--border: oklch(1 0 0 / 10%);
-		--input: oklch(1 0 0 / 15%);
-		--ring: oklch(0.652 0.173 250.4);
-		--chart-1: oklch(0.87 0 0);
-		--chart-2: oklch(0.556 0 0);
-		--chart-3: oklch(0.439 0 0);
-		--chart-4: oklch(0.371 0 0);
-		--chart-5: oklch(0.269 0 0);
-		--sidebar: oklch(0.205 0 0);
-		--sidebar-foreground: oklch(0.985 0 0);
-		--sidebar-primary: oklch(0.652 0.173 250.4);
-		--sidebar-primary-foreground: oklch(0.145 0 0);
-		--sidebar-accent: oklch(0.269 0 0);
-		--sidebar-accent-foreground: oklch(0.985 0 0);
-		--sidebar-border: oklch(1 0 0 / 10%);
-		--sidebar-ring: oklch(0.652 0.173 250.4);
+		--background: #09090b;
+		--foreground: #fafafa;
+		--card: #18181b;
+		--card-foreground: #fafafa;
+		--popover: #18181b;
+		--popover-foreground: #fafafa;
+		--primary: #e4e4e7;
+		--primary-foreground: #18181b;
+		--secondary: #27272a;
+		--secondary-foreground: #fafafa;
+		--muted: #27272a;
+		--muted-foreground: #9f9fa9;
+		--accent: #e4e4e7;
+		--accent-foreground: #18181b;
+		--destructive: #ff6467;
+		--border: rgba(255, 255, 255, 0.1);
+		--input: rgba(255, 255, 255, 0.15);
+		--ring: #9f9fa9;
+		--chart-1: #d4d4d8;
+		--chart-2: #71717b;
+		--chart-3: #52525c;
+		--chart-4: #3f3f46;
+		--chart-5: #27272a;
+		--sidebar: #18181b;
+		--sidebar-foreground: #fafafa;
+		--sidebar-primary: #e4e4e7;
+		--sidebar-primary-foreground: #18181b;
+		--sidebar-accent: #e4e4e7;
+		--sidebar-accent-foreground: #18181b;
+		--sidebar-border: rgba(255, 255, 255, 0.1);
+		--sidebar-ring: #9f9fa9;
+		/* Anki's meanings, at ≥4.5:1 on the background: new / learning / due counts; browser row states. */
 		--count-new: #93c5fd;
 		--count-learn: #fca5a5;
 		--count-review: #86efac;
@@ -159,6 +164,7 @@
 	--radius-2xl: calc(var(--radius) * 1.8);
 	--radius-3xl: calc(var(--radius) * 2.2);
 	--radius-4xl: calc(var(--radius) * 2.6);
+	--font-heading: 'DM Sans Variable', sans-serif;
 }
 
 @layer base {
