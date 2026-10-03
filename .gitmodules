@@ -1,5 +1,5 @@
-[submodule "vendor/anki"]
-	path = vendor/anki
+[submodule "app/vendor/anki"]
+	path = app/vendor/anki
 	url = https://github.com/ankitects/anki.git
 	shallow = true
 	ignore = untracked
