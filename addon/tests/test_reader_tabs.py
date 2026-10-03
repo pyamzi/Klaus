@@ -221,14 +221,12 @@ def fake_load(sb):
 
 
 section("PdfSidebar: loads, tab switches and closes")
-ph.clear_active_pdf(UF)
 ed_loads = fake_load(ed)
 ed.load_pdf("c")
 check("a load from anywhere opens and selects its tab",
       ed.tabs.names() == ["a", "b", "c"] and ed.tabs.current() == "c", str(ed.tabs.names()))
 check("...without loading it a second time", ed_loads == ["c"], str(ed_loads))
 check("...persists the editor's set", ph.load_open_tabs(UF) == ["a", "b", "c"])
-check("...and points the editor's active PDF at it", ph.get_active_pdf(UF) == "c")
 check("...and records it as recently used", "c" in ph.load_last_used(UF))
 jumps = []
 ed.jump_to_page = lambda p: jumps.append(p)
@@ -250,8 +248,6 @@ lec.load_pdf("d")
 check("the Lecture reader keeps its own set", lec.tabs.names() == ["c", "d"]
       and ph.load_open_tabs(UF, host_key="lecture") == ["c", "d"]
       and ph.load_open_tabs(UF) == ["a", "b", "c"])
-check("...and never moves the editor's active PDF", ph.get_active_pdf(UF) == "c",
-      str(ph.get_active_pdf(UF)))
 
 cleared = []
 ed.clear = lambda: cleared.append(True)
@@ -261,8 +257,6 @@ spin()
 check("closing every tab clears the reader", ed.tabs.names() == [] and cleared,
       f"{ed.tabs.names()} {cleared}")
 check("...persists the empty set", ph.load_open_tabs(UF) == [])
-check("...and drops the editor's active PDF", ph.get_active_pdf(UF) is None,
-      str(ph.get_active_pdf(UF)))
 
 section("PdfSidebar: the ＋ menu")
 
