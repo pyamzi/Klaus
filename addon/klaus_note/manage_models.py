@@ -1078,7 +1078,7 @@ def manage_models_dialog(*_args: Any) -> None:
     klausbook_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
     _row(
         appearance_layout,
-        "KlausBook design",
+        "KlausNote design",
         "Restyle Anki toward the KlausNote look: toolbar, backgrounds, "
         "frosted panels, and widget editing on the deck screen. "
         "Off, Anki keeps its native design and KlausNote adds only its "
