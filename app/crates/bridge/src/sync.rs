@@ -123,7 +123,19 @@ impl Bridge {
         let req = anki_proto::sync::FullUploadOrDownloadRequest { auth: Some(auth), upload, server_usn: media_usn };
         match self.run_raw("fullUploadOrDownload", &req.encode_to_vec()) {
             Err(err) => self.sync_failed(err),
-            Ok(_) => klaus::SyncOutcome { state: klaus::sync_outcome::State::Done as i32, backup_folder, ..Default::default() },
+            Ok(_) => {
+                // rslib's upload stamps the last sync, then its transaction stamps the
+                // collection's mtime a moment later; across a millisecond, syncStatus
+                // reports changes that a normal sync (server mtime equal) never clears,
+                // and auto sync would run every minute. Settle it as rslib's full
+                // download does. A bare query: dbproxy's Commit would stamp mtime again.
+                if upload {
+                    let _ = self.backend.run_db_command_bytes(
+                        br#"{"kind":"query","sql":"update col set ls=mod","args":[],"first_row_only":false}"#,
+                    );
+                }
+                klaus::SyncOutcome { state: klaus::sync_outcome::State::Done as i32, backup_folder, ..Default::default() }
+            }
         }
     }
 
