@@ -77,7 +77,7 @@ def _launch_occlusion(open_editor: Callable[[], bool]) -> None:
             print(f"[klaus_note] occlude: the occlusion editor failed: {type(exc).__name__}: {exc}")
             opened = False
         if not opened:
-            tooltip("Klaus: couldn't open the occlusion editor")
+            tooltip("KlausNote: couldn't open the occlusion editor")
 
     QTimer.singleShot(0, run)
 
@@ -176,7 +176,7 @@ class PdfSidebar(QWidget):
                 print("[klaus_note] pdf.js unavailable (no QtWebEngine): no PDF viewer")
             self._fallback_label = QLabel(
                 "PDF viewer is unavailable on this Anki build.\n"
-                "Klaus will still index it for curation and retention scoring.",
+                "KlausNote will still index it for curation and retention scoring.",
                 self,
             )
             self._fallback_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -255,7 +255,7 @@ class PdfSidebar(QWidget):
                 f.write(png)
         except OSError as exc:
             print(f"[klaus_note] occlude: could not save the page image: {exc}")
-            tooltip("Klaus: couldn't save the page image")
+            tooltip("KlausNote: couldn't save the page image")
             return
         _launch_occlusion(lambda: image_occlusion.occlude(editor, path, None))
 

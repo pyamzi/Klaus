@@ -6,7 +6,7 @@
 
 desktop
 
-Klaus Note is a PyQt6 addon running inside Anki (macOS today; Anki also
+KlausNote is a PyQt6 addon running inside Anki (macOS today; Anki also
 ships on Windows/Linux). Not web/ios/android: the UI is Qt widgets
 styled with QSS from `klaus_note/theme.py`, plus three embedded webview
 surfaces (the restyled top toolbar, the bottom toolbar, and
@@ -25,7 +25,7 @@ machines that aren't this one are product concerns, not nice-to-haves.
 
 ## Product Purpose
 
-Klaus Note ("Klaus") turns Anki into a lecture-PDF study cockpit. All
+KlausNote for Anki turns Anki into a lecture-PDF study cockpit. All
 four jobs are confirmed as genuinely central, not ranked:
 
 1. **Exam prep from lectures** — find the cards a lecture covers fast
@@ -73,7 +73,7 @@ been removed. See [architecture](AGENTS.md) and [configuration](klaus_note/confi
 - Headless testing = stubbed `aqt`/`anki` (see `.claude/skills/
   klaus-test`); selected suites also exercise real Qt widgets offscreen.
 - The addon package name `klaus_note` (lowercase) is load-bearing
-  (symlink, URLs, config); user-facing name is "Klaus Note".
+  (symlink, URLs, config); user-facing name is "KlausNote for Anki" ("KlausNote" for short).
 - Personal data boundaries: `user_files/` (PDFs, annotations, card
   index) and `meta.json` (private profile configuration) are never staged, read, or shipped.
 - **Licensing (material because of "public later"):**
@@ -92,15 +92,17 @@ been removed. See [architecture](AGENTS.md) and [configuration](klaus_note/confi
 
 Volunteered and binding from the owner:
 
-- Names: **"Klaus Note"** (the addon, titles/menus) and **"Klaus"** (the
-  short product name in prose and tooltips). The mixed usage is
-  deliberate.
+- Names: **"KlausNote for Anki"** is the add-on's full name (AnkiWeb,
+  the add-on list) and **"KlausNote"** is its short name in titles,
+  menus, tooltips and the wordmark. "Klaus" alone is the brand behind
+  the Klaus account, not a product name. (Was "Klaus Note" and "Klaus"
+  until 2026-10-02.)
 - Mark: Pouya's hand-drawn k (2026-10-01; `top_bar._LOGO_PATH` is the
   single source of truth, verbatim from
   `docs/reference/brand/klaus-logo.svg`). Inside Klaus it is just the k,
   filled in the accent colour, never inside an icon square; the app
   icon is the full #2393f4 tile with a white k.
-- Wordmark: "Klaus Note" in Excalifont, the hand-drawn Excalidraw font,
+- Wordmark: "KlausNote" in Excalifont, the hand-drawn Excalidraw font,
   matching the hand-drawn k (was light Garamond until 2026-10-01).
 - Visual language: the SynapsePro-derived Apple-system-palette token
   discipline in `klaus_note/theme.py` — semantic tokens, identical

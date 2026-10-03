@@ -1253,7 +1253,7 @@ function currentInk() {
 
 function addHighlightFromSelection() {
   const map = selectionRectMap();
-  if (!map) { post("toast:" + btoa("Klaus: select text first, then highlight")); return; }
+  if (!map) { post("toast:" + btoa("KlausNote: select text first, then highlight")); return; }
   postB64("hl-add", { pages: map, color: currentInk() });
   window.getSelection().removeAllRanges();
 }
@@ -1407,7 +1407,7 @@ async function occludeImage(page0, pm) {
     });
   } catch (e) {
     post("log:occlude failed: " + e.message);
-    post("toast:" + btoa("Klaus: couldn't render that page"));
+    post("toast:" + btoa("KlausNote: couldn't render that page"));
   }
 }
 

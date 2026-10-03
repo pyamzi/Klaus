@@ -23,7 +23,7 @@ out, files = sys.argv[1], sys.argv[2:]
 for f in files:
     font = TTFont(f)
     cmap = font.getBestCmap()
-    # The Latin subset: the one covering "Klaus Note" and basic ASCII letters.
+    # The Latin subset: the one covering "KlausNote" and basic ASCII letters.
     if all(ord(c) in cmap for c in "ABCXYZabcxyz0123456789"):
         font.flavor = None
         font.save(out)

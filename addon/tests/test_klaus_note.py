@@ -2711,7 +2711,7 @@ else:
           "an unparseable operand a reader would choke on",
           str(_da_by_text["junk style"].get("/DA"))
           == "/Helv 12 Tf 0 0 0 rg")
-    check("Klaus reads its OWN baked style back — before /DA existed "
+    check("KlausNote reads its OWN baked style back — before /DA existed "
           "_freetext_style saw (#000000, None) for every box, so an "
           "adopted copy of a Klaus note lost its size and colour",
           pdf_handler._freetext_style(_da_by_text["BIG RED 24pt"])
@@ -2796,7 +2796,7 @@ else:
     check("a second bake gives the same annotations", pdf_handler.bake_annotations(_nb_uf, _NB)
           and sorted((_nm(o), str(o.get("/Subtype")), str(o.get("/Contents"))) for o in _nb_annots()) == _first)
     _scan = pdf_handler.scan_working_annotations(_nb_uf, _NB)
-    check("Klaus's own note cards are never adopted as outside marks",
+    check("KlausNote's own note cards are never adopted as outside marks",
           _scan is not None and _scan["foreign"] == [], repr(_scan and _scan["foreign"]))
     pdf_handler.save_annotations(_nb_uf, _NB, [_nb_recs[0]])
     pdf_handler.bake_annotations(_nb_uf, _NB)

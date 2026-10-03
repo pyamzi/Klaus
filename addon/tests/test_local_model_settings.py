@@ -545,8 +545,8 @@ sf._themed_message_box = capture_box
 sf.first_run_check()
 welcome = welcome_boxes[-1]
 check('welcome shows local model guidance and Preferences plus Later',
-      sf.LOCAL_MODELS_COPY in welcome.text() and sorted(b.text() for b in welcome.buttons()) == ['Klaus Note Preferences', 'Later']
-      and welcome.defaultButton().text() == 'Klaus Note Preferences')
+      sf.LOCAL_MODELS_COPY in welcome.text() and sorted(b.text() for b in welcome.buttons()) == ['KlausNote Preferences', 'Later']
+      and welcome.defaultButton().text() == 'KlausNote Preferences')
 welcome.accept()
 mw.close()
 # Review fix 3: a relocation that lands while the field holds an edit still moves the BASELINE.

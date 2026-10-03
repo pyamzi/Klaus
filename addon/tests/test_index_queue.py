@@ -92,7 +92,7 @@ check(
 )
 check(
     "the add tooltip distinguishes running from queued",
-    iq.queued_message("A", 0).startswith("Klaus Note: indexing")
+    iq.queued_message("A", 0).startswith("KlausNote: indexing")
     and "3 ahead of it" in iq.queued_message("A", 3),
 )
 section("the status bar's index task (status bar 4/6)")

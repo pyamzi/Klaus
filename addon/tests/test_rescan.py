@@ -255,7 +255,7 @@ check("whitespace-only change: records refreshed, text not changed",
       s5["changed_text"] == [] and len(ensured) == 2, str(s5))
 put("Closed.pdf", "baked by klaus|closed two|page three|x")
 ph.record_stat(uf5, "Closed", ph.file_stat(os.path.join(root5, "Closed.pdf")))
-check("Klaus's own write (stat recorded) is not reported", ph.prepare_rescan(uf5, root5)["changed"] == {})
+check("KlausNote's own write (stat recorded) is not reported", ph.prepare_rescan(uf5, root5)["changed"] == {})
 
 section("a changed file is retried until its text is stored")
 _closed = os.path.join(root5, "Closed.pdf")
@@ -583,7 +583,7 @@ pdg.start_library_rescan()
 check("...nor a never-indexed one", requested == [], str(requested))
 check("none of these were reader events", events == [], str(events))
 
-section("Klaus's own rename re-points an open reader on the next rescan (I4)")
+section("KlausNote's own rename re-points an open reader on the next rescan (I4)")
 _real_sync5 = ds5._sync
 ds5._sync = lambda: None  # no real watcher here
 ds5.open_doc("test:1", "Fresh", os.path.join(rootg, "Fresh.pdf"))
@@ -678,7 +678,7 @@ check("a tick that only created .x.pdf.uuid.tmp does not start a rescan", tick()
 write_text(_tmp, "baked|pages")
 os.replace(_tmp, _lect)
 ph.record_stat(ufg, "Lecture", ph.file_stat(_lect))
-check("Klaus's own bake (stat recorded) does not start a rescan", tick() is False)
+check("KlausNote's own bake (stat recorded) does not start a rescan", tick() is False)
 write_text(_lect, "edited in Preview|pages")
 check("the same file edited outside Klaus does", tick() is True)
 ph.record_stat(ufg, "Lecture", ph.file_stat(_lect))

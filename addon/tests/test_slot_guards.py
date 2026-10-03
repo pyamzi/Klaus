@@ -351,7 +351,7 @@ if HAVE_QT:
         _menu_actions_r1 = _fake_menu_r1.actions()
         _texts_r1 = [a.text() for a in _menu_actions_r1]
         check("Preferences precedes existing Tools actions in their original order",
-              _texts_r1 == ["Klaus Note Preferences…", "Undo", "Redo"], str(_texts_r1))
+              _texts_r1 == ["KlausNote Preferences…", "Undo", "Redo"], str(_texts_r1))
     except Exception as _e_r1:  # noqa: BLE001
         check(f"Task 11 fix round 1 checks ran ({_e_r1})", False)
 else:

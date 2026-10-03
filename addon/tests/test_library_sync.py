@@ -280,7 +280,7 @@ check("one prompt naming the card-less PDF", len(asked2) == 1 and "E1" in asked2
 
 section("K-319: a sync op's progress window never hangs off a closable dialog")
 _dialog = object()
-ts._run_sync_op(_dialog, "Klaus: test", lambda col: {})
+ts._run_sync_op(_dialog, "KlausNote: test", lambda col: {})
 check("progress is parented to mw, not the caller's dialog",
       ops[-1].parent is ts.mw and ops[-1].parent is not _dialog, repr(ops[-1].parent))
 ts._own_ops["pending"] -= 1  # the fake op never reports back

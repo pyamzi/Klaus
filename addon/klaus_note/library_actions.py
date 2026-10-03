@@ -288,7 +288,7 @@ def remove_empty_folder(path: str) -> None:
     pdf_drive.delete_folder(path)
     _refresh()
     tag = tag_sync.folder_tag(path)
-    tag_sync._run_sync_op(mw, f"Klaus: remove folder “{path}”", lambda col: {"removed": tag_sync.apply_removal(col, tag)})
+    tag_sync._run_sync_op(mw, f"KlausNote: remove folder “{path}”", lambda col: {"removed": tag_sync.apply_removal(col, tag)})
 
 
 # ------------------------------------------------------------ import

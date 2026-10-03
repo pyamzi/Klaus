@@ -430,7 +430,7 @@ def _h_create_note(col: Any, args: dict, ctx: dict) -> dict:
         for name in valid
         if name in fields
     ]
-    if not ctx["confirm"]("Klaus wants to create a note", sections):
+    if not ctx["confirm"]("KlausNote wants to create a note", sections):
         raise ToolError("User declined the create_note action")
 
     note = col.new_note(model)
@@ -481,7 +481,7 @@ def _h_update_note(col: Any, args: dict, ctx: dict) -> dict:
         sections.append(
             ("Tags", f"OLD: {', '.join(note.tags)}\nNEW: {', '.join(tags_new)}")
         )
-    if not ctx["confirm"]("Klaus wants to update a note", sections):
+    if not ctx["confirm"]("KlausNote wants to update a note", sections):
         raise ToolError("User declined the update_note action")
 
     for k, v in changed.items():

@@ -117,7 +117,7 @@ class ImgOccAdd(object):
                 image_path = excal_tab.blank_png(self._draw_folder())
             except OSError as e:
                 print("[klaus_note] draw: no blank image: %s" % e)
-                tooltip(_("Klaus: couldn't start a drawing"))
+                tooltip(_("KlausNote: couldn't start a drawing"))
                 return False
 
         if not image_path:
@@ -396,7 +396,7 @@ class ImgOccAdd(object):
         if dialog.svg_edit is None:  # closed meanwhile (Review Focus 4)
             return False
         if self.excal_pending:
-            tooltip(_("Klaus: still using the last drawing…"), parent=dialog)
+            tooltip(_("KlausNote: still using the last drawing…"), parent=dialog)
             return False
         edits = dialog.draw_tab.edits if dialog.draw_tab is not None else 0
         try:
@@ -424,7 +424,7 @@ class ImgOccAdd(object):
                 self._show_drawing(png_path, masks, width, height, sidecar, new, edits)
             except Exception as e:  # the drawing stays dirty: Use drawing is still to do
                 print("[klaus_note] draw: masks not carried over: %s: %s" % (type(e).__name__, e))
-                tooltip(_("Klaus: couldn't carry the masks over; press Use drawing again"),
+                tooltip(_("KlausNote: couldn't carry the masks over; press Use drawing again"),
                         parent=dialog)
 
         self.excal_pending = True
@@ -464,7 +464,7 @@ class ImgOccAdd(object):
                 f.write(self.excal_sidecar)
         except OSError as e:
             print("[klaus_note] draw: the scene was not saved: %s" % e)
-            tooltip(_("Klaus: the cards were saved, but the drawing couldn't be saved for editing"))
+            tooltip(_("KlausNote: the cards were saved, but the drawing couldn't be saved for editing"))
 
     def onAddNotesButton(self, choice, close):
         dialog = self.imgoccedit

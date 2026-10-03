@@ -1,4 +1,4 @@
-"""Klaus Note Preferences for local models, general settings and appearance."""
+"""KlausNote Preferences for local models, general settings and appearance."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ LOGO_SCALE = 0.8
 def _logo_pixmap(size: int, dpr: float = 2.0) -> Any:
     """The Klaus k for the Preferences sidebar, the same SVG as the toolbar
     (top_bar.logo_svg, evenodd and all), filled in the text colour so it
-    matches the Klaus Note wordmark beside it, on a transparent ground,
+    matches the KlausNote wordmark beside it, on a transparent ground,
     never inside a tile.
 
     ``dpr`` comes from the label that will show it, so the mark is crisp
@@ -213,7 +213,7 @@ def _run_dialog_probe() -> None:
     from . import theme
 
     probe = QDialog(mw)
-    probe.setWindowTitle(f"Klaus Note diagnostic — stage {_PROBE_STAGE}")
+    probe.setWindowTitle(f"KlausNote diagnostic — stage {_PROBE_STAGE}")
     lay = QVBoxLayout(probe)
     note = QLabel("Stage 1: bare dialog (already known good).")
     note.setWordWrap(True)
@@ -264,7 +264,7 @@ def _run_dialog_probe() -> None:
             logo_lbl.setPixmap(_logo)
         logo_lbl.setFixedSize(24, 24)
         side.addWidget(logo_lbl)
-        wordmark = QLabel("Klaus Note")
+        wordmark = QLabel("KlausNote")
         wordmark.setObjectName("SidebarAppName")
         side.addWidget(wordmark)
         search = QLineEdit()
@@ -369,7 +369,7 @@ def manage_models_dialog(*_args: Any) -> None:
     profile_lifetime = setup_flow.runtime_lifetime()
     _generation, profile_cancel = profile_lifetime
     dlg = _KlausManageDialog(mw)
-    dlg.setWindowTitle("Klaus Note Preferences")
+    dlg.setWindowTitle("KlausNote Preferences")
     dlg.setMinimumWidth(480)
     dlg.resize(960, 680)
     # The size the user last left it at, and no "?" on Windows.
@@ -432,7 +432,7 @@ def manage_models_dialog(*_args: Any) -> None:
     side_lay.setContentsMargins(10, 14, 10, 12)
     side_lay.setSpacing(2)
 
-    # Identity: the star logo beside the Garamond "Klaus Note" wordmark,
+    # Identity: the star logo beside the Garamond "KlausNote" wordmark,
     # version under it, then a search field that filters the setting
     # rows across every page (macOS System Settings pattern).
     head_row = QHBoxLayout()
@@ -447,7 +447,7 @@ def manage_models_dialog(*_args: Any) -> None:
     name_col = QVBoxLayout()
     name_col.setContentsMargins(0, 0, 0, 0)
     name_col.setSpacing(0)
-    app_name_lbl = QLabel("Klaus Note")
+    app_name_lbl = QLabel("KlausNote")
     app_name_lbl.setObjectName("SidebarAppName")
     name_col.addWidget(app_name_lbl)
     _ver = _addon_version()
@@ -1940,9 +1940,9 @@ def manage_models_dialog(*_args: Any) -> None:
                 finish_index()
                 update_embed_status()
             tooltip(
-                "Klaus: card index up to date"
+                "KlausNote: card index up to date"
                 if completed
-                else "Klaus: indexing cancelled. It resumes where it stopped."
+                else "KlausNote: indexing cancelled. It resumes where it stopped."
             )
 
         def on_error(exc: Exception) -> None:
@@ -1950,10 +1950,10 @@ def manage_models_dialog(*_args: Any) -> None:
                 finish_index()
                 update_embed_status()
             if isinstance(exc, embeddings.EmbeddingError):
-                showWarning("Klaus indexing failed.\n\n" + exc.user_message())
+                showWarning("KlausNote indexing failed.\n\n" + exc.user_message())
             else:
                 showWarning(
-                    f"Klaus indexing failed.\n\n{type(exc).__name__}: {exc}"
+                    f"KlausNote indexing failed.\n\n{type(exc).__name__}: {exc}"
                 )
 
         curation.ensure_index(
@@ -2305,7 +2305,7 @@ def manage_models_dialog(*_args: Any) -> None:
             _background.set_preview(None)
         paint_all()
         refresh_dirty()
-        saved = "Klaus: preferences saved."
+        saved = "KlausNote: preferences saved."
         if any(e[0] == "index_sweep" for e in commit.effects):
             saved += " " + REINDEX_HINT
         tooltip(saved, parent=dlg)
@@ -2323,7 +2323,7 @@ def manage_models_dialog(*_args: Any) -> None:
         cfg = settings.read()
         old_root = pdf_handler.get_library_root(cfg)
         new_root = QFileDialog.getExistingDirectory(
-            dlg, "Choose a folder for your Klaus Library", old_root or ""
+            dlg, "Choose a folder for your KlausNote Library", old_root or ""
         )
         if not new_root or new_root == old_root:
             return
@@ -2348,7 +2348,7 @@ def manage_models_dialog(*_args: Any) -> None:
                     parent=dlg,
                 )
             else:
-                tooltip("Klaus: Library folder updated")
+                tooltip("KlausNote: Library folder updated")
 
         def on_fail(exc: Exception) -> None:
             set_busy(False)

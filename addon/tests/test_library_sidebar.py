@@ -519,7 +519,7 @@ section("wired")
 _init = open("klaus_note/__init__.py", encoding="utf-8").read()
 check("__init__ sets it up", "library_sidebar" in _init and ".setup()" in _init.split("library_sidebar", 1)[1][:200])
 _ls_src = open("klaus_note/library_sidebar.py", encoding="utf-8").read()
-check("Klaus no longer builds the Tags section itself (AnkiHub does, and two appeared)",
+check("KlausNote no longer builds the Tags section itself (AnkiHub does, and two appeared)",
       "browser_will_build_tree" not in _ls_src and "_tag_tree(" not in _ls_src)
 
 section("the retention refresh shows in the status bar (status bar 5/6)")

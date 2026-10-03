@@ -136,7 +136,7 @@ for label, mgr in (("disabled", Mgr(installed=["1374772155"], disabled=["1374772
         check("registers %s once" % h, getattr(gh, h) == [fn], str(getattr(gh, h)))
     check("no tooltip", tips == [])
     check("setup() sets the guard flag", io._active is True)
-    check("R3: setConfigAction is never called (Klaus keeps its own Config button)",
+    check("R3: setConfigAction is never called (KlausNote keeps its own Config button)",
           mgr.config_actions == [], str(mgr.config_actions))
     check("Tools gets 'Image Occlusion Options…'",
           [a.text for a in mwin.form.menuTools.actions] == ["Image Occlusion Options…"],

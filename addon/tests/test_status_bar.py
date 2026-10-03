@@ -129,7 +129,7 @@ check("the main window's bar has no toggles", main.sidebar_btn is None and main.
 
 section("the gear opens Anki's Preferences")
 bar.gear.click()
-check("one click, no menu (Klaus's settings are the top bar's star)",
+check("one click, no menu (KlausNote's settings are the top bar's star)",
       calls == ["anki"] and bar.gear.menu() is None, str(calls))
 
 section("the progress readout")

@@ -233,7 +233,7 @@ arrives (never confirmed accepted by the real binary, since it was never
 prompted for) is:
 
 ```json
-{"type": "control_response", "response": {"subtype": "success", "request_id": "<echoed>", "response": {"behavior": "deny", "message": "Klaus allows only reading the library and its own Anki tools."}}}
+{"type": "control_response", "response": {"subtype": "success", "request_id": "<echoed>", "response": {"behavior": "deny", "message": "KlausNote allows only reading the library and its own Anki tools."}}}
 ```
 
 ## 3. Actionable finding: deferred tools (`ToolSearch`) must be allowed
