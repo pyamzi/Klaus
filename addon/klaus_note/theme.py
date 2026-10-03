@@ -92,19 +92,11 @@ LIGHT: dict = {
 
     # ── Red (danger / destructive) ───────────────────────────────────────
     "red":          "#FF3B30",
-    "red_hover":    "#D7261E",
     "red_bg":       "#FFEBEB",
     "red_text":     "#D32F2F",
-    # Text-weight green, red_text's sibling: "green" is the vivid
-    # system green (#28CD41) — right for fills and dots, neon as INK,
-    # especially on dark where red_text is a soft #FFCCCC. K-127's
-    # retention column pairs these two as calm semantic text colours.
-    "green_text":   "#1F7A3D",
 
     # ── Green (success) ──────────────────────────────────────────────────
     "green":        "#28CD41",
-    "green_bg":     "#E8F8F5",
-    "green_border": "#C1E1D9",
 }
 
 DARK: dict = {
@@ -137,15 +129,11 @@ DARK: dict = {
 
     # ── Red (danger / destructive) ───────────────────────────────────────
     "red":          "#FF3B30",
-    "red_hover":    "#D7261E",
     "red_bg":       "#5A1E1E",
     "red_text":     "#FFCCCC",
-    "green_text":   "#B9E8C9",
 
     # ── Green (success) ──────────────────────────────────────────────────
     "green":        "#28CD41",
-    "green_bg":     "#1E3A2E",
-    "green_border": "#2D5A45",
 }
 
 
