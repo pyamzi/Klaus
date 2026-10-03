@@ -608,6 +608,10 @@ def merge_highlight_records(
         if not rects:
             continue
         kept: list[dict] = []
+        # Records the new ink fully covers leave the list, but their
+        # notes (and card offsets) travel to whatever record covers
+        # their span now (#12): recolouring is never a delete.
+        orphans: list[dict] = []
         for cur in out:
             if (
                 _is_plain_highlight(cur, page)
@@ -627,8 +631,9 @@ def merge_highlight_records(
                     left.extend(pieces)
                 if changed:
                     left = merge_rects(left)
-                    if not left:
-                        continue  # fully recoloured by the new mark
+                    if not left:  # fully recoloured by the new mark
+                        orphans.append(cur)
+                        continue
                     cur = dict(cur, rects=left)
             kept.append(cur)
         out = kept
@@ -645,22 +650,14 @@ def merge_highlight_records(
             host_at = touched[0]
             host = out[host_at]
             pooled = list(rects)
-            # The host keeps its id, and its note if it has one; a note
-            # on an absorbed record is carried over rather than
-            # silently dropped with it (first non-empty wins — two
-            # notes on marks a single drag bridges is not a case worth
-            # inventing a join for).
-            note = host.get("note")
-            note = note if isinstance(note, str) and note.strip() else ""
             for i in touched:
                 pooled = list(out[i].get("rects") or []) + pooled
-                if not note:
-                    other = out[i].get("note")
-                    if isinstance(other, str) and other.strip():
-                        note = other
-            merged_rec = dict(host, rects=merge_rects(pooled))
-            if note:
-                merged_rec["note"] = note
+            # The host keeps its id; every touched record's note and
+            # every orphan's joins it, so a bridging drag loses no text.
+            merged_rec = _with_notes(
+                dict(host, rects=merge_rects(pooled)),
+                [out[i] for i in touched] + orphans,
+            )
             drop = set(touched[1:])
             out = [
                 merged_rec if i == host_at else cur
@@ -668,8 +665,30 @@ def merge_highlight_records(
                 if i not in drop
             ]
         else:
-            out.append(dict(rec, color=ink, rects=rects))
+            out.append(_with_notes(dict(rec, color=ink, rects=rects),
+                                   [rec] + orphans))
     return out
+
+
+def _with_notes(rec: dict, sources: list[dict]) -> dict:
+    """*rec* carrying every distinct non-empty note of *sources* (in
+    order, blank line between) and the card of the first noted one.
+    With no note among them, *rec* comes back unchanged."""
+    notes: list[str] = []
+    card = None
+    for src in sources:
+        note = src.get("note")
+        if isinstance(note, str) and note.strip() and note not in notes:
+            if not notes:
+                card = src.get("card")
+            notes.append(note)
+    if not notes:
+        return rec
+    rec = dict(rec, note="\n\n".join(notes))
+    rec.pop("card", None)
+    if card is not None:
+        rec["card"] = card
+    return rec
 
 
 def _finite(value: Any) -> float | None:

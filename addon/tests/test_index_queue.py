@@ -264,6 +264,10 @@ class Pipeline:
         self.calls.append(("tag_sync", name))
         if self._tag_raises is not None:
             raise self._tag_raises
+
+    def library_clashes(self):
+        return {}  # a readable Library with no clashes; refresh fails closed on None
+
     # -- drivers -------------------------------------------------------
     def finish_cards(self, completed=True):
         self.pending.pop("cards")[0](FakeIndex(), completed)

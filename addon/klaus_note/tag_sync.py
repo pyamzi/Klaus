@@ -279,7 +279,78 @@ def _with_parents(paths) -> set[str]:
     return out
 
 
-def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(), folders=(), deleted=()) -> list[dict]:
+def _folder_tags(pdfs: dict, folders) -> dict[str, str]:
+    """Folder tag casefolded -> folder path, for every folder and parent."""
+    out: dict[str, str] = {}
+    for f in sorted(_with_parents(list(folders) + [f for f, _ in pdfs.values()])):
+        out.setdefault(folder_tag(f).casefold(), f)
+    return out
+
+
+def tag_clashes(pdfs: dict, folders=(), stored=None) -> dict[str, str]:
+    """#14: ``{safe: why}`` for the PDFs whose tag would be a folder's
+    tag or another PDF's tag — a clash made in Finder (inside Klaus,
+    ``name_clash`` refuses the name first). Anki's tag operations also
+    act on child tags, so tagging such a PDF stripped other PDFs' tags
+    and renaming it moved a folder on disk. A flagged PDF is shown with
+    a warning and never tagged until it is renamed.
+
+    ``pdfs`` is ``{safe: (folder, display)}``. A folder always wins over
+    a PDF (a PDF tag that is the parent of another Library tag is a
+    folder's tag). Of PDFs sharing one tag, the one that already owns it
+    in ``stored`` keeps it, else the first by safe name; only the others
+    are flagged. Pure, compared casefolded as Anki compares tags."""
+    stored = stored or {}
+    by_folder = _folder_tags(pdfs, folders)
+    groups: dict[str, list[str]] = {}
+    for safe in sorted(pdfs):
+        folder, display = pdfs[safe]
+        groups.setdefault(desired_tag(folder, display).casefold(), []).append(safe)
+    out: dict[str, str] = {}
+    for key, safes in groups.items():
+        if key in by_folder:
+            leaf = by_folder[key].rsplit("/", 1)[-1]
+            for s in safes:
+                out[s] = f"“{pdfs[s][1]}” has the same name as the folder “{leaf}”. Rename the PDF to fix this."
+        elif len(safes) > 1:
+            keeper = next((s for s in safes if (stored.get(s) or "").casefold() == key), safes[0])
+            for s in safes:
+                if s != keeper:
+                    out[s] = (f"“{pdfs[s][1]}” would share a tag with “{pdfs[keeper][1]}”. "
+                              "Rename one of them to fix this.")
+    return out
+
+
+def name_clash(pdfs: dict, folders, parent: str | None, name: str, *,
+               is_folder: bool = False, skip: str | None = None) -> str | None:
+    """#14: why ``name`` can't be used in folder ``parent`` (None = the
+    root), or None when it is free: its tag would equal a folder's tag
+    or another PDF's, names equal after sanitizing included ("Week 1" vs
+    "Week_1"). ``name`` is a PDF file name (an import), or a folder name
+    with ``is_folder``; ``skip`` is the folder being renamed, which takes
+    its contents along. Pure; the message is shown to the user."""
+    parent = parent or None
+    path = f"{parent}/{name}" if parent else name
+    tag = (folder_tag(path) if is_folder else desired_tag(parent, name)).casefold()
+    for key, f in _folder_tags(pdfs, folders).items():
+        if key != tag or (is_folder and (f == path or (skip and (f == skip or f.startswith(skip + "/"))))):
+            continue
+        leaf = f.rsplit("/", 1)[-1]
+        if is_folder:
+            return f"“{name}” is too close to the folder “{leaf}”: they would share one tag. Choose another name."
+        return f"“{name}” has the same name as the folder “{leaf}”. Rename the file, then import it."
+    for safe in sorted(pdfs):
+        folder, display = pdfs[safe]
+        if desired_tag(folder, display).casefold() != tag:
+            continue
+        if is_folder:
+            return f"“{display}” already has that name here. Choose another folder name."
+        return f"“{name}” is too close to “{display}”: they would share one tag. Rename the file, then import it."
+    return None
+
+
+def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(), folders=(), deleted=(),
+                      clashing=()) -> list[dict]:
     """K-306: what the Library must do so it and the ``!Library`` tag
     branch agree again. Pure — every input is plain data:
 
@@ -293,6 +364,8 @@ def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(),
     - ``deleted``: PDFs whose tag the user just deleted in the sidebar
       (K-316: Anki's Delete is the Library's Delete PDF, even for a PDF
       with no matched cards).
+    - ``clashing``: PDFs ``tag_clashes`` flagged (#14). Never registered,
+      renamed or deleted from here; what they hold stays taken.
 
     Returns actions, each a dict with a ``kind``:
 
@@ -320,13 +393,17 @@ def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(),
     # Anki's respelling as "missing" and re-registered it forever.
     exact = set(existing)
     present = {t.casefold(): t for t in exact}
-    nonempty, empty, deleted = set(nonempty), set(empty), set(deleted)
+    nonempty, empty, deleted, clashing = set(nonempty), set(empty), set(deleted), set(clashing)
     actions: list[dict] = []
 
     owned: dict[str, str] = {}
+    blocked: set[str] = set()
     for safe in sorted(pdfs):
         folder, display = pdfs[safe]
         tag = stored.get(safe)
+        if safe in clashing:
+            blocked |= {desired_tag(folder, display).casefold()} | ({tag.casefold()} if tag else set())
+            continue
         if not tag:
             want = desired_tag(folder, display)
             tag = present.get(want.casefold(), want)
@@ -339,7 +416,8 @@ def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(),
     all_folders = _with_parents(list(folders) + [f for f, _ in pdfs.values()])
 
     library = [t for t in present.values() if t.startswith("!Library::")]
-    taken = {t.casefold() for t in owned.values()} | {folder_tag(f).casefold() for f in all_folders}
+    pdf_tags = {t.casefold() for t in owned.values()} | blocked
+    taken = pdf_tags | {folder_tag(f).casefold() for f in all_folders}
     candidates = sorted(
         t for t in library
         if t.casefold() not in taken and not _is_reserved_tag(t)
@@ -382,6 +460,8 @@ def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(),
             new_folder = "/".join(_restore(x) for x in spelled[: len(b)])
             if new_folder in all_folders:
                 continue  # an existing destination is a drag of PDFs, not a folder rename
+            if folder_tag(new_folder).casefold() in pdf_tags:
+                continue  # #14: the tag landed under a PDF's tag; a folder of that name would clash
             under = [t for t in sorted(pdfs) if _under(pdfs[t][0], old_folder)]
             tags = {}
             ok = bool(under)
@@ -408,6 +488,9 @@ def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(),
         old, new = _lib_segments(missing[s]), _lib_segments(pairs[s])
         folder, display = pdfs[s]
         new_folder = folder if old[:-1] == new[:-1] else ("/".join(_restore(x) for x in new[:-1]) or None)
+        if (new_folder and new_folder != folder and new_folder not in all_folders
+                and folder_tag(new_folder).casefold() in pdf_tags):
+            continue  # #14: never make a folder named like a PDF; an existing one is a plain drag
         new_display = None if old[-1] == new[-1] else _display_with_ext(_restore(new[-1]), display)
         actions.append({"kind": "rename", "safe": s, "old": missing[s], "new": pairs[s],
                         "folder": new_folder, "display": new_display})
@@ -503,11 +586,29 @@ def tag_query(tag: str) -> str:
     )
 
 
+def _members(col, tag: str) -> tuple[set[int], set[int]]:
+    """(notes carrying exactly ``tag``, notes carrying one of its child
+    tags). Anki's ``tag:"X"`` also matches ``X::*``, and removing X from
+    a note takes its ``X::*`` tags with it (#14), so a note under a child
+    tag is never read as a member and never loses X. A note carrying
+    both lands in the second set only (an old clash; left alone). The
+    child query keeps its ``*`` live: ``tag:"X::*"`` is children only."""
+    hits = set(col.find_notes(tag_query(tag)))
+    nested = set(col.find_notes(tag_query(tag)[:-1] + '::*"')) if hits else set()
+    return hits - nested, nested
+
+
+def _has_children(col, tag: str) -> bool:
+    prefix = tag.casefold() + "::"
+    return any(t.casefold().startswith(prefix) for t in col.tags.all())
+
+
 def apply_membership(col, tag: str, desired: set[int]) -> tuple[list[int], list[int]]:
     """Diff `tag`'s current members against `desired` and bulk add/remove
     the difference. Returns (added, removed) — empty lists if already in
-    sync (a real no-op: no bulk_add/bulk_remove call at all)."""
-    current = set(col.find_notes(tag_query(tag)))
+    sync (a real no-op: no bulk_add/bulk_remove call at all). Members are
+    exact-tag members (``_members``), never a child tag's notes."""
+    current, _nested = _members(col, tag)
     to_add, to_remove = diff_membership(set(desired), current)
     if to_add:
         col.tags.bulk_add(to_add, tag)
@@ -519,9 +620,21 @@ def apply_membership(col, tag: str, desired: set[int]) -> tuple[list[int], list[
 def apply_rename(col, old: str | None, new: str) -> bool:
     """Rename `old` -> `new` if `old` is a real, different stored tag.
     False (no-op, no col call at all) when there is nothing to rename —
-    ``old`` falsy (never indexed yet) or already equal to ``new``."""
+    ``old`` falsy (never indexed yet) or already equal to ``new``.
+
+    #14: Anki's rename moves every child tag along, so when ``old`` is
+    also a parent (an old clash: a folder's tag) only this PDF's own
+    notes move: ``new`` is added to the exact members and ``old`` taken
+    off them. A tag another PDF still stores never comes here: see
+    ``_retag_from_cache``."""
     if not old or old == new:
         return False
+    if _has_children(col, old):
+        members, _nested = _members(col, old)
+        if members:
+            col.tags.bulk_add(sorted(members), new)
+            col.tags.bulk_remove(sorted(members), old)
+        return True
     col.tags.rename(old, new)
     return True
 
@@ -541,7 +654,7 @@ def apply_removal(col, tag: str | None) -> bool:
     col call, when there was never a stored tag to remove."""
     if not tag:
         return False
-    col.tags.remove([tag])
+    col.tags.remove(tag)  # ONE space-separated string; a list raises in protobuf (#21)
     return True
 
 
@@ -585,6 +698,103 @@ def _folder_and_display(safe: str) -> tuple[str | None, str]:
     return entry.get("folder"), (entry.get("display") or safe)
 
 
+def library_layout() -> tuple[dict, set]:
+    """``({safe: (folder, display)}, {folder, ...})`` for every Library
+    PDF that is really there (its context file exists) and every folder."""
+    from . import drive_store, pdf_handler
+
+    uf = settings.user_files()
+    tree = drive_store.build_tree(pdf_handler.list_contexts(uf), drive_store.load(uf))
+    pdfs = {
+        p["safe"]: (p["folder"], p["display"])
+        for items in (tree["root"], *tree["folders"].values())
+        for p in items
+    }
+    return pdfs, set(tree["folders"])
+
+
+def _stored_tags() -> dict[str, str]:
+    from . import retention
+
+    return {
+        safe: entry["tag"]
+        for safe, entry in retention._load_prefs().items()
+        if isinstance(entry, dict) and entry.get("tag")
+    }
+
+
+def library_clashes() -> dict[str, str] | None:
+    """``tag_clashes`` over the Library as it is now (#14), or None when
+    it cannot be read: the gate then FAILS CLOSED and writes no tag."""
+    try:
+        pdfs, folders = library_layout()
+        return tag_clashes(pdfs, folders, _stored_tags())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klaus_note] tag_sync: could not check for name clashes: {exc}")
+        return None
+
+
+_CHECK = object()
+
+
+def _clash_skip(safe: str, clashes=_CHECK) -> bool:
+    """True, with a printed reason, when ``safe`` is flagged (#14) or
+    when the clash check could not run (``clashes`` None)."""
+    if clashes is _CHECK:
+        clashes = library_clashes()
+    if clashes is None:
+        print(f"[klaus_note] tag_sync: {safe!r} not tagged: the Library could not be checked for name clashes")
+        return True
+    why = clashes.get(safe)
+    if why:
+        print(f"[klaus_note] tag_sync: {safe!r} not tagged: {why}")
+    return bool(why)
+
+
+def _shared(safe: str, tag: str | None) -> bool:
+    """Another PDF stores the same tag (an old clash): never rename or
+    remove it out from under that PDF."""
+    key = (tag or "").casefold()
+    return bool(key) and any(t.casefold() == key for s, t in _stored_tags().items() if s != safe)
+
+
+def _retag_from_cache(col, safe: str, tag: str, cfg: dict) -> None:
+    """A PDF leaving a tag another PDF still stores (an old clash): the
+    shared tag's notes are the keeper's too, so nothing is copied. Its
+    own tag is built from its own match cache, or registered empty when
+    the cache is cold (the next index fills it)."""
+    from . import retention
+
+    matches = _cached_matches_many([safe], cfg).get(safe)
+    if matches is None:
+        if not any(t.casefold() == tag.casefold() for t in col.tags.all()):
+            col.tags.set_collapsed(tag, False)
+        return
+    threshold = retention.get_threshold(safe, cfg)
+    apply_membership(col, tag, {nid for nid, score in matches if score >= threshold})
+
+
+def _rebuild_shared(col, old: str, leaving: set[str], cfg: dict) -> None:
+    """A shared tag (an old clash) after PDFs in ``leaving`` moved to
+    their own tags: it still holds their matches, so re-derive it from
+    the owners that stay. A cold cache leaves it as it is: "don't know"
+    is never "zero matches"."""
+    from . import retention
+
+    key = old.casefold()
+    owners = sorted(s for s, t in _stored_tags().items() if s not in leaving and t.casefold() == key)
+    if not owners:
+        return
+    caches = _cached_matches_many(owners, cfg)
+    if any(caches.get(s) is None for s in owners):
+        return
+    nids: set[int] = set()
+    for s in owners:
+        threshold = retention.get_threshold(s, cfg)
+        nids |= {nid for nid, score in caches[s] if score >= threshold}
+    apply_membership(col, old, nids)
+
+
 def _cached_matches_many(safes: list[str], cfg: dict) -> dict[str, list | None]:
     """Each PDF's current matches.json cache, loading the card index ONCE
     (the batch paths used to reload the whole vectors file per PDF, K-305).
@@ -620,9 +830,12 @@ def _retag_others(col, skip_safe: str, cfg: dict) -> None:
     ]
     if not safes:
         return
+    clashes = library_clashes()
     for other, matches in _cached_matches_many(safes, cfg).items():
         if matches is None:
             continue  # cold cache: never strip a tag on missing data
+        if _clash_skip(other, clashes):
+            continue
         threshold = retention.get_threshold(other, cfg)
         folder, display = _folder_and_display(other)
         _do_sync_one(
@@ -641,8 +854,13 @@ def _do_sync_one(col, safe: str, tag: str, desired_nids: set[int]) -> dict:
 
     """
     stored = get_stored_tag(safe)
-    renamed = apply_rename(col, stored, tag)
+    # A tag another PDF still stores stays that PDF's; the membership
+    # diff below builds this PDF's own tag from scratch.
+    shared = stored != tag and _shared(safe, stored)
+    renamed = False if shared else apply_rename(col, stored, tag)
     added, removed = apply_membership(col, tag, desired_nids)
+    if shared:
+        _rebuild_shared(col, stored, {safe}, settings.read())
     if stored != tag:
         set_stored_tag(safe, tag)
     return {
@@ -771,6 +989,9 @@ def sync_after_matches(
             print(f"[klaus_note] tag_sync: no matches for {safe!r} — skipping tag sync.")
             settled()
             return
+        if _clash_skip(safe):
+            settled()
+            return
         from . import retention
 
         threshold = retention.get_threshold(safe, cfg)
@@ -815,6 +1036,8 @@ def sync_after_threshold(
             print(f"[klaus_note] tag_sync: no cached matches for {pdf_name!r} — sensitivity change not synced to tags.")
             return
         safe = _safe(pdf_name)
+        if _clash_skip(safe):
+            return
         folder, display = _folder_and_display(safe)
         tag = desired_tag(folder, display)
         desired_nids = {nid for nid, score in matches if score >= threshold}
@@ -848,10 +1071,13 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
 
         plans: list[tuple[str, str, set[int]]] = []
         cached = _cached_matches_many(list(cleared_safes), cfg)
+        clashes = library_clashes()
         for safe in cleared_safes:
             matches = cached[safe]
             if matches is None:
                 print(f"[klaus_note] tag_sync: no cached matches for {safe!r} — skipped in apply-to-all retag.")
+                continue
+            if _clash_skip(safe, clashes):
                 continue
             threshold = retention.get_threshold(safe, cfg)
             folder, display = _folder_and_display(safe)
@@ -895,15 +1121,20 @@ def sync_after_rename(parent, pdf_name: str) -> None:
             return
         safe = _safe(pdf_name)
         stored = get_stored_tag(safe)
-        if not stored:
+        if not stored or _clash_skip(safe):
             return
         folder, display = _folder_and_display(safe)
         desired = desired_tag(folder, display)
         if desired == stored:
             return
+        keep = _shared(safe, stored)
 
         def work(col):
-            apply_rename(col, stored, desired)
+            if keep:
+                _retag_from_cache(col, safe, desired, cfg)
+                _rebuild_shared(col, stored, {safe}, cfg)
+            else:
+                apply_rename(col, stored, desired)
             set_stored_tag(safe, desired)
             return {"renamed": True}
 
@@ -928,22 +1159,30 @@ def sync_after_folder_rename(parent, safes: list[str]) -> None:
         cfg = settings.read()
         if not library_tags_enabled(cfg) or not safes:
             return
-        pairs: list[tuple[str, str]] = []
+        pairs: list[tuple[str, str, str, bool]] = []
         updates: list[tuple[str, str]] = []
+        clashes = library_clashes()
         for safe in safes:
             stored = get_stored_tag(safe)
-            if not stored:
+            if not stored or _clash_skip(safe, clashes):
                 continue
             folder, display = _folder_and_display(safe)
             desired = desired_tag(folder, display)
             if desired != stored:
-                pairs.append((stored, desired))
+                pairs.append((safe, stored, desired, _shared(safe, stored)))
                 updates.append((safe, desired))
         if not pairs:
             return
 
         def work(col):
-            apply_renames(col, pairs)
+            for safe, old, new, keep in pairs:
+                if keep:
+                    _retag_from_cache(col, safe, new, cfg)
+                else:
+                    apply_rename(col, old, new)
+            leaving = {safe for safe, _o, _n, keep in pairs if keep}
+            for old in {o for _s, o, _n, keep in pairs if keep}:
+                _rebuild_shared(col, old, leaving, cfg)
             for safe, desired in updates:
                 set_stored_tag(safe, desired)
             return {"count": len(pairs)}
@@ -983,12 +1222,22 @@ def sync_after_delete(parent, pdf_name: str, display: str | None = None) -> None
         if not stored:
             return
         label = display or safe
+        shared = _shared(safe, stored)
 
-        _run_sync_op(
-            parent,
-            f"KlausNote: remove !Library tag for “{label}”",
-            lambda col: {"removed": apply_removal(col, stored)},
-        )
+        def work(col):
+            # #14: Anki's remove takes every child tag with it, so a tag
+            # another PDF owns, or one that is also a folder's (an old
+            # clash), is never removed — only this PDF's own notes lose it.
+            if shared:
+                return {"removed": False}
+            if _has_children(col, stored):
+                members, _nested = _members(col, stored)
+                if members:
+                    col.tags.bulk_remove(sorted(members), stored)
+                return {"removed": bool(members)}
+            return {"removed": apply_removal(col, stored)}
+
+        _run_sync_op(parent, f"KlausNote: remove !Library tag for “{label}”", work)
     except Exception as exc:  # noqa: BLE001
         print(f"[klaus_note] tag_sync: sync_after_delete failed for {pdf_name!r}: {exc}")
 
@@ -1010,10 +1259,13 @@ def _reapply_missing(col, missing: dict[str, str], cfg: dict) -> None:
 
     plans: list[tuple[str, str, set[int]]] = []
     cached = _cached_matches_many(list(missing), cfg)
+    clashes = library_clashes()
     for safe in missing:
         matches = cached[safe]
         if matches is None:
             print(f"[klaus_note] tag_sync: no cached matches for {safe!r} — cannot restore its !Library tag yet.")
+            continue
+        if _clash_skip(safe, clashes):
             continue
         threshold = retention.get_threshold(safe, cfg)
         folder, display = _folder_and_display(safe)
@@ -1032,21 +1284,8 @@ def _reapply_missing(col, missing: dict[str, str], cfg: dict) -> None:
 
 
 def _library_state(col):
-    from . import curation, drive_store, pdf_handler, retention
-
-    uf = settings.user_files()
-    tree = drive_store.build_tree(pdf_handler.list_contexts(uf), drive_store.load(uf))
-    pdfs = {
-        p["safe"]: (p["folder"], p["display"])
-        for items in (tree["root"], *tree["folders"].values())
-        for p in items
-    }
-    stored = {
-        safe: entry["tag"]
-        for safe, entry in retention._load_prefs().items()
-        if isinstance(entry, dict) and entry.get("tag")
-    }
-    return pdfs, stored, set(col.tags.all()), set(tree["folders"])
+    pdfs, folders = library_layout()
+    return pdfs, _stored_tags(), set(col.tags.all()), folders
 
 
 def _membership_known(safes, cfg: dict) -> tuple[set[str], set[str]]:
@@ -1070,7 +1309,8 @@ def _plan(col, cfg: dict) -> list[dict]:
     # tag vanished; move it into a QueryOp if that ever shows as a hitch.
     nonempty, empty = _membership_known(missing, cfg) if missing else (set(), set())
     deleted = {s for s in missing if _deleted_by_user(stored[s])}
-    return plan_library_sync(pdfs, stored, existing, nonempty, empty, folders, deleted)
+    clashing = set(tag_clashes(pdfs, folders, stored))
+    return plan_library_sync(pdfs, stored, existing, nonempty, empty, folders, deleted, clashing)
 
 
 def _library_root() -> str | None:

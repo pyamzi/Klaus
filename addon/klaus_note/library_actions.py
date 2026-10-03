@@ -22,9 +22,10 @@ from aqt.qt import (
     QLabel,
     QSlider,
     Qt,
+    QTimer,
     QVBoxLayout,
 )
-from aqt.utils import showWarning, tooltip
+from aqt.utils import show_warning, tooltip  # show_warning opens (window-modal), never execs
 
 from . import drive_store, pdf_handler, tag_sync
 from . import settings
@@ -235,14 +236,25 @@ def _ask_text(parent, title: str, label: str, value: str, on_text: Callable[[str
     return dlg
 
 
+def _name_clash(parent_path: str | None, name: str, **kw) -> str | None:
+    """#14: the PDF or folder ``name`` would share a tag with, as the
+    message to show; None when the name is free."""
+    pdfs, folders = tag_sync.library_layout()
+    return tag_sync.name_clash(pdfs, folders, parent_path, name, **kw)
+
+
 def new_folder(parent, parent_path: str | None = None) -> None:
     def apply(name: str) -> None:
         name = name.strip("/")
         if not name:
             return
+        why = _name_clash(parent_path, name, is_folder=True)
+        if why:
+            show_warning(why, parent=parent)
+            return
         path = f"{parent_path}/{name}" if parent_path else name
         if not drive_store.add_folder(settings.user_files(), path):
-            showWarning("That folder name isn't valid.", parent=parent)
+            show_warning("That folder name isn't valid.", parent=parent)
             return
         root = _live_root()
         if root:
@@ -265,9 +277,13 @@ def rename_folder(parent, path: str) -> None:
             return
         up = path.rsplit("/", 1)[0] if "/" in path else ""
         new = f"{up}/{name}" if up else name
+        clash = _name_clash(up or None, name, is_folder=True, skip=path)
+        if clash:
+            show_warning(clash, parent=parent)
+            return
         ok, why = pdf_drive.apply_folder_change(settings.user_files(), _live_root(), path, new)
         if not ok:
-            showWarning(
+            show_warning(
                 "A folder with that name already exists there." if why == "exists"
                 else "That folder name isn't valid.",
                 parent=parent,
@@ -288,6 +304,8 @@ def remove_empty_folder(path: str) -> None:
     pdf_drive.delete_folder(path)
     _refresh()
     tag = tag_sync.folder_tag(path)
+    if any(t.casefold() == tag.casefold() for t in tag_sync._stored_tags().values()):
+        return  # #14: an old clash — a PDF stores this tag, so it stays that PDF's
     tag_sync._run_sync_op(mw, f"KlausNote: remove folder “{path}”", lambda col: {"removed": tag_sync.apply_removal(col, tag)})
 
 
@@ -300,6 +318,7 @@ def import_files(paths: list[str], folder: str | None = None) -> int:
     reads, imports and indexes them — nothing slow on the main thread.
     Without one, the old one-by-one import runs. Returns how many."""
     paths = [p for p in paths if p.lower().endswith(".pdf") and os.path.isfile(p)]
+    paths = _refuse_clashes(paths, folder)
     if not paths:
         return 0
     root = _live_root()
@@ -323,6 +342,31 @@ def import_files(paths: list[str], folder: str | None = None) -> int:
     pdf_drive.start_library_rescan()
     tooltip(f"Importing {len(paths)} PDF{'s' if len(paths) != 1 else ''}…")
     return len(paths)
+
+
+def _refuse_clashes(paths: list[str], folder: str | None) -> list[str]:
+    """#14: drop files whose name would share a tag with a folder or
+    another PDF in ``folder``, in one warning naming each clash. A file
+    named exactly like a PDF already there is a re-import, not a clash;
+    a case-only difference is a clash (Anki compares tags casefolded)."""
+    pdfs, folders = tag_sync.library_layout()
+    same = {d for f, d in pdfs.values() if (f or None) == (folder or None)}
+    keep, refused = [], []
+    for path in paths:
+        name = os.path.basename(path)
+        why = None if name in same else tag_sync.name_clash(pdfs, folders, folder, name)
+        if why:
+            refused.append(why)
+            continue
+        keep.append(path)
+        same.add(name)
+        pdfs[f"\0import{len(keep)}"] = (folder or None, name)  # a batch can clash with itself
+    if refused:
+        # A tick later: this runs inside a Finder drop's event filter, and
+        # a dialog there is the K-114 nested-loop crash class.
+        text = "\n\n".join(refused)
+        QTimer.singleShot(0, lambda: show_warning(text, parent=mw))
+    return keep
 
 
 def pick_and_import(parent, folder: str | None = None) -> QFileDialog:

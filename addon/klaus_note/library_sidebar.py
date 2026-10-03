@@ -30,12 +30,16 @@ ROOT_LABEL = "Library"
 _cache: dict = {"key": None, "index": None}
 
 
-def build_index(drive: dict, prefs: dict) -> dict:
+def build_index(drive: dict, prefs: dict, clashes: dict | None = None) -> dict:
     """Pure. ``labels``: tag casefolded -> the name to show, for the
     root, every folder and every PDF that owns a tag. ``safes``: PDF tag
     -> safe name. ``folders``: folder tag -> folder path. ``excluded``:
     the tags of excluded PDFs and folders, those covered by an excluded
-    folder included (manual indexing)."""
+    folder included (manual indexing). ``clashes`` (#14): tag -> why,
+    from ``tag_sync.tag_clashes``' ``{safe: why}``. A flagged PDF has no
+    tag of its own (rows ARE tags), so the warning goes on the row it
+    collides with, and a tag it stored before is never read as its row."""
+    clashes = clashes or {}
     labels = {ROOT_TAG.casefold(): ROOT_LABEL}
     safes: dict[str, str] = {}
     folder_tags: dict[str, str] = {}
@@ -48,6 +52,8 @@ def build_index(drive: dict, prefs: dict) -> dict:
         labels[key] = folder.rsplit("/", 1)[-1]
         folder_tags[key] = folder
     for safe, entry in prefs.items():
+        if safe in clashes:
+            continue
         if isinstance(entry, dict) and entry.get("tag"):
             key = entry["tag"].casefold()
             display = (pdfs.get(safe) or {}).get("display") or safe
@@ -59,7 +65,12 @@ def build_index(drive: dict, prefs: dict) -> dict:
     view = {"pdfs": pdfs, "excluded": {"pdfs": list(x.get("pdfs") or []), "folders": list(x.get("folders") or [])}}
     excluded = {k for k, f in folder_tags.items() if drive_store.folder_excluded(view, f)}
     excluded |= {k for k, safe in safes.items() if drive_store.is_excluded(view, safe)}
-    return {"labels": labels, "safes": safes, "folders": folder_tags, "excluded": excluded}
+    clash_rows: dict[str, str] = {}
+    for safe, why in sorted(clashes.items()):
+        entry = pdfs.get(safe) or {}
+        key = tag_sync.desired_tag(entry.get("folder"), entry.get("display") or safe).casefold()
+        clash_rows[key] = f"{clash_rows[key]}\n{why}" if key in clash_rows else why
+    return {"labels": labels, "safes": safes, "folders": folder_tags, "excluded": excluded, "clashes": clash_rows}
 
 
 def build_labels(drive: dict, prefs: dict) -> dict[str, str]:
@@ -71,10 +82,12 @@ def library_index() -> dict:
     prefs (stored tags) changed — this is called once per painted row."""
     from . import curation, drive_store, retention
 
-    paths = (drive_store._drive_path(settings.user_files()), retention._prefs_path())
+    uf = settings.user_files()
+    # contexts/: a PDF added or gone changes which names clash (#14).
+    paths = (drive_store._drive_path(uf), retention._prefs_path(), os.path.join(uf, "contexts"))
     key = tuple(os.stat(p).st_mtime_ns if os.path.exists(p) else 0 for p in paths)
     if key != _cache["key"]:
-        _cache["index"] = build_index(drive_store.load(settings.user_files()), retention._load_prefs())
+        _cache["index"] = build_index(drive_store.load(uf), retention._load_prefs(), tag_sync.library_clashes() or {})
         _cache["key"] = key
     return _cache["index"]
 
@@ -83,10 +96,15 @@ def is_excluded_tag(tag: str | None) -> bool:
     return bool(tag) and tag.casefold() in library_index()["excluded"]
 
 
+def clash_for(tag: str | None) -> str | None:
+    """Why a PDF that clashes with this row's tag is left untagged (#14)."""
+    return (library_index().get("clashes") or {}).get(tag.casefold()) if tag else None
+
+
 def tooltip_for(tag: str | None) -> str | None:
     """The row's hover text: why it needs attention, or that indexing
     skips it; None for an ordinary row."""
-    reason = "Excluded from the index" if is_excluded_tag(tag) else status_for(tag)
+    reason = clash_for(tag) or ("Excluded from the index" if is_excluded_tag(tag) else status_for(tag))
     return f"{label_for(tag)}\n{reason}" if reason else None
 
 
@@ -510,6 +528,9 @@ def _schedule_refresh() -> None:
 def status_for(tag: str | None) -> str | None:
     if not tag:
         return None
+    clash = clash_for(tag)
+    if clash:
+        return clash
     safe = library_index()["safes"].get(tag.casefold())
     return _state["status"].get(safe) if safe else None
 

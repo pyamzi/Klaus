@@ -179,8 +179,11 @@ class Tags:
         self.tags.add(tag)
         return "OpChanges"
 
-    def remove(self, tags):
-        self.tags -= set(tags)
+    def remove(self, space_separated_tags):
+        # Anki's TagManager.remove takes ONE space-separated string (#21).
+        if not isinstance(space_separated_tags, str):
+            raise TypeError("bad argument type for built-in operation")
+        self.tags -= set(space_separated_tags.split())
 
 
 class Col:
@@ -310,5 +313,18 @@ check("one schedule, for the tag change", fired == [1])
 _init = open("klaus_note/__init__.py", encoding="utf-8").read()
 check("registered on operation_did_execute",
       "gui_hooks.operation_did_execute.append(_tag_sync.on_operation_did_execute)" in _init)
+
+section("#21: a delete removes the PDF's tag, Remove Folder the folder's")
+add_pdf("gone", "Gone.pdf", "Renal", "!Library::Renal::Gone")
+col.tags.tags.add("!Library::Renal::Gone")
+pdf_drive.delete_pdf("gone")
+check("deleting an indexed PDF leaves no !Library tag behind for it",
+      "!Library::Renal::Gone" not in col.tags.tags, str(sorted(col.tags.tags)))
+_act = importlib.import_module("klaus_note.library_actions")
+drive_store.add_folder(UF, "Empty")
+col.tags.tags.add("!Library::Empty")
+_act.remove_empty_folder("Empty")
+check("Remove Folder on an empty folder removes its tag from the sidebar",
+      "!Library::Empty" not in col.tags.tags, str(sorted(col.tags.tags)))
 
 raise SystemExit(report())
