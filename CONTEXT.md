@@ -76,6 +76,28 @@ _Avoid_: Segment, snippet
 The text of a Clip, stored on its PDF page like speaker notes; or of a whole Recording made with no Material open, which becomes a Page.
 _Avoid_: Captions, notes
 
+### Screens
+
+**Home**:
+The first screen: the decks with their due counts, and the way into everything else.
+_Avoid_: Deck list, deck browser, main page, dashboard
+
+**Study**:
+The screen that shows one Card at a time from one deck and takes the answer; a Study Session is one sitting on it. "Review" is what Anki calls a Card's scheduling event, never this screen.
+_Avoid_: Review (as a screen), reviewer, study mode
+
+**Browser**:
+The table of Cards or Notes with search, columns and bulk actions, Anki's browser rebuilt in Klaus.
+_Avoid_: Browse (as a noun), card list, search page
+
+**Sidebar**:
+The column of decks, Materials and tags on the left of Home and the Browser on desktop and web; on a phone it becomes the tab bar.
+_Avoid_: Nav, drawer, side panel
+
+**Command Palette**:
+The searchable list of every action, opened with ⌘K, each with its shortcut.
+_Avoid_: Quick actions, launcher, omnibar
+
 ### Products
 
 **Klaus**:
