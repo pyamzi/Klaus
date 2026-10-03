@@ -28,11 +28,11 @@
   import type { PlainMessage } from "@bufbuild/protobuf";
   import type { RenderCardResponse } from "@generated/klaus_pb";
   import { onMount } from "svelte";
-  import { cardBodyClass, cardFrameSrc, night, postToCard, renderCard } from "$lib/card";
+  import { cardBodyClass, cardFrameSrc, night, openCardLink, postToCard, renderCard } from "$lib/card";
   import Sidebar from "./Sidebar.svelte";
-  import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
-  import Columns3Icon from "@lucide/svelte/icons/columns-3";
-  import EyeIcon from "@lucide/svelte/icons/eye";
+  import { IconArrowLeft as ArrowLeftIcon } from "@tabler/icons-svelte";
+  import { IconColumns3 as Columns3Icon } from "@tabler/icons-svelte";
+  import { IconEye as EyeIcon } from "@tabler/icons-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -106,6 +106,7 @@
     try {
       // Normalised the way Anki shows it, and validated before searching.
       const normalized = (await buildSearchString({ filter: { case: "parsableText", value: text } })).val;
+      if (seq !== searchSeq) return;
       search = normalized;
       const column = columns.find((c) => c.key === sortColumn);
       const order =
@@ -135,7 +136,8 @@
           rows.set(id, row);
           rowsVersion++;
         })
-        .catch(() => {});
+        // Fetched again the next time it scrolls into view.
+        .catch(() => fetching.delete(id));
     }
   });
 
@@ -165,15 +167,25 @@
     clearRows();
   }
 
+  // A second click while switching would run the sequence again on the new mode.
+  let switching = false;
   async function toggleMode() {
-    const was = selected;
-    await setConfigBool({ key: ConfigKey_Bool.BROWSER_TABLE_SHOW_NOTES_MODE, value: !notesMode, undoable: false });
-    await loadMode();
-    // Keep the same note selected across modes.
-    if (was !== undefined) {
-      selected = notesMode ? (await getCard({ cid: was })).noteId : (await cardsOfNote({ nid: was })).cids[0];
+    if (switching) return;
+    switching = true;
+    try {
+      const was = selected;
+      await setConfigBool({ key: ConfigKey_Bool.BROWSER_TABLE_SHOW_NOTES_MODE, value: !notesMode, undoable: false });
+      await loadMode();
+      // Keep the same note selected across modes.
+      if (was !== undefined) {
+        selected = notesMode ? (await getCard({ cid: was })).noteId : (await cardsOfNote({ nid: was })).cids[0];
+      }
+      await runSearch();
+    } catch {
+      // The bridge's error was shown.
+    } finally {
+      switching = false;
     }
-    await runSearch();
   }
 
   // Side editor: Anki's editor page in browser mode, loaded with the selected note
@@ -193,27 +205,34 @@
   async function select(id: bigint | undefined) {
     selected = id;
     if (id === undefined) return;
-    const nid = await noteIdOf(id);
-    const note = await getNote({ nid });
-    await editorReady;
-    if (selected !== id) return;
-    const editor = editorFrame.contentWindow as any;
-    // As Anki's browser (editor.call_after_note_saved): save the current note's
-    // pending edits before loading another, or they'd be lost.
-    await editor.saveNow?.();
-    if (selected !== id) return;
-    editor.require("anki/ui").loaded.then(() =>
-      editor.loadNote({
-        nid: Number(nid),
-        notetypeId: Number(note.notetypeId),
-        focusTo: null,
-        originalNoteId: null,
-        reviewerCardId: null,
-        deckId: null,
-        initial: true,
-      }),
-    );
-    if (previewOpen) showPreview();
+    try {
+      const nid = await noteIdOf(id);
+      const note = await getNote({ nid });
+      await editorReady;
+      if (selected !== id) return;
+      const editor = editorFrame.contentWindow as any;
+      // As Anki's browser (editor.call_after_note_saved): save the current note's
+      // pending edits before loading another, or they'd be lost.
+      await editor.saveNow?.();
+      if (selected !== id) return;
+      editor
+        .require("anki/ui")
+        .loaded.then(() =>
+          editor.loadNote({
+            nid: Number(nid),
+            notetypeId: Number(note.notetypeId),
+            focusTo: null,
+            originalNoteId: null,
+            reviewerCardId: null,
+            deckId: null,
+            initial: true,
+          }),
+        )
+        .catch(() => {});
+      if (previewOpen) await showPreview();
+    } catch {
+      // The bridge's error was shown; the editor keeps the previous note.
+    }
   }
 
   function move(delta: number) {
@@ -293,6 +312,12 @@
     [Color.FLAG_PURPLE]: "bg-row-flag-purple",
   };
 
+  /** Back to the decks, saving the editor's pending edits first (its save is debounced). */
+  async function leave() {
+    await (editorFrame?.contentWindow as any)?.saveNow?.();
+    location.href = "/";
+  }
+
   async function sidebarSearch(node: PlainMessage<SearchNode>) {
     const text = (await buildSearchString(node)).val;
     await runSearch(text);
@@ -309,8 +334,9 @@
         // changed too), as Anki's table redraws after the op.
         else if (cmd === "noteUpdated") clearRows();
       } else if (event.source === previewFrame?.contentWindow && event.data?.klaus) {
-        const { key, cmd } = event.data;
+        const { key, cmd, openLink } = event.data;
         if (key === " " || key === "Enter" || cmd === "ans") flipPreview();
+        if (openLink !== undefined) openCardLink(openLink);
       }
     };
     const onKeydown = (event: KeyboardEvent) => {
@@ -318,8 +344,12 @@
       if (mod && event.shiftKey && event.key.toLowerCase() === "p") {
         event.preventDefault();
         openPreview();
-      } else if (event.key === "Escape" && !document.querySelector('[role="dialog"], [role="menu"]')) {
-        location.href = "/";
+      } else if (
+        event.key === "Escape" &&
+        !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) &&
+        !document.querySelector('[role="dialog"], [role="menu"]')
+      ) {
+        leave();
       }
     };
     addEventListener("message", onMessage);
@@ -338,7 +368,15 @@
 
 <div class="grid h-screen grid-cols-[14rem_minmax(0,1fr)_minmax(20rem,28rem)] grid-rows-[auto_minmax(0,1fr)]">
   <header class="col-span-full flex items-center gap-2 border-b px-3 py-2">
-    <Button href="/" variant="ghost" size="sm">
+    <Button
+      href="/"
+      variant="ghost"
+      size="sm"
+      onclick={(event: MouseEvent) => {
+        event.preventDefault();
+        leave();
+      }}
+    >
       <ArrowLeftIcon data-icon="inline-start" />
       Decks
     </Button>

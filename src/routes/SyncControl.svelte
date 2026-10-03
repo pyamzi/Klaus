@@ -9,10 +9,10 @@
   import { Empty, String as PbString } from "@generated/anki/generic_pb";
   import { FullSyncRequest, SyncAccount, SyncOutcome, SyncOutcome_State as State } from "@generated/klaus_pb";
   import { postProto } from "@generated/post";
-  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-  import CloudAlertIcon from "@lucide/svelte/icons/cloud-alert";
-  import CloudCheckIcon from "@lucide/svelte/icons/cloud-check";
-  import UserIcon from "@lucide/svelte/icons/circle-user";
+  import { IconRefresh as RefreshCwIcon } from "@tabler/icons-svelte";
+  import { IconCloudExclamation as CloudAlertIcon } from "@tabler/icons-svelte";
+  import { IconCloudCheck as CloudCheckIcon } from "@tabler/icons-svelte";
+  import { IconUserCircle as UserIcon } from "@tabler/icons-svelte";
   import { onMount } from "svelte";
   import { toast } from "svelte-sonner";
   import { Button } from "$lib/components/ui/button";
@@ -28,19 +28,24 @@
   let mediaStatus = $state("");
   let now = $state(Date.now());
 
-  const call = <T extends object>(method: string, input: object, output: { fromBinary(b: Uint8Array): T }) =>
-    postProto(method, input as never, output as never) as Promise<T>;
-  const loadAccount = async () => (account = await call("klausSyncAccount", new Empty(), SyncAccount));
+  const call = <T extends object>(
+    method: string,
+    input: object,
+    output: { fromBinary(b: Uint8Array): T },
+    options?: { alertOnError?: boolean },
+  ) => postProto(method, input as never, output as never, options) as Promise<T>;
+  // Background reads: polled, so a failure mustn't alert() on every tick.
+  const quiet = { alertOnError: false };
+  const loadAccount = async () => (account = await call("klausSyncAccount", new Empty(), SyncAccount, quiet));
   const running = $derived(outcome.state === State.RUNNING);
   /** The last sync needs the user's choice (a full sync). */
   const needsChoice = $derived(outcome.state === State.DONE && !outcome.error && outcome.required >= Required.FULL_SYNC);
 
   // Each finished sync is handled once, whoever started it (the page or automatic sync).
   let handledId = 0;
-  let manualId = 0;
 
   async function poll() {
-    outcome = await call("klausSyncOutcome", new Empty(), SyncOutcome);
+    outcome = await call("klausSyncOutcome", new Empty(), SyncOutcome, quiet);
     now = Date.now();
     if (outcome.state === State.RUNNING) {
       const p = (await latestProgress({}, { alertOnError: false }).catch(() => undefined))?.value;
@@ -57,11 +62,14 @@
   }
 
   function finished(result: SyncOutcome) {
-    const manual = result.id === manualId;
+    // The page started it (sync button, full sync); automatic syncs report only errors.
+    const manual = !result.background;
     if (result.error) {
+      // A failed full sync hands the dialog back, with its choices, to try again.
+      fullRunning = false;
       if (result.errorKind === BackendError_Kind.SYNC_AUTH_ERROR) {
-        loadAccount();
-        toast.error("Your Klaus Account sign-in has expired. Sign in again to keep syncing.");
+        loadAccount().catch(() => {});
+        toast.error("Your Klaus account sign-in has expired. Sign in again to keep syncing.");
       } else if (manual) {
         toast.error(result.error);
       }
@@ -87,9 +95,13 @@
     if (running) return;
     if (!account.email) return signIn();
     if (needsChoice) return askFullSync(outcome);
-    await call("klausSync", new Empty(), Empty);
-    await poll();
-    manualId = outcome.id;
+    try {
+      await call("klausSync", new Empty(), Empty, quiet);
+    } catch (err) {
+      toast.error("Couldn't start syncing", { description: (err as Error).message });
+      return;
+    }
+    await poll().catch(() => {});
   }
 
   async function watchMedia() {
@@ -122,29 +134,33 @@
     try {
       await call("klausFullSync", new FullSyncRequest({ upload, serverMediaUsn }), Empty);
       await poll();
-      manualId = outcome.id;
     } catch {
       fullRunning = false;
     }
   }
   const fullText = $derived(
     full?.required === Required.FULL_DOWNLOAD
-      ? "This device's collection has no cards. Download your collection from your Klaus Account?"
+      ? "This device's collection has no cards. Download your collection from your Klaus account?"
       : full?.required === Required.FULL_UPLOAD
-        ? "Your Klaus Account's collection has no cards. Replace it with this device's collection?"
-        : "There is a conflict between decks on this device and your Klaus Account. You must choose which version to keep:",
+        ? "Your Klaus account's collection has no cards. Replace it with this device's collection?"
+        : "There is a conflict between decks on this device and your Klaus account. You must choose which version to keep:",
   );
 
   // Browser sign-in: klaus.ink signs the user in, then sends them back to Klaus.
   let signInOpen = $state(false);
   let signInUrl = $state("");
   async function signIn() {
-    signInUrl = (await call("klausAccountSignIn", new Empty(), PbString)).val;
+    try {
+      signInUrl = (await call("klausAccountSignIn", new Empty(), PbString, quiet)).val;
+    } catch (err) {
+      toast.error("Couldn't start signing in", { description: (err as Error).message });
+      return;
+    }
     openLink(signInUrl);
     signInOpen = true;
     while (signInOpen) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      await loadAccount();
+      await loadAccount().catch(() => {});
       if (account.email) {
         signInOpen = false;
         toast.success(`Signed in as ${account.email}.`);
@@ -157,12 +173,23 @@
   }
 
   async function toggle(key: "autoSync" | "syncMedia", value: boolean) {
-    await setProfileConfigJson({ key, valueJson: new TextEncoder().encode(JSON.stringify(value)) });
-    await loadAccount();
+    try {
+      await setProfileConfigJson({ key, valueJson: new TextEncoder().encode(JSON.stringify(value)) }, quiet);
+    } catch (err) {
+      toast.error("Couldn't change the sync setting", { description: (err as Error).message });
+      return;
+    }
+    // Saved; a failed reload only leaves the menu showing the old value.
+    await loadAccount().catch(() => {});
   }
   async function signOut() {
-    await call("klausSyncSignOut", new Empty(), Empty);
-    await loadAccount();
+    try {
+      await call("klausSyncSignOut", new Empty(), Empty, quiet);
+    } catch (err) {
+      toast.error("Couldn't sign out", { description: (err as Error).message });
+      return;
+    }
+    await loadAccount().catch(() => {});
   }
 
   const statusText = $derived.by(() => {
@@ -179,13 +206,15 @@
   });
 
   onMount(() => {
-    loadAccount();
+    loadAccount().catch(() => {});
     // A sync that finished before this page opened isn't news; a full sync still
     // waiting for a choice is asked about again.
-    call("klausSyncOutcome", new Empty(), SyncOutcome).then((current) => {
-      handledId = current.state === State.DONE && current.required < Required.FULL_SYNC ? current.id : 0;
-      poll();
-    });
+    call("klausSyncOutcome", new Empty(), SyncOutcome, quiet)
+      .then((current) => {
+        handledId = current.state === State.DONE && current.required < Required.FULL_SYNC ? current.id : 0;
+        return poll();
+      })
+      .catch(() => {});
     const timer = setInterval(() => poll().catch(() => {}), 2000);
     return () => clearInterval(timer);
   });
@@ -213,7 +242,7 @@
     <DropdownMenu.Root>
       <DropdownMenu.Trigger>
         {#snippet child({ props })}
-          <Button {...props} variant="ghost" size="icon" aria-label="Klaus Account"><UserIcon /></Button>
+          <Button {...props} variant="ghost" size="icon" aria-label="Klaus account"><UserIcon /></Button>
         {/snippet}
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="end" class="w-64">
@@ -245,7 +274,7 @@
     <Dialog.Header>
       <Dialog.Title>Finish signing in in your browser</Dialog.Title>
       <Dialog.Description>
-        Sign in to your Klaus Account on klaus.ink. Klaus will pick it up as soon as you're done.
+        Sign in to your Klaus account on klaus.ink. KlausNote will pick it up as soon as you're done.
       </Dialog.Description>
     </Dialog.Header>
     <p class="text-sm text-muted-foreground">
@@ -270,15 +299,15 @@
       {/if}
     </Dialog.Header>
     {#if fullRunning}
-      <p class="text-sm text-muted-foreground">Klaus can't be used until this finishes.</p>
+      <p class="text-sm text-muted-foreground">KlausNote can't be used until this finishes.</p>
     {:else if full?.required === Required.FULL_SYNC}
       <ul class="flex list-disc flex-col gap-2 pl-5 text-sm">
         <li>
-          Select <strong>Download</strong> to replace decks here with your Klaus Account's version. You will lose any changes
+          Select <strong>Download</strong> to replace decks here with your Klaus account's version. You will lose any changes
           you made on this device since your last sync.
         </li>
         <li>
-          Select <strong>Upload</strong> to overwrite your Klaus Account's version with decks from this device, and delete
+          Select <strong>Upload</strong> to overwrite your Klaus account's version with decks from this device, and delete
           any changes made on your other devices.
         </li>
       </ul>

@@ -4,9 +4,9 @@
 
 <script lang="ts">
   import type { DeckTreeNode } from "@generated/anki/decks_pb";
-  import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
-  import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
-  import EllipsisIcon from "@lucide/svelte/icons/ellipsis";
+  import { IconChevronDown as ChevronDownIcon } from "@tabler/icons-svelte";
+  import { IconChevronRight as ChevronRightIcon } from "@tabler/icons-svelte";
+  import { IconDots as EllipsisIcon } from "@tabler/icons-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Table from "$lib/components/ui/table";
@@ -38,7 +38,7 @@
         <a
           href="/review?deck={deck.deckId}"
           class="font-medium hover:underline"
-          class:text-primary={deck.filtered}>{deck.name}</a
+          class:text-link={deck.filtered}>{deck.name}</a
         >
       </div>
     </Table.Cell>
