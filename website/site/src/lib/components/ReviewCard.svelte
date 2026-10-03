@@ -24,7 +24,7 @@
 		},
 		{
 			q: 'What does it cost?',
-			a: 'The app is free and open source (AGPL-3.0). A Klaus Note Account, planned for later, will pay for what klaus.so hosts, such as syncing your PDFs and notes.',
+			a: 'The app is free and open source (AGPL-3.0). A Klaus account, planned for later, will pay for what klaus.so hosts, such as syncing your PDFs and notes.',
 			intervals: ['<1m', '<6m', '<10m', '4d']
 		}
 	];

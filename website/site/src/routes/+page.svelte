@@ -41,7 +41,7 @@
 		},
 		{
 			q: 'How much does it cost?',
-			a: 'Klaus Note and the Klaus Addon are free and open source under AGPL-3.0. A paid Klaus Note Account is planned for what klaus.so will host, such as syncing your PDFs and notes.'
+			a: 'Klaus Note and the Klaus Addon are free and open source under AGPL-3.0. A paid Klaus account is planned for what klaus.so will host, such as syncing your PDFs and notes.'
 		},
 		{
 			q: 'When can I use it?',
@@ -101,7 +101,7 @@
 		{ name: 'Linking', detail: 'Headings become sections; each section shows the cards that cover it.' },
 		{ name: 'Recordings', detail: 'Record a lecture while the slides are open; each slide keeps its own clip and transcript.' },
 		{ name: 'Pages', detail: 'Markdown notes with LaTeX that link to your PDFs, Wikipedia-style.' },
-		{ name: 'Klaus Note Account', detail: 'Sign in with your Klaus Account to sync your PDFs and notes and reach them from AI assistants.' },
+		{ name: 'Klaus account', detail: 'Sign in with your Klaus account to sync your PDFs and notes and reach them from AI assistants.' },
 		{ name: 'Card generation', detail: 'Draft cards from a section, which you review before they are added.' }
 	];
 </script>
