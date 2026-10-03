@@ -54,7 +54,7 @@ for fn in ("klausPdfOpen", "klausPdfError",
     check(f"JS API {fn} present", fn in html)
 check("bridge prefix wired", "klaus_note_pdfjs:" in html)
 for feature in ("findbar", "findinput", "ctxmenu", "thumbs", "marquee",
-                "hlLayer", "noteLayer"):
+                "hlLayer", "noteLayer", "cardLayer"):
     check(f"page has {feature}", feature in html)
 # pdf.js 3.x text-layer contract: spans are sized via
 # calc(var(--scale-factor) * ...). Shipping without setting it made
@@ -1489,9 +1489,10 @@ section("K-150: the editor outlives every layer rebuild")
 # these pins hold that arrangement in place.
 _RAL150 = _H150.split("function renderAnnotLayers(", 1)[1].split("\n}\n", 1)[0]
 _TDP150 = _H150.split("function teardownPage(", 1)[1].split("\n}\n", 1)[0]
-check("renderAnnotLayers still destroys exactly .hlLayer/.noteLayer "
-      "on every pass — the reason the editor cannot live in either",
-      'for (const cls of [".hlLayer", ".noteLayer"]) {' in _RAL150
+check("renderAnnotLayers still destroys exactly .hlLayer/.noteLayer/"
+      ".cardLayer on every pass — the reason the editor cannot live in "
+      "any of them",
+      'for (const cls of [".hlLayer", ".noteLayer", ".cardLayer"]) {' in _RAL150
       and "div.removeChild(old)" in _RAL150)
 check("...and it is still reached from all four sites plus the "
       "teardown, so this is not a hazard that quietly went away",
@@ -2857,5 +2858,335 @@ check("the page is told the stored value on ready, beside the occlusion state",
 _cfg = json.load(open("klaus_note/config.json")) if "json" in dir() else __import__("json").load(open("klaus_note/config.json"))
 check("config.json ships hand_drawn on, config.md documents it",
       _cfg.get("hand_drawn") is True and "**hand_drawn**" in open("klaus_note/config.md", encoding="utf-8").read())
+
+section("hand-drawn reader 6: the page draws hand-drawn marks and cards")
+_H6 = open("klaus_note/web/pdfjs_viewer.html", encoding="utf-8").read()
+
+
+def _fn6(name):
+    """One top-level function of the page, from its header to the first
+    column-0 closing brace."""
+    if ("\nfunction " + name + "(") not in _H6:
+        return ""
+    return _H6.split("\nfunction " + name + "(", 1)[1].split("\n}\n", 1)[0]
+
+
+_RAL6 = _fn6("renderAnnotLayers")
+_TDP6 = _fn6("teardownPage")
+_BANDS6 = _fn6("roughBands")
+_CARD6 = _fn6("noteCardEl")
+_HLCARD6 = _fn6("highlightCard")
+_MTB6 = _fn6("measureTextBox")
+_SHD6 = (_H6.split("window.klausSetHandDrawn = function", 1)[1].split("\n};\n", 1)[0]
+         if "window.klausSetHandDrawn = function" in _H6 else "")
+_DRAW6 = _RAL6 + _BANDS6 + _CARD6 + _HLCARD6
+check("state.handDrawn defaults on until the first push",
+      "  handDrawn: true," in _H6.split("const state = {", 1)[1].split("\n};", 1)[0])
+check("without rough.js the page takes the off path and says why",
+      'if (typeof rough === "undefined") {' in _H6
+      and "state.handDrawn = false;" in _H6.split('if (typeof rough === "undefined") {', 1)[1][:400]
+      and "console.warn(" in _H6.split('if (typeof rough === "undefined") {', 1)[1][:400])
+check("klausSetHandDrawn exists, refuses to switch on without rough.js "
+      "and flips the body class every hand-drawn rule keys on",
+      bool(_SHD6) and 'typeof rough !== "undefined"' in _SHD6
+      and 'document.body.classList.toggle("handDrawn", state.handDrawn)' in _H6)
+check("...and repaints every rendered page through the one redraw path "
+      "(no new renderAnnotLayers call site)",
+      "state.annotsPrev = null;" in _SHD6
+      and "window.klausSetAnnotations(state.annots)" in _SHD6
+      and _H6.count("renderAnnotLayers(num, div)") == 3)
+check("the first switch-on waits for Excalifont: it starts the load, then "
+      "awaits document.fonts.ready before the repaint that measures",
+      "document.fonts.load(" in _SHD6 and "document.fonts.ready" in _SHD6
+      and _SHD6.index("document.fonts.load(") < _SHD6.index("document.fonts.ready")
+      < _SHD6.index("window.klausSetAnnotations(state.annots)"))
+check("...once: the gate is a flag, set by the first switch-on only",
+      "&& !state.fontsWaited &&" in _SHD6 and "state.fontsWaited = true;" in _SHD6
+      and "fontsWaited: false," in _H6)
+check("measurement itself stays synchronous (openTextEdit relies on it)",
+      bool(_MTB6) and "await" not in _MTB6 and "async function measureTextBox" not in _H6
+      and "Promise" not in _MTB6)
+check("teardownPage drops the card layer with the others",
+      '".hlLayer", ".noteLayer", ".cardLayer"]' in _TDP6)
+check("highlight bands are seeded rough.js polygons, solid, no stroke",
+      "rough.svg(" in _BANDS6 and ".polygon(" in _BANDS6
+      and 'fillStyle: "solid"' in _BANDS6 and "roughness: 1" in _BANDS6
+      and "seed: seedFor(rec.id)" in _BANDS6 and 'stroke: "none"' in _BANDS6)
+check("...in the record's own ink at 0.43 through fill-opacity, never by "
+      "editing the hex",
+      "fill: rec.color" in _BANDS6 and 'setAttribute("fill-opacity", "0.43")' in _BANDS6)
+check("...one SVG per page, drawn in page points (viewBox), so the "
+      "wobble keeps its shape at every zoom",
+      '"roughLayer"' in _RAL6 and 'setAttribute("viewBox"' in _H6)
+check("...the band is 2 pt taller than the rect, 1 pt each side",
+      "y - 1" in _BANDS6 and "y + h + 1" in _BANDS6)
+# No blend at all (final review): multiply of any ink over a dark
+# slide is dark, so a 0.43 band vanished and coloured text boxes in the
+# layer went near-black. Bands are the plain ink at 0.43, like OFF.
+check("no mix-blend-mode anywhere in the page: a hand-drawn band stays "
+      "visible on a dark slide, exactly like the plain path",
+      "mix-blend-mode" not in _H6)
+check("no Math.random anywhere in the renderer: every wobble is seeded",
+      bool(_DRAW6) and "Math.random" not in _DRAW6)
+check("hand-drawn off still draws today's .hl divs at 0.43",
+      "hexToRgba(rec.color, 0.43)" in _RAL6)
+check("a note record is drawn as a card BEFORE the highlight branch, in "
+      "both modes (it is never a band)",
+      'rec.kind === "note"' in _RAL6
+      and _RAL6.index('rec.kind === "note"') < _RAL6.index("hexToRgba(rec.color, 0.43)")
+      and "noteCardEl(" in _RAL6.split('rec.kind === "note"', 1)[1].split("} else", 1)[0]
+      and "hand" not in _RAL6.split('rec.kind === "note"', 1)[1].split("} else", 1)[0])
+check("the ✎ anchor renders only with hand-drawn off",
+      "if (note && first && hand) {" in _RAL6
+      and "} else if (note && first) {" in _RAL6
+      and _RAL6.index("} else if (note && first) {") < _RAL6.index('a.className = "noteAnchor"'))
+check("a highlight's card is placed by cardSpot, measured first",
+      "cardSpot(rec, pageW, pageH, cw, ch)" in _HLCARD6
+      and _HLCARD6.index("measureTextBox(") < _HLCARD6.index("cardSpot("))
+check("card geometry is page points multiplied by state.scale",
+      'c.style.left = x * s + "px"' in _CARD6 and 'c.style.top = y * s + "px"' in _CARD6
+      and 'c.style.width = w * s + "px"' in _CARD6 and "const s = state.scale;" in _RAL6)
+check("cards carry data-id and data-kind so the card editor can find them",
+      "c.dataset.id = String(rec.id" in _CARD6 and "c.dataset.kind = kind" in _CARD6
+      and 'noteCardEl(rec, "note"' in _RAL6 and '"hl"' in _HLCARD6)
+check("the hand-drawn card is a seeded rough outline + fill at 0.85",
+      "seed: seedFor(rec.id)" in _CARD6 and 'setAttribute("fill-opacity", "0.85")' in _CARD6
+      and "fill: rec.color" in _CARD6)
+check("the plain card (off) fills with the record's ink at 0.85",
+      "hexToRgba(rec.color, 0.85)" in _CARD6)
+check("the connector is a seeded rough line to the highlight",
+      ".line(" in _HLCARD6 and "seed: seedFor(rec.id)" in _HLCARD6)
+check("the card layer sits over the notes, under the kept marquee",
+      "div.appendChild(noteLayer);\n  div.appendChild(cardLayer);" in _RAL6)
+_CSS6 = _H6.split("<style>", 1)[1].split("</style>", 1)[0]
+_HD_CSS6 = "".join(_CSS6.split(".cardLayer {", 1)[1:2]) and (
+    ".cardLayer {" + _CSS6.split(".cardLayer {", 1)[1].split("#marquee {", 1)[0])
+check(".cardLayer is z 4 and lets clicks through; cards take them",
+      bool(_HD_CSS6) and "z-index: 4" in _HD_CSS6.split("}", 1)[0]
+      and "pointer-events: none" in _HD_CSS6.split("}", 1)[0]
+      and "pointer-events: auto" in _HD_CSS6.split(".noteCard {", 1)[-1].split("}", 1)[0])
+check("the card CSS spells no hex (inks arrive from the record)",
+      bool(_HD_CSS6) and not _re.search(r"#[0-9a-fA-F]{3,8}\b", _HD_CSS6), _HD_CSS6[:200])
+check("card text is the dark text ink, through its theme var",
+      "var(--tink-black)" in _HD_CSS6)
+
+section("hand-drawn reader 6, fix round 1")
+check("a text box sized in Helvetica never clips in the wider Excalifont: "
+      "overflow shows under body.handDrawn, in its own rule",
+      "body.handDrawn .hlLayer .hltext { overflow: visible; }" in _H6)
+check("rendered pages keep their UNROUNDED size in points (both render sites)",
+      _H6.count("ptW: viewport.width / viewport.scale, ptH: viewport.height / viewport.scale") == 2)
+check("...and the card clamp and viewBox read it, not the floored div px",
+      "const pageW = rendered.ptW" in _RAL6 and "const pageH = rendered.ptH" in _RAL6)
+check("a card's height is capped once: measured with the card's own height cap",
+      "measureTextBox(note, size, TEXT_BOX_MAX_W - 2 * CARD_PAD,\n"
+      "                               TEXT_BOX_MAX_H - 2 * CARD_PAD)" in _HLCARD6
+      and "const ch = th + 2 * CARD_PAD;" in _HLCARD6 and "Math.min(th" not in _HLCARD6)
+check("measureTextBox takes the height cap the same way it takes the width cap",
+      "function measureTextBox(text, size, maxW, maxH)" in _H6
+      and "maxH || TEXT_BOX_MAX_H" in _MTB6)
+
+section("hand-drawn reader 7: Note tool, in-place card editing, dragging, card menu")
+_H7 = open("klaus_note/web/pdfjs_viewer.html", encoding="utf-8").read()
+
+
+def _fn7(name):
+    if ("\nfunction " + name + "(") not in _H7:
+        return ""
+    return _H7.split("\nfunction " + name + "(", 1)[1].split("\n}\n", 1)[0]
+
+
+def _cut(s, a, b=None):
+    """s after the first a (up to the first b after it), "" when a is absent."""
+    if a not in s:
+        return ""
+    s = s.split(a, 1)[1]
+    return s.split(b, 1)[0] if b else s
+
+
+def _order(s, *parts):
+    """Every part present in s, in this order."""
+    idx = [s.find(x) for x in parts]
+    return all(i >= 0 for i in idx) and idx == sorted(idx)
+
+
+_AB7 = _H7.split('<div id="annobar">', 1)[1].split('<div id="ctxmenu">', 1)[0]
+_OTE7 = _fn7("openTextEdit")
+_CTE7 = _fn7("commitTextEdit")
+_TBF7 = _fn7("textBoxFor")
+_RAL7 = _fn7("renderAnnotLayers")
+_CARDAT7 = _fn7("cardAt")
+_CLAMP7 = _fn7("clampCard")
+_HLAT7 = _fn7("highlightAt")
+_SYNC7 = _fn7("syncAnnobarMode")
+_CTX7 = _cut(_H7, 'getElementById("scroll").addEventListener("contextmenu"', "\n});\n")
+_MD7 = _cut(_H7, 'getElementById("scroll").addEventListener("mousedown"', "\n});\n")
+_NOTECLICK7 = _cut(_H7, 'if (state.tool !== "note" || ev.button !== 0) return;', "\n});\n")
+_TEXTCLICK7 = _cut(_H7, 'if (state.tool !== "text" || ev.button !== 0) return;', "\n});\n")
+_DRAGUP7 = _cut(_H7, "/* card-drag:up */", "\n});\n")
+_DRAGMV7 = _cut(_H7, "/* card-drag:move */", "\n});\n")
+_SW7 = _cut(_H7, 'if (!sw.dataset.ink) return;', "\n  });")
+
+check("the annobar has #abNote, titled \"Add Note\", an icon button like its "
+      "neighbours, between #abText and the size stepper",
+      'id="abNote" title="Add Note" aria-pressed="false"' in _AB7
+      and _order(_AB7, 'id="abText"', 'id="abNote"', 'id="abTszSep"')
+      and "<svg" in _cut(_AB7, 'id="abNote"', "</button>"))
+check("setTool knows the note tool, and the button arms it like Add Text",
+      '["abNote", "note"]' in _fn7("setTool")
+      and 'getElementById("abNote").addEventListener(\n  "click", () => setTool("note"));' in _H7)
+check("...the placement cursor covers the note tool too",
+      'state.tool === "text" || state.tool === "note"' in _fn7("setTool"))
+check("Escape disarms the note tool the way it disarms Add Text (any armed tool)",
+      "if (state.tool) setTool(null);" in _H7)
+check("the Note tool's ink row shows the five highlight inks (not the text inks) "
+      "and the size stepper shows: textMode excludes a card editor, noteMode is its own",
+      'state.tool === "text" || state.textEdit !== null' in _fn7("textMode")
+      and "!(te && te.card)" in _fn7("textMode")
+      and 'te ? te.card === "note" : state.tool === "note"' in _fn7("noteMode")
+      and 'classList.toggle("textMode", on || nm)' in _SYNC7
+      and 'getElementById("abInks").classList.toggle("textMode", on)' in _SYNC7
+      and "inkNameFor(te.color)" in _SYNC7)
+check("a note's default ink is the yellow highlight ink and its default size 12",
+      '  ink: "yellow",' in _H7 and "  tsize: 12," in _H7
+      and "currentInk()" in _OTE7)
+check("picking an ink while a note card is open recolours it live, at the card's 0.85",
+      "if (noteMode()) {" in _SW7 and "hexToRgba(te.color, 0.85)" in _SW7
+      and "addHighlightFromSelection();" in _SW7
+      and _order(_SW7, "if (noteMode()) {", "addHighlightFromSelection();"))
+check("a Note-tool click opens the card editor at the click, posting nothing yet",
+      'openTextEdit(hit.page0, hit.xPt, hit.yPt, null, "note");' in _NOTECLICK7
+      and "postB64" not in _NOTECLICK7 and "setTool(null)" not in _NOTECLICK7)
+check("...and neither tool's click acts on the click that ends a card press",
+      "if (state.cardPress) return;" in _NOTECLICK7
+      and "if (state.cardPress) return;" in _TEXTCLICK7)
+check("the card editor IS openTextEdit (a card variant), not a parallel editor",
+      "function openTextEdit(page0, xPt, yPt, rec, card)" in _H7
+      and _H7.count('className = "editLayer"') == 1)
+check("...a card editor looks like its card: CARD_PAD a side in points, the ink at 0.85",
+      'el.style.padding = CARD_PAD + "px";' in _OTE7
+      and "el.style.background = hexToRgba(color, 0.85);" in _OTE7)
+check("...a highlight card edits the highlight's note and never keeps the "
+      "highlight's rect as its box",
+      'card === "hl" ? rec.note : rec.text' in _OTE7
+      and 'card !== "hl" && rec && (rec.rects || [])[0]' in _OTE7)
+check("...a note keeps its stored card box minus its margin, so an untouched "
+      "click-away is no resize",
+      "box: [r0[2] - pad, r0[3] - pad]" in _OTE7)
+check("...and measures inside the card margin, like highlightCard",
+      "TEXT_BOX_MAX_W - 2 * CARD_PAD, TEXT_BOX_MAX_H - 2 * CARD_PAD" in _TBF7)
+check("the record under edit has no static twin: notes and highlight cards are "
+      "skipped while their editor is open (the line goes with the card)",
+      _RAL7.count("if (state.textEdit && state.textEdit.id === rec.id) continue;") == 3
+      and "if (state.textEdit && state.textEdit.id === rec.id) continue;"
+      in _cut(_RAL7, 'rec.kind === "note"', "noteCardEl(")
+      and "if (state.textEdit && state.textEdit.id === rec.id) continue;"
+      in _cut(_RAL7, "if (note && first && hand) {", "pointSvg(\"cardLines\""))
+check("commit: a note posts note-add with the measured box INCLUDING CARD_PAD, "
+      "page as text-add sends it, clamped into the page",
+      'postB64("note-add", {' in _CTE7 and "page: te.page0," in _cut(_CTE7, 'postB64("note-add"')
+      and "const w = box[0] + 2 * CARD_PAD, h = box[1] + 2 * CARD_PAD;" in _CTE7
+      and "clampCard(te.page0, te.x, te.y, w, h)" in _CTE7)
+check("...an existing note posts note-update; a highlight card posts note-text",
+      'postB64("note-update", {' in _CTE7 and 'postB64("note-text", { id: te.id, text: text })' in _CTE7)
+check("Review Focus 3: an empty new note posts NOTHING (note-add is reached only "
+      "with text), an emptied note posts note-remove",
+      "if (!text) return;" in _cut(_CTE7, "if (te.card) {", 'postB64("note-add"')
+      and 'if (!text) { postB64("note-remove", { id: te.id }); return; }' in _CTE7)
+check("...an emptied highlight card posts note-text with \"\" (its card goes); an "
+      "unchanged one posts nothing, since note-text always saves",
+      "const same = text === te.text0;" in _CTE7
+      and 'if (!same) postB64("note-text"' in _CTE7)
+check("cardAt hit-tests the card under a point; the context menu, the press "
+      "and highlightAt's callers ask it FIRST",
+      "function cardAt(clientX, clientY)" in _H7
+      and 'closest(".noteCard")' in _CARDAT7 and "cardBox" in _CARDAT7
+      and "c.cardBox = box;" in _fn7("noteCardEl")
+      and "const card = cardAt(ev.clientX, ev.clientY);" in _CTX7
+      and "const rec = card ? null : highlightAt(" in _CTX7
+      and "cardAt(ev.clientX, ev.clientY)" in _MD7)
+check("highlightAt no longer hits a note's card rect as a highlight",
+      'rec.kind === "note"' in _HLAT7)
+check("Review Focus 4: a card's menu lists Edit Note, Remove Note FIRST, then the "
+      "normal tail with the occlusion items and the zoom items",
+      _order(_CTX7, 'items.push(["Edit Note"', 'items.push(["Remove Note"',
+             "if (hasSel)", "occlusionItems(", 'items.push(["Zoom In')
+      and "} else if (hasSel) {" in _CTX7)
+check("...Remove Note clears a highlight's note (the highlight stays) and removes "
+      "a free-standing note",
+      'postB64("note-text", { id: card.rec.id, text: "" })' in _CTX7
+      and 'postB64("note-remove", { id: card.rec.id })' in _CTX7)
+_OCC7 = (
+    "\n/* [label, action, disabled] rows for the context menu; the region item\n"
+    "   exists only while a marquee stands. \"Draw a diagram…\" (3/3) opens the\n"
+    "   occlusion editor on its Draw tab; it renders nothing from the page.\n"
+    "   Disabled without an editor. */\n"
+    "function occlusionItems(page0, pm, enabled) {\n"
+    "  const off = !enabled;\n"
+    "  const items = [[\"Occlude this page\", () => occludeImage(page0, null), off]];\n"
+    "  if (pm) items.push([\"Occlude this region\", () => occludeImage(pm.page0, pm), off]);\n"
+    "  items.push([\"Draw a diagram…\", () => post(\"draw-diagram\"), off]);\n"
+    "  return items;\n"
+    "}\n")
+check("the occlusion-items block is byte-for-byte what Task 6 left",
+      _cut(_H7, "/* occlusion-items:start */", "/* occlusion-items:end */") == _OCC7)
+check("note-edit (the Python dialog) is posted only with hand-drawn off: the menu "
+      "branches on state.handDrawn, the anchor exists only on the off path",
+      _H7.count('postB64("note-edit"') == 2
+      and "if (state.handDrawn) {" in _cut(_CTX7, '"Add note…"', 'postB64("note-edit"')
+      and 'postB64("note-edit"' in _cut(_RAL7, "} else if (note && first) {")
+      and "if (note && first && hand) {" in _RAL7)
+check("...with hand-drawn on, the highlight menu's note item opens the card editor "
+      "where highlightCard draws it",
+      'openTextEdit(rec.page | 0, spot.x, spot.y, rec, "hl")' in _CTX7
+      and "cardSpot(rec, W, H," in _fn7("hlCardSpot"))
+check("a press on a card is the card's: no text selection starts under it",
+      "ev.preventDefault();" in _cut(_MD7, "cardAt(ev.clientX, ev.clientY)")
+      and "state.cardPress = {" in _MD7 and "state.cardPress = null;" in _MD7)
+check("dragging sends NOTHING while moving, and only past a 3 px slop",
+      "postB64" not in _DRAGMV7 and "post(" not in _DRAGMV7
+      and "Math.hypot(dx, dy) < CARD_SLOP" in _DRAGMV7 and "const CARD_SLOP = 3;" in _H7)
+check("...and is clamped with cardSpot's bounds (0..ptW-cardW, 0..ptH-cardH)",
+      "clampCard(" in _DRAGMV7
+      and "Math.max(0, Math.min(v, Math.max(0, hi)))" in _CLAMP7
+      and "clamp(x, W - w), clamp(y, H - h)" in _CLAMP7)
+check("one message on mouseup: card-move {id,dx,dy} (the new offset from the "
+      "union's top-right, as cardSpot reads it) or note-update carrying the record",
+      _DRAGUP7.count("postB64(") == 2
+      and 'postB64("card-move", { id: rec.id, dx: p.x - right, dy: p.y - top })' in _DRAGUP7
+      and 'postB64("note-update", {' in _DRAGUP7
+      and "text: String(rec.text" in _DRAGUP7 and "w: box[2], h: box[3]" in _DRAGUP7)
+
+section("hand-drawn reader 7, fix round 1")
+check("a highlight card's editor has no grip: note-text carries no position, "
+      "so a grip move would be thrown away (drag the card itself); notes keep it",
+      'if (card !== "hl") el.appendChild(grip);' in _OTE7
+      and "el.appendChild(grip);\n" not in _OTE7.replace('if (card !== "hl") el.appendChild(grip);', ""))
+check("the drop re-reads the record and its card element by id, so a push during "
+      "the drag cannot send stale text, ink or size",
+      "const rec = state.annots.find(" in _DRAGUP7
+      and "const el = cardEl(p.card.page0, id);" in _DRAGUP7
+      and "if (!rec || !el) return;" in _DRAGUP7
+      and "const box = el.cardBox;" in _DRAGUP7
+      and "p.card.rec" not in _DRAGUP7.split("const rec = state.annots.find(", 1)[-1]
+      and "color: rec.color, size: parseFloat(rec.size)" in _DRAGUP7)
+check("...and the move follows the CURRENT element by id, not the press-time one",
+      "cardEl(p.card.page0, p.card.rec.id)" in _DRAGMV7
+      and "p.card.el.style" not in _DRAGMV7)
+check("a press whose mouseup was lost (no left button held) ends without posting, "
+      "and a moved card goes back where its record says",
+      "if (!(ev.buttons & 1)) {" in _DRAGMV7
+      and "p.live = false;" in _cut(_DRAGMV7, "if (!(ev.buttons & 1)) {", "}")
+      and "repaintAnnotPage(p.card.page0)" in _cut(_DRAGMV7, "if (!(ev.buttons & 1)) {", "return;")
+      and _order(_DRAGMV7, "if (!(ev.buttons & 1)) {", "Math.hypot(dx, dy) < CARD_SLOP"))
+check("...a press with no real movement is a click: it opens the card's editor",
+      "if (!p.moved) {" in _DRAGUP7
+      and "openTextEdit(p.card.page0, box[0], box[1], rec, kind)" in _DRAGUP7)
+check("a card is exactly its box: border-box inline, since #root * (content-box) "
+      "outranks the .noteCard rule and drew it CARD_PAD a side too big (found live)",
+      'c.style.boxSizing = "border-box";' in _fn7("noteCardEl")
+      and "#root, #root * { box-sizing: content-box; }" in _H7)
+check("__ADDON__ still appears exactly five times",
+      _H7.count("__ADDON__") == 5)
 
 raise SystemExit(report())

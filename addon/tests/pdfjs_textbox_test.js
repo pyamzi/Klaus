@@ -11,7 +11,8 @@
 // The fake layout models what the page relies on, measured in Blink
 // (see .superpowers/sdd/2026-09-30-pdf-reader/textbox-fix-report.md):
 // glyphs advance a fixed 0.5 em, a line is 1.15 em, a box wraps at its
-// width, `width: max-content` is capped by the 480px max-width, and a
+// width, `width: max-content` is capped by the max-width (480px, or the
+// inline one measureTextBox sets for a note card's margin), and a
 // single trailing "\n" adds no line (a contenteditable's Enter inserts
 // "\n\n", the second being the caret's line).
 "use strict";
@@ -54,7 +55,7 @@ function layout(node) {
   if (node.style.width === "") {
     const natural = Math.max(...lines(text).map(
       (l) => l.replace(/​/g, "").length * ADV * size));
-    width = Math.min(natural, MAX_W);
+    width = Math.min(natural, parseFloat(node.style.maxWidth) || MAX_W);
   } else {
     width = parseFloat(node.style.width);
   }
@@ -115,6 +116,7 @@ function makePage() {
     state: {
       pageDivs: [page], scale: 1, textEdit: null, textDrag: null, tsize: 12,
       pendingRepaint: new Set(), annots: [],
+      rendered: new Map([[1, { ptW: 600, ptH: 800 }]]),
     },
     posted,
   };
@@ -126,14 +128,18 @@ function makePage() {
     line(/const TEXT_SIZE_DEFAULT = [^;]+;/) +
     line(/const MAX_TEXT_CHARS = [^;]+;/) +
     line(/let textMeasurer = [^;]+;/) +
+    line(/const CARD_PAD = [^;]+;/) +
     "function postB64(kind, obj) { posted.push([kind, obj]); }\n" +
     "function post() {}\n" +
     "function repaintAnnotPage() {}\n" +
     "function syncAnnobarMode() {}\n" +
     "function currentTextInk() { return '#000000'; }\n" +
+    "function currentInk() { return '#ffd400'; }\n" +
+    "function hexToRgba(h, a) { return 'ink(' + h + ',' + a + ')'; }\n" +
     "function startTextDrag() {}\n" +
     ["sanitizeEditText", "measureTextBox", "textBoxFor", "openTextEdit",
-     "sizeTextEdit", "positionTextEdit", "closeTextEdit", "commitTextEdit"]
+     "sizeTextEdit", "positionTextEdit", "closeTextEdit", "commitTextEdit",
+     "pagePts", "clampCard"]
       .map(fn).join("");
   vm.runInContext(code, ctx);
   return ctx;
@@ -151,6 +157,8 @@ function check(name, f) {
   catch (e) { console.log(" FAIL " + name + "  " + e.message); failures.push(name); }
 }
 const px = (v) => parseFloat(v);
+// Values built inside the vm context have that realm's prototypes.
+const plain = (v) => JSON.parse(JSON.stringify(v));
 
 check("a new box sizes LIVE from measurement: 11 glyphs at 0.5 em + 1 pt, one 1.15 em line", () => {
   const p = makePage();
@@ -200,6 +208,24 @@ check("a paragraph past the 480 pt cap wraps: width 480, height of its lines at 
   const body = p.posted[0][1];
   assert.strictEqual(body.w, 480);
   assert.strictEqual(body.h, Math.ceil(Math.ceil(1200 / 480) * 13.8));
+});
+
+check("a note card measures inside its margin: maxW caps the width and the wrap, and the next plain measure is back at 480", () => {
+  const p = makePage();
+  // 948 pt of glyphs: two lines at 480, three at 468 — the wrap must follow maxW.
+  const [w, h] = vm.runInContext('measureTextBox("x".repeat(158), 12, 468)', p);
+  assert.strictEqual(w, 468);
+  assert.strictEqual(h, Math.ceil(3 * 13.8));
+  const [w2] = vm.runInContext('measureTextBox("x".repeat(200), 12)', p);
+  assert.strictEqual(w2, 480);
+});
+
+check("a note card measures under its own height cap, and the next plain measure is back at 720", () => {
+  const p = makePage();
+  const [, h] = vm.runInContext('measureTextBox("a\\n".repeat(400) + "a", 12, 468, 708)', p);
+  assert.strictEqual(h, 708);
+  const [, h2] = vm.runInContext('measureTextBox("a\\n".repeat(400) + "a", 12)', p);
+  assert.strictEqual(h2, 720);
 });
 
 check("an absurd text is capped at 720 pt tall", () => {
@@ -295,6 +321,108 @@ check("a zoom change while open re-lands --k for the new scale", () => {
   vm.runInContext("openTextEdit(0, 10, 20, null)", p);
   vm.runInContext("state.scale = 2.5; positionTextEdit();", p);
   assert.strictEqual(Number(p.state.textEdit.el.style.props["--k"]), 1 / 2.5);
+});
+
+// ---- hand-drawn reader 7: the card variant of the same editor ----
+// A note's rects[0] is the whole card, CARD_PAD (6 pt) a side included:
+// "Hi" at 12 pt measures 13 x 14 inside the margin, so the card is 25 x 26.
+const NOTE = { id: "n1", kind: "note", page: 0, text: "Hi", size: 12,
+               color: "#7fc6f2", rects: [[40, 50, 25, 26]] };
+const HL = { id: "h1", page: 0, color: "#ffd400", note: "See p. 4",
+             rects: [[10, 10, 200, 14]] };
+
+check("a Note-tool card: type, commit -> ONE note-add with the box INCLUDING CARD_PAD, the highlight ink, size 12", () => {
+  const p = makePage();
+  vm.runInContext('openTextEdit(0, 10, 20, null, "note")', p);
+  const st = p.state.textEdit.el.style;
+  assert.strictEqual(st.padding, "6px", "the margin, in points under the scale()");
+  assert.strictEqual(st.background, "ink(#ffd400,0.85)");
+  type(p, "Hi");
+  vm.runInContext("commitTextEdit()", p);
+  assert.deepStrictEqual(plain(p.posted), [["note-add", {
+    page: 0, x: 10, y: 20, text: "Hi", color: "#ffd400", size: 12, w: 25, h: 26 }]]);
+});
+
+check("Review Focus 3: a NEW note left empty or whitespace posts nothing", () => {
+  for (const t of ["", "   \n  "]) {
+    const p = makePage();
+    vm.runInContext('openTextEdit(0, 10, 20, null, "note")', p);
+    type(p, t);
+    vm.runInContext("commitTextEdit()", p);
+    assert.deepStrictEqual(plain(p.posted), [], JSON.stringify(t));
+  }
+});
+
+check("an EXISTING note emptied posts note-remove", () => {
+  const p = makePage();
+  p.state.rec = NOTE;
+  vm.runInContext('openTextEdit(0, 40, 50, state.rec, "note")', p);
+  type(p, "  ");
+  vm.runInContext("commitTextEdit()", p);
+  assert.deepStrictEqual(plain(p.posted), [["note-remove", { id: "n1" }]]);
+});
+
+check("an existing note untouched: its stored card box comes back as-is (no 12 pt growth), via note-update", () => {
+  const p = makePage();
+  p.state.rec = NOTE;
+  vm.runInContext('openTextEdit(0, 40, 50, state.rec, "note")', p);
+  const st = p.state.textEdit.el.style;
+  assert.deepStrictEqual([px(st.width), px(st.minHeight)], [13, 14], "content box = card minus margin");
+  vm.runInContext("commitTextEdit()", p);
+  assert.deepStrictEqual(plain(p.posted), [["note-update", {
+    id: "n1", x: 40, y: 50, text: "Hi", color: "#7fc6f2", size: 12, w: 25, h: 26 }]]);
+});
+
+check("a note placed at the page's corner is clamped inside it on commit (cardSpot's bounds)", () => {
+  const p = makePage();
+  vm.runInContext('openTextEdit(0, 590, 795, null, "note")', p);
+  type(p, "Hi");
+  vm.runInContext("commitTextEdit()", p);
+  const b = p.posted[0][1];
+  assert.deepStrictEqual([b.x, b.y, b.w, b.h], [600 - 25, 800 - 26, 25, 26]);
+});
+
+check("a highlight card edits rec.note, measures inside the margin (never the highlight's rect), commits note-text", () => {
+  const p = makePage();
+  p.state.rec = HL;
+  vm.runInContext('openTextEdit(0, 218, 10, state.rec, "hl")', p);
+  assert.strictEqual(p.state.textEdit.body.textContent, "See p. 4");
+  assert.strictEqual(p.state.textEdit.kept, null);
+  assert.strictEqual(px(p.state.textEdit.el.style.width), Math.ceil(8 * 6 + 1));
+  type(p, "See p. 5");
+  vm.runInContext("commitTextEdit()", p);
+  assert.deepStrictEqual(plain(p.posted), [["note-text", { id: "h1", text: "See p. 5" }]]);
+});
+
+check("Review Focus 3: a highlight card emptied posts note-text \"\"; left unchanged it posts nothing", () => {
+  const p = makePage();
+  p.state.rec = HL;
+  vm.runInContext('openTextEdit(0, 218, 10, state.rec, "hl")', p);
+  type(p, " \n ");
+  vm.runInContext("commitTextEdit()", p);
+  assert.deepStrictEqual(plain(p.posted), [["note-text", { id: "h1", text: "" }]]);
+  const q = makePage();
+  q.state.rec = HL;
+  vm.runInContext('openTextEdit(0, 218, 10, state.rec, "hl")', q);
+  vm.runInContext("commitTextEdit()", q);
+  assert.deepStrictEqual(plain(q.posted), []);
+});
+
+check("a highlight card's editor has no grip (a move would be dropped); a note's editor keeps it", () => {
+  const p = makePage();
+  p.state.rec = HL;
+  vm.runInContext('openTextEdit(0, 218, 10, state.rec, "hl")', p);
+  assert.deepStrictEqual(p.state.textEdit.el.children.map((c) => c.className), ["editBody"]);
+  vm.runInContext("closeTextEdit()", p);
+  vm.runInContext('openTextEdit(0, 10, 20, null, "note")', p);
+  assert.deepStrictEqual(p.state.textEdit.el.children.map((c) => c.className), ["editGrip", "editBody"]);
+});
+
+check("clampCard keeps a card inside the page: 0..ptW-w, 0..ptH-h", () => {
+  const p = makePage();
+  assert.deepStrictEqual(plain(vm.runInContext("clampCard(0, -5, 900, 100, 50)", p)), [0, 750]);
+  assert.deepStrictEqual(plain(vm.runInContext("clampCard(0, 550, -1, 100, 50)", p)), [500, 0]);
+  assert.deepStrictEqual(plain(vm.runInContext("clampCard(0, 30, 40, 100, 50)", p)), [30, 40]);
 });
 
 if (failures.length) {

@@ -219,6 +219,13 @@ origin, matching the native viewer and the bake pipeline exactly
   /* highlights render UNDER the text layer, above the canvas */
   .hlLayer { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
   .hlLayer .hl { position: absolute; border-radius: 2px; }
+  /* Hand-drawn highlights: ONE svg per page, drawn in page points (its
+     viewBox) so the seeded wobble scales with the page instead of
+     re-shaping at every zoom. No blend mode: multiply over a dark
+     slide turns any ink dark, so the band is the plain ink at 0.43,
+     exactly as the switch-off divs draw it. */
+  .hlLayer .roughLayer { position: absolute; left: 0; top: 0;
+                         width: 100%; height: 100%; overflow: visible; }
   /* Text boxes draw in Helvetica, the font the bake writes into the PDF
      (/Helv) and Preview draws: the UI font runs ~7% wider and made a box
      look bigger here than in Preview. */
@@ -296,6 +303,35 @@ origin, matching the native viewer and the bake pipeline exactly
     display: flex; align-items: center; justify-content: center;
     box-shadow: 0 1px 3px rgba(0,0,0,0.25);
   }
+  /* Note cards (hand-drawn reader): a free-standing note always, and a
+     highlight's note while hand-drawn is on. z 4 like .noteLayer and
+     appended after it, so it paints over the notes and under the kept
+     marquee (5). The layer lets clicks through to the text; a card
+     takes them. Fill comes from the record's ink at runtime, never a
+     hex here; the text is the dark text ink, since the page is white
+     in both themes. */
+  .cardLayer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+  .cardLayer .cardLines { position: absolute; left: 0; top: 0;
+                          width: 100%; height: 100%; overflow: visible; }
+  .noteCard { position: absolute; pointer-events: auto; box-sizing: border-box;
+              border-radius: 4px; color: var(--tink-black); cursor: pointer;
+              font-family: Helvetica, Arial, sans-serif; }
+  .noteCard .cardInk { position: absolute; left: 0; top: 0;
+                       width: 100%; height: 100%; overflow: visible; }
+  .noteCard .cardText { position: relative; white-space: pre-wrap;
+                        overflow-wrap: break-word; line-height: 1.15; }
+  /* The hand-drawn stack, switched by klausSetHandDrawn. One rule for
+     the box, the card, the measuring twin and the editor, so the twin
+     never measures in a font the box does not draw in. After every
+     base rule, so it wins; Excalifont failing falls to sans-serif. */
+  body.handDrawn .hlLayer .hltext,
+  body.handDrawn .noteCard,
+  body.handDrawn #textMeasure,
+  body.handDrawn .editLayer .editBody { font-family: "Excalifont", sans-serif; }
+  /* A text box keeps the box it was measured in, and every box made
+     with the switch off was measured in Helvetica, which Excalifont
+     outruns by 5-23%. Clipping would cut its last line; let it show. */
+  body.handDrawn .hlLayer .hltext { overflow: visible; }
   #marquee {
     position: absolute; display: none; z-index: 6; pointer-events: none;
     background: var(--accent-selection); border: 1px solid var(--accent);
@@ -390,6 +426,13 @@ origin, matching the native viewer and the bake pipeline exactly
           <path d="M2.8 3.4h8.4M7 3.4v7.8"/>
         </svg>
       </button>
+      <button id="abNote" title="Add Note" aria-pressed="false">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
+             stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <path d="M2.2 2.2h9.6v6.2l-3.4 3.4H2.2Z"/>
+          <path d="M11.8 8.4H8.4v3.4"/>
+        </svg>
+      </button>
       <div class="absep" id="abTszSep"></div>
       <span id="abTsz">
         <button id="abTszDown" title="Smaller Text">A&#8722;</button>
@@ -463,13 +506,25 @@ const state = {
   occlusionEnabled: false, // an Add/Edit editor exists (klausSetOcclusionEnabled)
   zoom: null,            // live zoom session — pinch or stepped (zoomTo)
   prevZoom: 0,           // last committed user zoom: smart zoom's way back
-  tool: null,            // "hl" | "text" | null — annobar mode
-  ink: "yellow",         // selected highlight ink — a theme --ink-* NAME
+  tool: null,            // "hl" | "text" | "note" | null — annobar mode
+  ink: "yellow",         // selected highlight ink — a theme --ink-* NAME (notes too)
   tink: "black",         // selected TEXT ink — a --tink-* NAME (K-150)
   tsize: 12,             // selected text size in points (K-150)
   textEdit: null,        // live in-place editor (K-150), see openTextEdit
   textDrag: null,        // {x0,y0,ax,ay} while the grip is being dragged
+  cardPress: null,       // the last #scroll press, when it landed on a note card
+  handDrawn: true,       // rough.js marks + Excalifont; Python pushes the pref
+  fontsWaited: false,    // the first switch-on has waited for Excalifont
 };
+
+/* rough.js is the hand-drawn path's one dependency. Without it the
+   marks draw as today's divs (the switch's off path) and the console
+   says why; Excalifont alone failing just falls through to sans-serif. */
+if (typeof rough === "undefined") {
+  state.handDrawn = false;
+  console.warn("[klaus_note] rough.js did not load; marks draw in the plain style");
+}
+document.body.classList.toggle("handDrawn", state.handDrawn);
 
 function post(msg) {
   try { pycmd("klaus_note_pdfjs:" + msg); } catch (e) { /* headless */ }
@@ -738,7 +793,8 @@ async function renderPage(num, div) {
     });
     if (task && task.promise) { try { await task.promise; } catch (e) {} }
     const spans = Array.from(textLayer.querySelectorAll("span"));
-    state.rendered.set(num, { canvas, textLayer, spans });
+    state.rendered.set(num, { canvas, textLayer, spans,
+      ptW: viewport.width / viewport.scale, ptH: viewport.height / viewport.scale });
     renderAnnotLayers(num, div);
     if (state.find.matches.length) highlightCurrentMatchIfVisible();
     if (Math.abs(viewport.scale - state.scale) > 0.0005) {
@@ -756,7 +812,7 @@ async function renderPage(num, div) {
 function teardownPage(num, div) {
   const r = state.rendered.get(num);
   if (!r || !r.canvas || !div) return;   // never tear down a mid-render claim
-  for (const cls of ["canvas.pg", ".textLayer", ".hlLayer", ".noteLayer"]) {
+  for (const cls of ["canvas.pg", ".textLayer", ".hlLayer", ".noteLayer", ".cardLayer"]) {
     const el = div.querySelector(cls);
     if (el) { try { div.removeChild(el); } catch (e) {} }
   }
@@ -834,6 +890,31 @@ window.klausSetAnnotations = function (records) {
   }
 };
 
+/* The "Hand-drawn style" preference, pushed on ready and on Save. A
+   switch repaints every rendered page through the redraw-all path
+   above. The FIRST switch-on waits for Excalifont, once: a highlight's
+   card is measured before it is placed, and measured in the fallback
+   face it would keep the wrong size until some later repaint. Only
+   that repaint waits; measureTextBox stays synchronous, which
+   openTextEdit relies on. fonts.load starts the download — fonts.ready
+   alone resolves at once while nothing has asked for the face yet. */
+window.klausSetHandDrawn = function (on) {
+  state.handDrawn = !!on && typeof rough !== "undefined";
+  document.body.classList.toggle("handDrawn", state.handDrawn);
+  if (state.handDrawn && !state.fontsWaited && document.fonts) {
+    state.fontsWaited = true;
+    document.fonts.load('12px "Excalifont"').catch(() => {})
+      .then(() => document.fonts.ready).then(repaint, repaint);
+    return;
+  }
+  repaint();
+  function repaint() {
+    state.annotsPrev = null;
+    window.klausSetAnnotations(state.annots);
+    sizeTextEdit();   // an open editor re-measures in the new face
+  }
+};
+
 function hexToRgba(hex, alpha) {
   try {
     const h = String(hex || "#fadc50").replace("#", "");
@@ -843,9 +924,15 @@ function hexToRgba(hex, alpha) {
   } catch (e) { return "rgba(250, 220, 80, " + alpha + ")"; }
 }
 
+/* Hand-drawn reader: a note card's inner margin in page points, the
+   bake's pdf_handler._NOTE_PAD_PT. A card box INCLUDES it on every
+   side — a note's rects[0] is the whole card. */
+const CARD_PAD = 6;
+const SVG_NS = "http://www.w3.org/2000/svg";
+
 function renderAnnotLayers(num, div) {
   if (!div) return;
-  for (const cls of [".hlLayer", ".noteLayer"]) {
+  for (const cls of [".hlLayer", ".noteLayer", ".cardLayer"]) {
     const old = div.querySelector(cls);
     if (old) div.removeChild(old);
   }
@@ -853,7 +940,18 @@ function renderAnnotLayers(num, div) {
   hlLayer.className = "hlLayer";
   const noteLayer = document.createElement("div");
   noteLayer.className = "noteLayer";
+  const cardLayer = document.createElement("div");
+  cardLayer.className = "cardLayer";
   const s = state.scale;
+  const hand = state.handDrawn;
+  /* The page in points, for the rough svgs' viewBox and the card
+     clamp: the render's own unrounded size (the bake clamps against the
+     same), so a card at the edge holds still across zooms. The floored
+     div px are only a fallback. */
+  const rendered = state.rendered.get(num) || {};
+  const pageW = rendered.ptW || (parseFloat(div.style.width) || 0) / s;
+  const pageH = rendered.ptH || (parseFloat(div.style.height) || 0) / s;
+  let bands = null, lines = null;   // this page's rough svgs, made on first use
   for (const rec of state.annots) {
     if ((rec.page | 0) !== num - 1) continue;   // records are 0-based
     const rects = rec.rects || [];
@@ -876,22 +974,41 @@ function renderAnnotLayers(num, div) {
          dock) and the committed text wrapped and clipped. */
       t.style.fontSize = (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) * s + "px";
       hlLayer.appendChild(t);
+    } else if (rec.kind === "note") {
+      /* A free-standing note is a card in either style, never a band:
+         its rects[0] IS the card, so nothing is measured. Its editor
+         draws it while open, like a text box's. */
+      if (state.textEdit && state.textEdit.id === rec.id) continue;
+      if (rects.length) cardLayer.appendChild(noteCardEl(rec, "note", rects[0], s));
     } else {
-      let first = null;
-      for (const r of rects) {
-        const [x, y, w, h] = r;
-        const d = document.createElement("div");
-        d.className = "hl";
-        d.style.left = x * s + "px";
-        d.style.top = y * s + "px";
-        d.style.width = w * s + "px";
-        d.style.height = h * s + "px";
-        d.style.background = hexToRgba(rec.color, 0.43);
-        hlLayer.appendChild(d);
-        if (!first) first = r;
+      if (hand) {
+        if (!bands) bands = hlLayer.appendChild(pointSvg("roughLayer", pageW, pageH));
+        roughBands(bands, rec);
+      } else {
+        for (const r of rects) {
+          const [x, y, w, h] = r;
+          const d = document.createElement("div");
+          d.className = "hl";
+          d.style.left = x * s + "px";
+          d.style.top = y * s + "px";
+          d.style.width = w * s + "px";
+          d.style.height = h * s + "px";
+          d.style.background = hexToRgba(rec.color, 0.43);
+          hlLayer.appendChild(d);
+        }
       }
+      const first = rects[0];
       const note = String(rec.note || "").trim();
-      if (note && first) {
+      if (note && first && hand) {
+        /* The card under edit is drawn by its editor; its line goes too. */
+        if (state.textEdit && state.textEdit.id === rec.id) continue;
+        /* Lines go first in the layer, so every card covers them. */
+        if (!lines) {
+          lines = cardLayer.insertBefore(pointSvg("cardLines", pageW, pageH),
+                                         cardLayer.firstChild);
+        }
+        highlightCard(rec, note, cardLayer, lines, pageW, pageH, s);
+      } else if (note && first) {
         const a = document.createElement("div");
         a.className = "noteAnchor";
         a.textContent = "✎";
@@ -909,6 +1026,7 @@ function renderAnnotLayers(num, div) {
   }
   div.appendChild(hlLayer);
   div.appendChild(noteLayer);
+  div.appendChild(cardLayer);
   /* Every overlay pass (render, refresh, zoom relayout) re-lands the
      persisted marquee at the new scale (K-100). The open text editor
      rides the same rule — it is never rebuilt, only re-landed, which
@@ -919,6 +1037,108 @@ function renderAnnotLayers(num, div) {
   if (state.textEdit && state.textEdit.page0 === num - 1) {
     positionTextEdit();
   }
+}
+
+/* An svg drawn in page points: its viewBox is w x h points and CSS
+   stretches it over its box, so whatever rough.js draws in it scales
+   with the zoom and keeps its seeded shape at every step. */
+function pointSvg(cls, w, h) {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", cls);
+  svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+  svg.setAttribute("preserveAspectRatio", "none");
+  return svg;
+}
+
+/* A highlight as marker bands: per rect, a seeded rough polygon 2 pt
+   taller than the rect (1 pt each side), in the record's ink at the
+   .hl alpha. rough's corner jitter is what roughens the ends; the
+   seed is the record's, so a repaint never re-wobbles it. */
+function roughBands(svg, rec) {
+  const rc = rough.svg(svg);
+  for (const [x, y, w, h] of rec.rects || []) {
+    const g = rc.polygon(
+      [[x, y - 1], [x + w, y - 1], [x + w, y + h + 1], [x, y + h + 1]],
+      { fill: rec.color, fillStyle: "solid", roughness: 1,
+        seed: seedFor(rec.id), stroke: "none" });
+    g.setAttribute("fill-opacity", "0.43");
+    svg.appendChild(g);
+  }
+}
+
+/* One note card at box [x, y, w, h] page points, px = pt * scale like
+   .hltext. kind is "note" (a free-standing note) or "hl" (a
+   highlight's note); data-id and data-kind are how the card editor
+   finds it. Hand-drawn: a seeded rough rounded rectangle in the
+   record's ink, filled at 0.85. Off: a plain rounded card in the same
+   ink. */
+function noteCardEl(rec, kind, box, s) {
+  const [x, y, w, h] = box;
+  const c = document.createElement("div");
+  c.className = "noteCard";
+  c.dataset.id = String(rec.id || "");
+  c.dataset.kind = kind;
+  c.cardBox = box;   /* page points, for cardAt: the drag and the editor start here */
+  c.style.left = x * s + "px";
+  c.style.top = y * s + "px";
+  c.style.width = w * s + "px";
+  c.style.height = h * s + "px";
+  c.style.padding = CARD_PAD * s + "px";
+  /* Inline: "#root *" sets content-box and outranks .noteCard's rule,
+     which drew every card 2*CARD_PAD wider and taller than its box. */
+  c.style.boxSizing = "border-box";
+  c.style.fontSize = (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) * s + "px";
+  if (state.handDrawn) {
+    const svg = pointSvg("cardInk", w, h);
+    const r = Math.min(6, w / 4, h / 4);
+    const g = rough.svg(svg).path(
+      `M${r} 0H${w - r}Q${w} 0 ${w} ${r}V${h - r}Q${w} ${h} ${w - r} ${h}` +
+      `H${r}Q0 ${h} 0 ${h - r}V${r}Q0 0 ${r} 0Z`,
+      { fill: rec.color, fillStyle: "solid", stroke: rec.color,
+        strokeWidth: 1, roughness: 1, seed: seedFor(rec.id) });
+    g.setAttribute("fill-opacity", "0.85");
+    svg.appendChild(g);
+    c.appendChild(svg);
+  } else {
+    c.style.background = hexToRgba(rec.color, 0.85);
+  }
+  const t = document.createElement("div");
+  t.className = "cardText";
+  t.textContent = String((kind === "note" ? rec.text : rec.note) || "");
+  c.appendChild(t);
+  return c;
+}
+
+/* A highlight's note as a card (hand-drawn on). Measured first — its
+   text plus CARD_PAD a side, capped like a text box — then placed by
+   cardSpot: the record's saved offset, else 8 pt right of the
+   highlight, kept in the page. A seeded rough line joins the card's
+   corner nearest the highlight to the nearest point of the highlight's
+   union. */
+function highlightCard(rec, note, layer, lines, pageW, pageH, s) {
+  const size = parseFloat(rec.size) || TEXT_SIZE_DEFAULT;
+  const [tw, th] = measureTextBox(note, size, TEXT_BOX_MAX_W - 2 * CARD_PAD,
+                               TEXT_BOX_MAX_H - 2 * CARD_PAD);
+  const cw = tw + 2 * CARD_PAD;
+  const ch = th + 2 * CARD_PAD;
+  const spot = cardSpot(rec, pageW, pageH, cw, ch);
+  layer.appendChild(noteCardEl(rec, "hl", [spot.x, spot.y, cw, ch], s));
+  let ux0 = Infinity, uy0 = Infinity, ux1 = -Infinity, uy1 = -Infinity;
+  for (const [x, y, w, h] of rec.rects || []) {
+    ux0 = Math.min(ux0, x); uy0 = Math.min(uy0, y);
+    ux1 = Math.max(ux1, x + w); uy1 = Math.max(uy1, y + h);
+  }
+  let best = null;
+  for (const [cx, cy] of [[spot.x, spot.y], [spot.x + cw, spot.y],
+                          [spot.x, spot.y + ch], [spot.x + cw, spot.y + ch]]) {
+    const px = Math.max(ux0, Math.min(cx, ux1));
+    const py = Math.max(uy0, Math.min(cy, uy1));
+    const d = Math.hypot(cx - px, cy - py);
+    if (!best || d < best[0]) best = [d, cx, cy, px, py];
+  }
+  if (!best || !(best[0] > 0)) return;   // the card sits on its highlight
+  lines.appendChild(rough.svg(lines).line(best[1], best[2], best[3], best[4], {
+    stroke: rec.color, strokeWidth: 1.5, roughness: 1, seed: seedFor(rec.id) }));
 }
 
 /* Rects on one line, folded into one rect per run (K-149).
@@ -1046,12 +1266,13 @@ document.addEventListener("selectionchange", () => {
   _selT = setTimeout(() => postB64("sel", { text: String(window.getSelection() || "") }), 150);
 });
 
-/* Topmost highlight record under (page0, xPt, yPt), like _highlight_at. */
+/* Topmost highlight record under (page0, xPt, yPt), like _highlight_at.
+   A note is a card, hit by cardAt (asked first), never a highlight. */
 function highlightAt(page0, xPt, yPt, tol) {
   tol = tol || 3;
   for (let i = state.annots.length - 1; i >= 0; i--) {
     const rec = state.annots[i];
-    if ((rec.page | 0) !== page0) continue;
+    if ((rec.page | 0) !== page0 || rec.kind === "note") continue;
     for (const r of rec.rects || []) {
       const [x, y, w, h] = r;
       if (x - tol <= xPt && xPt <= x + w + tol &&
@@ -1059,6 +1280,51 @@ function highlightAt(page0, xPt, yPt, tol) {
     }
   }
   return null;
+}
+
+/* The note card under a client point: {el, rec, kind, page0, box}, or
+   null. Cards take pointer events over the text, so the topmost element
+   there is the card (an open editor above one is not). box is the card
+   in page points as drawn (noteCardEl's cardBox). Every press, click
+   and context menu asks this before highlightAt. */
+function cardAt(clientX, clientY) {
+  const hit = document.elementFromPoint(clientX, clientY);
+  const el = hit && hit.closest ? hit.closest(".noteCard") : null;
+  if (!el || !el.cardBox) return null;
+  const rec = state.annots.find((r) => String(r.id || "") === el.dataset.id);
+  if (!rec) return null;
+  return { el, rec, kind: el.dataset.kind, page0: rec.page | 0,
+           box: el.cardBox.slice() };
+}
+
+/* A page's size in points: the render's unrounded size, else the div's
+   (renderAnnotLayers' rule). */
+function pagePts(page0) {
+  const r = state.rendered.get(page0 + 1) || {};
+  const div = state.pageDivs[page0];
+  const s = state.scale || 1;
+  return [r.ptW || (div ? (parseFloat(div.style.width) || 0) / s : 0),
+          r.ptH || (div ? (parseFloat(div.style.height) || 0) / s : 0)];
+}
+
+/* A w x h card at (x, y) kept inside its page with cardSpot's bounds:
+   0..ptW-w, 0..ptH-h. A page of unknown size leaves it be. */
+function clampCard(page0, x, y, w, h) {
+  const [W, H] = pagePts(page0);
+  if (!W || !H) return [x, y];
+  const clamp = (v, hi) => Math.max(0, Math.min(v, Math.max(0, hi)));
+  return [clamp(x, W - w), clamp(y, H - h)];
+}
+
+/* Where highlightCard draws rec's card (an empty one, for a highlight
+   with no note yet): the menu opens the card editor there. */
+function hlCardSpot(rec) {
+  const size = parseFloat(rec.size) || TEXT_SIZE_DEFAULT;
+  const [tw, th] = measureTextBox(String(rec.note || "").trim(), size,
+                                  TEXT_BOX_MAX_W - 2 * CARD_PAD,
+                                  TEXT_BOX_MAX_H - 2 * CARD_PAD);
+  const [W, H] = pagePts(rec.page | 0);
+  return cardSpot(rec, W, H, tw + 2 * CARD_PAD, th + 2 * CARD_PAD);
 }
 
 /* ==== clipboard helpers ============================================ */
@@ -1194,9 +1460,20 @@ document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
   ev.preventDefault();
   const sel = window.getSelection();
   const hasSel = sel && !sel.isCollapsed && String(sel).trim().length > 0;
-  const rec = highlightAt(hit.page0, hit.xPt, hit.yPt);
+  /* A card first: it sits over the text and the highlight it belongs to.
+     Its two items lead; the page/occlusion/zoom tail follows as ever. */
+  const card = cardAt(ev.clientX, ev.clientY);
+  const rec = card ? null : highlightAt(hit.page0, hit.xPt, hit.yPt);
   const items = [];
-  if (hasSel) {
+  if (card) {
+    items.push(["Edit Note", () => openTextEdit(
+      card.page0, card.box[0], card.box[1], card.rec, card.kind)]);
+    /* A highlight keeps itself: only its note (and so its card) goes. */
+    items.push(["Remove Note", () => (card.kind === "hl"
+      ? postB64("note-text", { id: card.rec.id, text: "" })
+      : postB64("note-remove", { id: card.rec.id }))]);
+    items.push(null);
+  } else if (hasSel) {
     items.push(["Copy", () => postB64("copy-text", { text: String(sel) })]);
     items.push(["Copy Selection as Image", () => {
       const map = selectionRectMap();
@@ -1229,8 +1506,16 @@ document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
       items.push(["Remove Text", () => postB64("hl-remove", { id: rec.id })]);
     } else {
       const hasNote = String(rec.note || "").trim().length > 0;
-      items.push([hasNote ? "Edit note…" : "Add note…",
-                  () => postB64("note-edit", { id: rec.id })]);
+      items.push([hasNote ? "Edit note…" : "Add note…", () => {
+        /* Hand-drawn: the note is a card, typed in place. Off: today's
+           dialog, the only path that still posts note-edit. */
+        if (state.handDrawn) {
+          const spot = hlCardSpot(rec);
+          openTextEdit(rec.page | 0, spot.x, spot.y, rec, "hl");
+        } else {
+          postB64("note-edit", { id: rec.id });
+        }
+      }]);
       items.push(["Remove Highlight", () => postB64("hl-remove", { id: rec.id })]);
     }
     items.push(null);
@@ -1359,6 +1644,7 @@ function persistMarquee(page0, x, y, w, h) {
 }
 
 document.getElementById("scroll").addEventListener("mousedown", (ev) => {
+  state.cardPress = null;
   if (ev.button !== 0) return;
   if (ev.altKey) {
     /* Alt+press starts a NEW marquee — collapse the persisted one
@@ -1375,6 +1661,94 @@ document.getElementById("scroll").addEventListener("mousedown", (ev) => {
      the region is the drag-out arm and must not. */
   if (ev.target && ev.target.id === "marqueeKeep") return;
   clearPersistMarquee();
+  /* A press on a note card is the card's: released in place it opens
+     the editor, moved it drags the card (the card-drag handlers below).
+     preventDefault: no text selection starts under the card, and an
+     open editor keeps focus, so no blur repaint detaches this card
+     mid-press. */
+  const card = cardAt(ev.clientX, ev.clientY);
+  if (card) {
+    ev.preventDefault();
+    state.cardPress = { card, x0: ev.clientX, y0: ev.clientY,
+                        x: card.box[0], y: card.box[1], moved: false, live: true };
+  }
+});
+
+/* Card drag. Nothing crosses the bridge while moving: the card's own
+   element follows the pointer (clamped like cardSpot), and the drop
+   sends ONE message — card-move with the highlight card's new offset
+   from the union's top-right (what rec.card stores), or note-update
+   carrying the note's record as it is, at its new spot. A press that
+   never wandered past CARD_SLOP is a click: it opens the editor. The
+   press stays in state.cardPress (not live) until the next press, so
+   the click that follows this mouseup places no text box or note. */
+const CARD_SLOP = 3;   // px
+
+/* The card element drawn for record id on page0 now. A push rebuilds
+   .cardLayer, so the element a press found may be gone by the drop. */
+function cardEl(page0, id) {
+  const div = state.pageDivs[page0];
+  if (!div) return null;
+  for (const c of div.querySelectorAll(".cardLayer .noteCard")) {
+    if (c.dataset.id === String(id || "")) return c;
+  }
+  return null;
+}
+
+document.addEventListener("mousemove", (ev) => {
+  /* card-drag:move */
+  const p = state.cardPress;
+  if (!p || !p.live) return;
+  if (!(ev.buttons & 1)) {
+    /* The mouseup went elsewhere (outside the window): end the press,
+       post nothing, and put a moved card back where its record says. */
+    p.live = false;
+    if (p.moved) repaintAnnotPage(p.card.page0);
+    return;
+  }
+  const dx = ev.clientX - p.x0, dy = ev.clientY - p.y0;
+  if (!p.moved && Math.hypot(dx, dy) < CARD_SLOP) return;
+  p.moved = true;
+  const s = state.scale || 1;
+  const b = p.card.box;
+  [p.x, p.y] = clampCard(p.card.page0, b[0] + dx / s, b[1] + dy / s, b[2], b[3]);
+  const el = cardEl(p.card.page0, p.card.rec.id);
+  if (el) {
+    el.style.left = p.x * s + "px";
+    el.style.top = p.y * s + "px";
+  }
+});
+document.addEventListener("mouseup", () => {
+  /* card-drag:up */
+  const p = state.cardPress;
+  if (!p || !p.live) return;
+  p.live = false;
+  /* The record and its card as they are NOW: a push mid-drag may have
+     changed the note's text or ink, or removed it. Gone: nothing. */
+  const id = p.card.rec.id, kind = p.card.kind;
+  const rec = state.annots.find((r) => r.id === id);
+  const el = cardEl(p.card.page0, id);
+  if (!rec || !el) return;
+  const box = el.cardBox;
+  if (!p.moved) {
+    openTextEdit(p.card.page0, box[0], box[1], rec, kind);
+    return;
+  }
+  if (kind === "hl") {
+    let right = 0, top = Infinity;   /* cardSpot's anchor, exactly */
+    for (const [x, y, w] of rec.rects || []) {
+      right = Math.max(right, x + w);
+      top = Math.min(top, y);
+    }
+    if (!isFinite(top)) top = 0;
+    postB64("card-move", { id: rec.id, dx: p.x - right, dy: p.y - top });
+  } else {
+    postB64("note-update", {
+      id: rec.id, x: p.x, y: p.y, text: String(rec.text || ""),
+      color: rec.color, size: parseFloat(rec.size) || TEXT_SIZE_DEFAULT,
+      w: box[2], h: box[3],
+    });
+  }
 });
 document.addEventListener("mousemove", (ev) => {
   if (!state.marquee) return;
@@ -1606,7 +1980,8 @@ async function refreshPage(num, div) {
     }
     textLayer.style.visibility = "";
     const spans = Array.from(textLayer.querySelectorAll("span"));
-    state.rendered.set(num, { canvas, textLayer, spans });
+    state.rendered.set(num, { canvas, textLayer, spans,
+      ptW: viewport.width / viewport.scale, ptH: viewport.height / viewport.scale });
     renderAnnotLayers(num, div);
     if (state.find.matches.length) highlightCurrentMatchIfVisible();
   } catch (e) {
@@ -1690,13 +2065,13 @@ document.getElementById("annobar").addEventListener(
 
 function setTool(tool) {
   state.tool = state.tool === tool ? null : tool;
-  for (const [id, name] of [["abHl", "hl"], ["abText", "text"]]) {
+  for (const [id, name] of [["abHl", "hl"], ["abText", "text"], ["abNote", "note"]]) {
     const b = document.getElementById(id);
     b.classList.toggle("active", state.tool === name);
     b.setAttribute("aria-pressed", String(state.tool === name));
   }
   document.getElementById("scroll").classList.toggle(
-    "textTool", state.tool === "text");
+    "textTool", state.tool === "text" || state.tool === "note");
   syncAnnobarMode();   /* K-150: the ink row follows the armed tool */
 }
 
@@ -1711,6 +2086,8 @@ document.getElementById("abHl").addEventListener("click", () => {
 });
 document.getElementById("abText").addEventListener(
   "click", () => setTool("text"));
+document.getElementById("abNote").addEventListener(
+  "click", () => setTool("note"));
 
 /* Ink swatches: pick the colour the next highlight is minted in. The
    pressed swatch is the only "selected" cue — the fills stay at full
@@ -1736,6 +2113,17 @@ for (const sw of document.querySelectorAll("#abInks .inkSw")) {
     }
     if (!sw.dataset.ink) return;   /* black is text-only */
     state.ink = sw.dataset.ink;
+    if (noteMode()) {
+      /* A note's ink is a highlight ink. An open note card recolours
+         live; nothing is highlighted from a selection here. */
+      const te = state.textEdit;
+      if (te) {
+        te.color = currentInk() || te.color;
+        te.el.style.background = hexToRgba(te.color, 0.85);
+      }
+      syncAnnobarMode();
+      return;
+    }
     syncAnnobarMode();
     if (selectionRectMap()) addHighlightFromSelection();
   });
@@ -1807,6 +2195,7 @@ document.addEventListener("mouseup", () => {
    request to commit it and open another one on top. */
 document.getElementById("scroll").addEventListener("click", (ev) => {
   if (state.tool !== "text" || ev.button !== 0) return;
+  if (state.cardPress) return;   /* the press was a card's (its mouseup acted) */
   const hit = pageAndPoint(ev.clientX, ev.clientY);
   if (!hit) return;
   ev.preventDefault();
@@ -1823,6 +2212,20 @@ document.getElementById("scroll").addEventListener("click", (ev) => {
     return;
   }
   openTextEdit(hit.page0, hit.xPt, hit.yPt, null);
+});
+
+/* Note tool: the text tool's twin. A click places an empty card at
+   that point (its top-left) and opens its editor; the tool stays
+   armed; nothing is posted until the commit, and an empty card posts
+   nothing at all. */
+document.getElementById("scroll").addEventListener("click", (ev) => {
+  if (state.tool !== "note" || ev.button !== 0) return;
+  if (state.cardPress) return;   /* the press was a card's (its mouseup acted) */
+  const hit = pageAndPoint(ev.clientX, ev.clientY);
+  if (!hit) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  openTextEdit(hit.page0, hit.xPt, hit.yPt, null, "note");
 });
 
 /* ==== in-place text editor (K-150) ================================= */
@@ -1878,7 +2281,8 @@ function sanitizeEditText(value) {
    same text always measures the same and a click-away is a no-op.
    An empty box is one line tall. */
 let textMeasurer = null;
-function measureTextBox(text, size) {
+function measureTextBox(text, size, maxW, maxH) {
+  const cap = maxW || TEXT_BOX_MAX_W;   // a card measures inside its margin
   let m = textMeasurer;
   if (!m || !m.isConnected) {
     m = textMeasurer = document.createElement("div");
@@ -1886,10 +2290,11 @@ function measureTextBox(text, size) {
     document.getElementById("root").appendChild(m);
   }
   m.style.fontSize = size + "px";
+  m.style.maxWidth = cap + "px";
   m.textContent = text || "\u200b";
   const r = m.getBoundingClientRect();
-  return [Math.min(Math.ceil(r.width + 1), TEXT_BOX_MAX_W),
-          Math.min(Math.ceil(r.height), TEXT_BOX_MAX_H)];
+  return [Math.min(Math.ceil(r.width + 1), cap),
+          Math.min(Math.ceil(r.height), maxH || TEXT_BOX_MAX_H)];
 }
 
 /* The box the editor shows and the commit sends. A re-opened record
@@ -1900,7 +2305,11 @@ function textBoxFor(te, text) {
   if (te.kept && text === te.kept.text && te.size === te.kept.size) {
     return te.kept.box;
   }
-  return measureTextBox(text, te.size);
+  /* A card's text measures inside its CARD_PAD margin, as highlightCard. */
+  return te.card
+    ? measureTextBox(text, te.size,
+                     TEXT_BOX_MAX_W - 2 * CARD_PAD, TEXT_BOX_MAX_H - 2 * CARD_PAD)
+    : measureTextBox(text, te.size);
 }
 
 /* currentInk()'s sibling for the text row: the swatch's own theme
@@ -1930,21 +2339,48 @@ function tinkNameFor(hex) {
   return null;   // an adopted box in some colour the row does not offer
 }
 
+/* tinkNameFor's twin for a note card's highlight ink. */
+function inkNameFor(hex) {
+  const want = String(hex || "").trim().toLowerCase();
+  if (!want) return null;
+  const css = getComputedStyle(document.documentElement);
+  for (const sw of document.querySelectorAll("#abInks .inkSw")) {
+    const name = sw.dataset.ink;
+    if (name && css.getPropertyValue("--ink-" + name).trim().toLowerCase() === want) {
+      return name;
+    }
+  }
+  return null;
+}
+
 /* The annobar is in text mode while the tool is armed OR a box is
    open: the swatch row repaints to the text inks, a black swatch
    joins it, and the size stepper appears. */
 function textMode() {
-  return state.tool === "text" || state.textEdit !== null;
+  const te = state.textEdit;
+  return (state.tool === "text" || state.textEdit !== null) && !(te && te.card);
+}
+
+/* Note mode: the Note tool armed, or a note card open. The row keeps
+   the five highlight inks (a note's ink is one) and the size stepper
+   shows. A highlight's card is neither mode: note-text carries only
+   text, so its ink and size are not the editor's to change. */
+function noteMode() {
+  const te = state.textEdit;
+  return te ? te.card === "note" : state.tool === "note";
 }
 
 function syncAnnobarMode() {
   const on = textMode();
+  const nm = noteMode();
   const te = state.textEdit;
-  document.getElementById("annobar").classList.toggle("textMode", on);
+  /* annobar.textMode is what shows the size stepper; abInks.textMode
+     is what turns the row over to the text inks. */
+  document.getElementById("annobar").classList.toggle("textMode", on || nm);
   document.getElementById("abInks").classList.toggle("textMode", on);
   const selected = on
     ? (te ? tinkNameFor(te.color) : state.tink)
-    : state.ink;
+    : (nm && te) ? inkNameFor(te.color) : state.ink;
   for (const sw of document.querySelectorAll("#abInks .inkSw")) {
     const name = on ? sw.dataset.tink : sw.dataset.ink;
     const active = !!name && name === selected;
@@ -1971,8 +2407,14 @@ function textRecordAt(page0, xPt, yPt) {
    box; passing a record re-edits it in place (its static twin is
    skipped in renderAnnotLayers meanwhile, so nothing ghosts under the
    live one). Committing an already-open box first means the "one at a
-   time" rule needs no singleton bookkeeping. */
-function openTextEdit(page0, xPt, yPt, rec) {
+   time" rule needs no singleton bookkeeping.
+
+   card === "note" | "hl" opens the same editor on a note card at its
+   top-left (xPt, yPt): a free-standing note (rec null = a new one), or
+   a highlight's note (rec is the highlight). It looks like its card —
+   the ink at 0.85 under dark text, CARD_PAD a side — and its text
+   measures inside that margin, so the box it commits is the card. */
+function openTextEdit(page0, xPt, yPt, rec, card) {
   if (state.textEdit) commitTextEdit();
   const div = state.pageDivs[page0];
   if (!div) return;
@@ -1987,22 +2429,36 @@ function openTextEdit(page0, xPt, yPt, rec) {
   try { body.contentEditable = "plaintext-only"; } catch (e) {}
   if (!body.isContentEditable) body.contentEditable = "true";
   body.spellcheck = false;
-  body.textContent = rec ? String(rec.text || "") : "";
-  el.appendChild(grip);
+  body.textContent = rec
+    ? String((card === "hl" ? rec.note : rec.text) || "") : "";
+  /* A highlight's card moves by dragging the card itself: note-text
+     carries no position, so a grip move would be thrown away. */
+  if (card !== "hl") el.appendChild(grip);
   el.appendChild(body);
   const color = (rec && rec.color)
-    ? String(rec.color) : (currentTextInk() || "");
+    ? String(rec.color) : ((card ? currentInk() : currentTextInk()) || "");
   const size = rec
     ? (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) : state.tsize;
-  body.style.color = color;
+  if (card) {
+    el.style.padding = CARD_PAD + "px";   // POINTS, like the box
+    el.style.background = hexToRgba(color, 0.85);
+    el.style.borderRadius = "4px";
+    body.style.color = "var(--tink-black)";
+  } else {
+    body.style.color = color;
+  }
   body.style.fontSize = size + "px";   // POINTS — scale() carries it
-  const r0 = rec && (rec.rects || [])[0];
+  /* A highlight's rects[0] is its text, not its card: nothing kept. */
+  const r0 = card !== "hl" && rec && (rec.rects || [])[0];
+  const pad = card ? 2 * CARD_PAD : 0;
   state.textEdit = {
     id: rec ? String(rec.id || "") : null,
+    card: card || null,
     page0: page0, x: xPt, y: yPt, color: color, size: size,
     el: el, body: body,
+    text0: sanitizeEditText(body.textContent),
     kept: r0 ? { text: String(rec.text || ""), size: size,
-                 box: [r0[2], r0[3]] } : null,
+                 box: [r0[2] - pad, r0[3] - pad] } : null,
   };
   /* Swallow mousedown so the press belongs to the caret: #scroll's
      handler would otherwise collapse a persisted marquee, and an
@@ -2122,7 +2578,37 @@ function commitTextEdit() {
      sent: Python stores this box, so the .hltext that replaces the
      editor is the box the text was laid out in. */
   const box = textBoxFor(te, text);
+  if (te.card === "hl") {
+    /* A highlight's note: "" clears it, and Python drops the card with
+       it. note-text saves on every post, so an unchanged note posts
+       nothing and its card comes straight back. */
+    const same = text === te.text0;
+    closeTextEdit(same);
+    if (!same) postB64("note-text", { id: te.id, text: text });
+    return;
+  }
   closeTextEdit(!te.id);   /* an existing record: let the push repaint */
+  if (te.card) {
+    /* A note: rects[0] is the whole card, CARD_PAD a side included,
+       kept inside the page. A new one left empty posts nothing; an
+       existing one emptied is removed. */
+    const w = box[0] + 2 * CARD_PAD, h = box[1] + 2 * CARD_PAD;
+    const [x, y] = clampCard(te.page0, te.x, te.y, w, h);
+    if (!te.id) {
+      if (!text) return;
+      postB64("note-add", {
+        page: te.page0, x: x, y: y,
+        text: text, color: te.color, size: te.size, w: w, h: h,
+      });
+      return;
+    }
+    if (!text) { postB64("note-remove", { id: te.id }); return; }
+    postB64("note-update", {
+      id: te.id, x: x, y: y,
+      text: text, color: te.color, size: te.size, w: w, h: h,
+    });
+    return;
+  }
   if (!te.id) {
     if (!text) return;
     postB64("text-add", {
