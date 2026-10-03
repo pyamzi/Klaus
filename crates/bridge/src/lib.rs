@@ -14,7 +14,7 @@ use anki_proto::collection::{CloseCollectionRequest, OpenCollectionRequest};
 use anki_proto::generic;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, Request, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -203,6 +203,7 @@ const HOOKS: &[&str] = &[
     "importDialogRequireClose",
     "searchInBrowser",
     "closeAddCards",
+    "closeEditCurrent",
     "openFilePicker",
     "askUser",
     "showMessageBox",
@@ -850,11 +851,48 @@ fn save_deck_configs(state: AppState, body: Bytes) -> Response {
     let compute_all = req.mode() == UpdateDeckConfigsMode::ComputeAllParams;
     // ponytail: no progress window during the save (Anki shows one); the page's own
     // Optimize button has progress. Add an overlay polling latestProgress if saves drag.
-    tokio::task::spawn_blocking(move || match state.bridge.call_trusted("updateDeckConfigs", &body) {
-        Ok(_) if !compute_all => {
-            (state.hook)("deckOptionsRequireClose", &[]);
+    save_in_background(state, "updateDeckConfigs", body, (!compute_all).then_some("deckOptionsRequireClose"))
+}
+
+/// Like Anki's change-notetype dialog: apply the mapping, then close on success.
+fn change_notetype(state: AppState, headers: &HeaderMap, body: Bytes) -> Response {
+    let Ok(mut req) = anki_proto::notetypes::ChangeNotetypeRequest::decode(body.as_ref()) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "invalid changeNotetype request").into_response();
+    };
+    // Qt supplies the dialog's selection; Klaus's page URL carries it as repeated
+    // ?nid=<note ID> parameters. Anki's page itself sends no note_ids.
+    if req.note_ids.is_empty() {
+        if let Some(page) = headers.get(header::REFERER)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|url| reqwest::Url::parse(url).ok())
+            .filter(|url| url.origin().ascii_serialization() == &*state.origin && url.path().starts_with("/change-notetype/"))
+        {
+            let ids: Result<Vec<i64>, _> = page.query_pairs()
+                .filter(|(key, _)| key == "nid")
+                .map(|(_, value)| value.parse())
+                .collect();
+            let Ok(ids) = ids else {
+                return (StatusCode::BAD_REQUEST, "invalid changeNotetype note selection").into_response();
+            };
+            req.note_ids = ids;
         }
-        Ok(_) => {}
+    }
+    if req.note_ids.is_empty() || req.note_ids.iter().any(|id| *id <= 0) {
+        return (StatusCode::BAD_REQUEST, "changeNotetype requires selected note IDs").into_response();
+    }
+    req.note_ids.sort_unstable();
+    req.note_ids.dedup();
+    state.bridge.touch();
+    save_in_background(state, "changeNotetype", req.encode_to_vec().into(), Some("closeEditCurrent"))
+}
+
+fn save_in_background(state: AppState, method: &'static str, body: Bytes, close: Option<&'static str>) -> Response {
+    tokio::task::spawn_blocking(move || match state.bridge.call_trusted(method, &body) {
+        Ok(_) => {
+            if let Some(close) = close {
+                (state.hook)(close, &[]);
+            }
+        }
         Err(err) => {
             let text = match err {
                 CallError::Backend(msg) => msg,
@@ -923,7 +961,7 @@ async fn require_cookie(State(state): State<AppState>, req: Request, next: Next)
     next.run(req).await
 }
 
-async fn anki_method(State(state): State<AppState>, UrlPath(method): UrlPath<String>, body: Bytes) -> Response {
+async fn anki_method(State(state): State<AppState>, UrlPath(method): UrlPath<String>, headers: HeaderMap, body: Bytes) -> Response {
     if HOOKS.contains(&method.as_str()) {
         let hook = state.hook.clone();
         return match tokio::task::spawn_blocking(move || hook(&method, &body)).await {
@@ -934,6 +972,9 @@ async fn anki_method(State(state): State<AppState>, UrlPath(method): UrlPath<Str
     }
     if method == "updateDeckConfigs" {
         return save_deck_configs(state, body);
+    }
+    if method == "changeNotetype" {
+        return change_notetype(state, &headers, body);
     }
     // Polls don't count as activity, or the app would never look quiet to auto sync.
     if !matches!(method.as_str(), "klausSyncOutcome" | "latestProgress" | "mediaSyncStatus" | "klausSyncAccount") {
