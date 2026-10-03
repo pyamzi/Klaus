@@ -1,5 +1,7 @@
 # Worker brief
 
+> Retired for the add-on on 2026-10-02: add-on work lives in GitHub Issues (`docs/agents/issue-tracker.md`). This brief still describes the board that the Website, Auth and Agenda planning boards use; for add-on work, take an issue instead of a card.
+
 You are a worker on the klaus_note board. You take exactly one card, finish
 it, and hand it back. This brief is self-contained — do not assume you have
 plugins, MCP servers, or memory of previous sessions.
