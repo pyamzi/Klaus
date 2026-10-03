@@ -358,6 +358,21 @@ COLOR_THEMES.update({
     "dracula": _community_preset("#7C53C3", None, "#BD93F9"),
     # Claude's terracotta ("Crail"), Anthropic's primary accent.
     "claude": _community_preset("#D97757"),
+    # Zinc: the Klaus Note app's own look (shadcn-svelte preset
+    # b2GUtMueeu), a near-black accent that flips to zinc-200 in dark.
+    # The only preset that also sets on_accent: its dark fill is light,
+    # so the text on it is dark.
+    "zinc": {
+        False: {"blue": "#18181B", "blue_hover": "#27272A",
+                "blue_pressed": "#09090B", "blue_border": "none",
+                "blue_bright": "#71717B", "blue_accent": "#18181B",
+                "on_accent": "#FAFAFA"},
+        True:  {"blue": "#E4E4E7", "blue_hover": "#D4D4D8",
+                "blue_pressed": "#A1A1AA",
+                "blue_border": "1px solid #71717B",
+                "blue_bright": "#9F9FA9", "blue_accent": "#E4E4E7",
+                "on_accent": "#18181B"},
+    },
 })
 
 
@@ -516,7 +531,7 @@ def dialog_qss(night: bool) -> str:
     QPushButton:hover {{ background-color: {c['grey_light']}; }}
     QPushButton:pressed {{ background-color: {c['grey_mid']}; }}
     QPushButton:default, QPushButton#PrimaryButton {{
-        background-color: {c['blue']}; color: white;
+        background-color: {c['blue']}; color: {c['on_accent']};
     }}
     QPushButton:default:hover, QPushButton#PrimaryButton:hover {{
         background-color: {c['blue_hover']};
@@ -611,7 +626,7 @@ def dialog_qss(night: bool) -> str:
     }}
     QComboBox QAbstractItemView::item:selected {{
         background-color: {c['blue_accent']};
-        color: white;
+        color: {c['on_accent']};
     }}
     /* SynapsePro settings cards (K-105): QFrame#CardFrame is the
        section container, QLabel#SubHeaderLabel its heading, and the
@@ -978,7 +993,7 @@ def assistant_dock_qss(night: bool) -> str:
     }}
     QDockWidget#KlausAssistantDock QPushButton {{
         background-color: {c['blue']};
-        color: white;
+        color: {c['on_accent']};
         border: {c['blue_border']};
         border-radius: 8px;
         padding: 6px 16px;
@@ -1608,7 +1623,7 @@ def utility_window_qss(night: bool) -> str:
     }}
     QPushButton:default {{
         background-color: {c['blue']};
-        color: white;
+        color: {c['on_accent']};
         border: 1px solid transparent;
     }}
     QPushButton:default:hover {{

@@ -105,13 +105,14 @@ section("colour themes (K-107 — SynapsePro's accent presets)")
 BLUE_KEYS = {"blue", "blue_hover", "blue_pressed", "blue_border",
              "blue_bright", "blue_accent"}
 check("every preset ships light AND dark override sets — "
-      "SynapsePro's six, the community palettes, and Claude",
+      "SynapsePro's six, the community palettes, Claude, and the app's zinc",
       set(theme.COLOR_THEMES) == {
           "ocean", "orchid", "forest", "deluge", "horizon", "dusty",
           "nord", "solarized", "catppuccin", "gruvbox", "everforest",
-          "dracula", "claude"}
+          "dracula", "claude", "zinc"}
       and all(set(t) == {False, True}
-              and set(t[False]) == BLUE_KEYS == set(t[True])
+              and set(t[False]) - {"on_accent"} == BLUE_KEYS
+              == set(t[True]) - {"on_accent"}
               for t in theme.COLOR_THEMES.values()))
 check("community presets carry their canonical colours",
       theme.COLOR_THEMES["nord"][False]["blue"] == "#5E81AC"
@@ -125,9 +126,16 @@ check("a palette's canonical dark bright is also its dark accent",
           == theme.COLOR_THEMES[n][True]["blue_bright"]
           for n in ("nord", "dracula", "claude", "solarized")))
 check("only blue-family tokens are overridden — backgrounds and text "
-      "always come from the base palettes",
-      all(k.startswith("blue") for t in theme.COLOR_THEMES.values()
+      "always come from the base palettes (zinc alone adds on_accent: "
+      "its dark fill is light, so the text on it must be dark)",
+      all(k.startswith("blue") or (name == "zinc" and k == "on_accent")
+          for name, t in theme.COLOR_THEMES.items()
           for n in (False, True) for k in t[n]))
+check("zinc is the app's preset: near-black light, zinc-200 dark, dark text on it",
+      theme.COLOR_THEMES["zinc"][False]["blue"] == "#18181B"
+      and theme.COLOR_THEMES["zinc"][True]["blue"] == "#E4E4E7"
+      and theme.COLOR_THEMES["zinc"][True]["on_accent"] == "#18181B"
+      and theme.COLOR_THEMES["zinc"][False]["on_accent"] == "#FAFAFA")
 check("default theme is ocean and matches the base palette",
       theme.get_active_theme() == "ocean"
       and theme.palette(False)["blue"] == "#0071D3")

@@ -211,7 +211,7 @@ removed. Use the external MCP client setup below.
   default-blue, `orchid`, `forest`, `deluge`, `horizon`, `dusty`),
   the community palettes (`nord`, `solarized`, `catppuccin`,
   `gruvbox`, `everforest`, `dracula`), `claude` (Anthropic's
-  terracotta), or `custom` to use `color_theme_custom`.
+  terracotta), `zinc` (the Klaus Note app's near-black accent), or `custom` to use `color_theme_custom`.
   Applied to buttons, pills, highlights and the star logo everywhere
   Klaus draws. Pick it in **Klaus Note Preferences → Appearance →
   Accent color** — the row of color squares, last one being your own

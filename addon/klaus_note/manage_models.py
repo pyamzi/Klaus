@@ -1619,7 +1619,7 @@ def manage_models_dialog(*_args: Any) -> None:
             state.set("color_theme_custom", chosen.name())
         _pick_accent(_theme_presets.CUSTOM_THEME)
 
-    # 14 swatches (13 presets + custom) — wrapped 7 per row so the
+    # 15 swatches (14 presets + custom) — wrapped 7 per row so the
     # control side of the row stays narrow enough for a compact dialog.
     from aqt.qt import QGridLayout as _QGridLayout
 
