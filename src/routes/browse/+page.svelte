@@ -30,9 +30,9 @@
   import { onMount } from "svelte";
   import { cardBodyClass, cardFrameSrc, night, postToCard, renderCard } from "$lib/card";
   import Sidebar from "./Sidebar.svelte";
-  import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
-  import Columns3Icon from "@lucide/svelte/icons/columns-3";
-  import EyeIcon from "@lucide/svelte/icons/eye";
+  import { IconArrowLeft as ArrowLeftIcon } from "@tabler/icons-svelte";
+  import { IconColumns3 as Columns3Icon } from "@tabler/icons-svelte";
+  import { IconEye as EyeIcon } from "@tabler/icons-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";

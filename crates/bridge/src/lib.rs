@@ -430,7 +430,7 @@ impl Bridge {
             "convertPastedImage" => {
                 let req = ConvertPastedImageRequest::decode(input).map_err(bad)?;
                 let data = convert_image(&req.data, &req.ext)
-                    .ok_or_else(|| CallError::Backend("Klaus can't read this image format.".into()))?;
+                    .ok_or_else(|| CallError::Backend("KlausNote can't read this image format.".into()))?;
                 Ok(ConvertPastedImageResponse { data }.encode_to_vec())
             }
             "klausSyncAccount" => Ok(self.sync_account().encode_to_vec()),
@@ -518,7 +518,7 @@ impl Bridge {
     async fn finish_sign_in(&self, code: &str, state: &str) -> Result<String, String> {
         let pending = self.pending_sign_in.lock().unwrap().take();
         let Some((expected, verifier, redirect)) = pending.filter(|(expected, ..)| expected == state) else {
-            return Err("This sign-in link has expired. Start again from Klaus.".into());
+            return Err("This sign-in link has expired. Start again from KlausNote.".into());
         };
         let _ = expected;
         #[derive(serde::Deserialize)]
@@ -566,7 +566,7 @@ impl Bridge {
 
     fn not_signed_in() -> klaus::SyncOutcome {
         Self::failed(Some(BackendError {
-            message: "Sign in to your Klaus Account to sync.".into(),
+            message: "Sign in to your Klaus account to sync.".into(),
             kind: backend_error::Kind::SyncAuthError as i32,
             ..Default::default()
         }))
@@ -1227,7 +1227,7 @@ async fn auth_callback(State(state): State<AppState>, Query(query): Query<Callba
         _ => Err("This sign-in link is incomplete.".into()),
     };
     let (status, title, detail) = match result {
-        Ok(email) => (StatusCode::OK, "Signed in to Klaus".to_owned(), format!("Signed in as {email}. You can close this tab and return to Klaus.")),
+        Ok(email) => (StatusCode::OK, "Signed in to KlausNote".to_owned(), format!("Signed in as {email}. You can close this tab and return to KlausNote.")),
         Err(err) => (StatusCode::BAD_REQUEST, "Couldn't sign in".to_owned(), err),
     };
     let escape = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");

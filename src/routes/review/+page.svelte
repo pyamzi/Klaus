@@ -7,7 +7,7 @@
   import type { RenderCardResponse } from "@generated/klaus_pb";
   import { onMount } from "svelte";
   import { cardBodyClass, cardFrameSrc, night, postToCard, renderCard as render } from "$lib/card";
-  import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
+  import { IconArrowLeft as ArrowLeftIcon } from "@tabler/icons-svelte";
   import { Button } from "$lib/components/ui/button";
 
   const ratings = [CardAnswer_Rating.AGAIN, CardAnswer_Rating.HARD, CardAnswer_Rating.GOOD, CardAnswer_Rating.EASY];
