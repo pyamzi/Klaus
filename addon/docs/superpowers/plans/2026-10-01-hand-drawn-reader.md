@@ -14,7 +14,7 @@
 
 - The PDF file never depends on the switch; nothing is embedded; `/FreeText` keeps `/DA /Helv`; no `/AP`, `/DR` or `/AcroForm` anywhere (existing pin `tests/test_klausmate.py:2732`).
 - Record kinds: highlight `{id, page, rects, color, note[, card]}`; text `{id, kind:"text", page, rects, text, note, color, size}`; note `{id, kind:"note", page, rects:[[x,y,w,h]], text, color, size}`. Rects in page points, top-left origin. `card: [dx, dy]` in page points relative to the highlight's union top-right. Version stays 1; no migration.
-- Seeds are `seedFor(id)`, never stored. Roughness 1 (Excalidraw "artist"), fixed. Highlight ink alpha 0.43, `mix-blend-mode: multiply`, band 2 pt taller than the rect.
+- Seeds are `seedFor(id)`, never stored. Roughness 1 (Excalidraw "artist"), fixed. Highlight ink alpha 0.43, no blend mode (final-review ruling: multiply hid bands on dark slides), band 2 pt taller than the rect.
 - Default card spot: 8 pt right of the highlight union's right edge, top-aligned with it, clamped inside the page.
 - Note size default 12 pt and the existing `TEXT_SIZES` stepper; note ink one of the five `theme.HIGHLIGHT_INKS` names, default yellow; note text ≤ `MAX_TEXT_CHARS` (4000); card box capped at `TEXT_BOX_MAX_W/H` (480×720).
 - Hand-drawn font stack exactly `"Excalifont", sans-serif`; switch off is today's `Helvetica, Arial, sans-serif`.

@@ -20,3 +20,5 @@ appears is derived from it, not a second original:
   `icon.svg` is that master; the PNG, `.icns` and `.ico` files are
   generated from a 1024 px render of it with `npx tauri icon`, not
   hand-edited. Re-run that if this file changes.
+- **klaus.ink** (the website's favicon and lockups): the k alone, no
+  tile, in `#2393f4` on a transparent ground (decided 2026-10-01).
