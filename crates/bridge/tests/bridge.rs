@@ -330,7 +330,10 @@ async fn change_notetype_saves_and_closes_only_on_success() {
             .post(format!("{base}/_anki/{method}"))
             .header("Content-Type", "application/binary")
             .header("Cookie", cookie)
-            .header("Referer", format!("{base}/change-notetype/{basic}?nid={}&nid={}", added.note_id, also_added.note_id))
+            .header("Referer", format!(
+                "{base}/change-notetype/{basic}?nid={}&nid={}&nid={}",
+                added.note_id, also_added.note_id, added.note_id,
+            ))
             .body(body)
             .send()
     };
@@ -400,6 +403,22 @@ async fn change_notetype_saves_and_closes_only_on_success() {
     let saved: Note = call(&bridge, "getNote", NoteId { nid: added.note_id });
     assert_eq!(saved.notetype_id, reversed);
     assert_eq!(saved.fields, ["Back", "Front"]);
+
+    // Explicit selections must also apply the mapping only once per note.
+    let info: ChangeNotetypeInfo = call(
+        &bridge,
+        "getChangeNotetypeInfo",
+        GetChangeNotetypeInfoRequest { old_notetype_id: reversed, new_notetype_id: basic },
+    );
+    let mut change = info.input.unwrap();
+    change.note_ids = vec![added.note_id, added.note_id];
+    change.new_fields = vec![1, 0];
+    assert_eq!(post("changeNotetype", change.encode_to_vec()).await.unwrap().status(), 204);
+    let (method, _) = tokio::time::timeout(std::time::Duration::from_secs(5), hooks.recv()).await.unwrap().unwrap();
+    assert_eq!(method, "closeEditCurrent");
+    let saved: Note = call(&bridge, "getNote", NoteId { nid: added.note_id });
+    assert_eq!(saved.notetype_id, basic);
+    assert_eq!(saved.fields, ["Front", "Back"]);
 
     assert_eq!(post("closeEditCurrent", vec![]).await.unwrap().status(), 204);
     let (method, input) = hooks.recv().await.unwrap();

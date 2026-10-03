@@ -1226,6 +1226,8 @@ fn change_notetype(state: AppState, headers: &HeaderMap, body: Bytes) -> Respons
     if req.note_ids.is_empty() || req.note_ids.iter().any(|id| *id <= 0) {
         return (StatusCode::BAD_REQUEST, "changeNotetype requires selected note IDs").into_response();
     }
+    req.note_ids.sort_unstable();
+    req.note_ids.dedup();
     state.bridge.touch();
     save_in_background(state, "changeNotetype", req.encode_to_vec().into(), Some("closeEditCurrent"))
 }
