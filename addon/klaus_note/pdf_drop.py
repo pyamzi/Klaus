@@ -57,23 +57,103 @@ ADD_LABEL = "Add to Library"
 # --------------------------------------------------------------- import
 
 
-def _import_pdfs(paths: list[str], skipped: int = 0) -> None:
+REPLACE, KEEP_BOTH = "replace", "keep"
+
+
+def _import_pdfs(paths: list[str], skipped: int = 0, ask=None) -> None:
     """Feed dropped/picked paths through the shared import.
 
-    No return value and no screen refresh: ``import_pdf_file`` already
-    tooltips each successful load and warns on each failure, and since
-    nothing on the deck screen reflects an import, so there is nothing
-    here to tell it about.
+    A PDF whose name is already in the Library is asked about first
+    (#10): Replace, Keep Both or Cancel, one window-modal prompt per
+    clashing file, in order — the next file waits for this one's answer,
+    and Cancel skips only this one. ``ask`` is the prompt (tests pass a
+    fake). No return value and no screen refresh: ``import_pdf_file``
+    already tooltips each successful load and warns on each failure.
     """
+    ask = ask or _ask_clash
+    queue = list(paths)
+
+    def resume(path: str, choice: str | None) -> None:
+        if getattr(mw, "col", None) is None:
+            return  # the profile closed while the prompt was up
+        _import_one(path, choice)
+        run()
+
+    def run() -> None:
+        while queue:
+            path = queue.pop(0)
+            shown = _clash_name(path)
+            if shown:
+                def answered(choice: str | None, p: str = path) -> None:
+                    # A tick later, so the box has closed before the next
+                    # one opens (bridge_reentrancy's deferral rule).
+                    QTimer.singleShot(0, lambda: resume(p, choice))
+
+                ask(path, shown, answered)
+                return
+            _import_one(path, KEEP_BOTH)
+        if skipped:
+            tooltip(f"Klaus imported the PDF and ignored {skipped} other file(s).")
+
+    run()
+
+
+def _import_one(path: str, choice: str | None) -> None:
+    if choice is None:
+        return  # Cancel
     from . import import_pdf_file
 
-    for path in paths:
+    try:
+        import_pdf_file(path, replace=choice == REPLACE)
+    except Exception as e:
+        print(f"[klaus_note] deck-drop import failed for {path}: {e}")
+
+
+def _clash_name(path: str) -> str | None:
+    """The Library name an import of *path* would clash with, as the
+    Library shows it; None when the name is free (or unknowable — the
+    import then keeps both, which never overwrites)."""
+    try:
+        from . import drive_store, pdf_handler, settings
+
+        uf = settings.user_files()
+        safe = pdf_handler.name_in_library(uf, os.path.splitext(os.path.basename(path))[0])
+        if safe is None:
+            return None
+        shown = drive_store.display_name(uf, safe)
+        return shown if shown != safe else os.path.basename(path)
+    except Exception as e:
+        print(f"[klaus_note] import clash check failed for {path}: {e}")
+        return None
+
+
+def _ask_clash(path: str, shown: str, answer, parent: Any = mw) -> Any:
+    """Replace / Keep Both / Cancel for one clashing PDF. Window-modal
+    open(), never exec() (K-114); ``answer`` gets REPLACE, KEEP_BOTH or
+    None (Cancel, Escape, closed)."""
+    from aqt.qt import QMessageBox, Qt
+
+    box = QMessageBox(parent)
+    box.setWindowTitle("Add to Library")
+    box.setText(f"“{shown}” is already in your Library.")
+    box.setInformativeText("Replace moves the old file to the Trash.")
+    replace = box.addButton("Replace", QMessageBox.ButtonRole.DestructiveRole)
+    keep = box.addButton("Keep Both", QMessageBox.ButtonRole.AcceptRole)
+    cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(keep)
+    box.setEscapeButton(cancel)
+    box.setWindowModality(Qt.WindowModality.WindowModal)
+
+    def done(_result: int) -> None:
         try:
-            import_pdf_file(path)
-        except Exception as e:
-            print(f"[klaus_note] deck-drop import failed for {path}: {e}")
-    if skipped:
-        tooltip(f"Klaus imported the PDF and ignored {skipped} other file(s).")
+            hit = box.clickedButton()
+            answer(REPLACE if hit is replace else KEEP_BOTH if hit is keep else None)
+        finally:
+            box.deleteLater()
+
+    box.finished.connect(done)
+    box.open()
+    return box
 
 
 def _browse_for_pdfs() -> None:

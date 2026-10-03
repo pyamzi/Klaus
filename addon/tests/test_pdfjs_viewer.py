@@ -2252,11 +2252,11 @@ check("a note on an ABSORBED record is carried onto the survivor, not "
       pv.merge_highlight_records(
           [_pair159[0], dict(_pair159[1], note="from the right mark")],
           _BRIDGE159)[0].get("note") == "from the right mark")
-check("...and the host's own note wins when both carry one",
+check("...and when both carry one, neither is dropped: host's first (#12)",
       pv.merge_highlight_records(
           [dict(_pair159[0], note="host"),
            dict(_pair159[1], note="absorbed")],
-          _BRIDGE159)[0].get("note") == "host")
+          _BRIDGE159)[0].get("note") == "host\n\nabsorbed")
 
 
 def _same_ink_overlap(records):

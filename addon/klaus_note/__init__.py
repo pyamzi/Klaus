@@ -494,13 +494,14 @@ def install_menu() -> None:
 # ------------------------------ PDF import -------------------------------
 
 
-def import_pdf_file(path: str) -> str | None:
+def import_pdf_file(path: str, replace: bool = False) -> str | None:
     """Import one PDF into the store; returns its safe name, or None.
 
     Shared by every import surface (editor drop bar, deck-screen drop,
     drive window). Warnings are shown here, so callers only branch on the
-    return value. Multi-PDF model: importing never replaces or deletes a
-    previous PDF — save_pdf just repoints the active-PDF marker.
+    return value. A name already in the Library is kept beside it under
+    a unique name (#10); ``replace`` (the deck-screen prompt's Replace)
+    sends the old file to the Trash and starts the new one without marks.
     """
     if not pdf_handler.PDF_AVAILABLE:
         showWarning(
@@ -517,7 +518,35 @@ def import_pdf_file(path: str) -> str | None:
             root = pdf_handler.get_library_root(settings.read())
         except Exception:
             root = None
-        info = pdf_handler.save_pdf(settings.user_files(), base, path, root=root)
+        trash = None
+        if replace:
+            from . import pdf_drive
+
+            blocked = pdf_handler.replace_blocker(settings.user_files(), base, root)
+            if blocked:  # refuse before any reader tab is closed
+                raise pdf_handler.ReplaceRefused(blocked)
+
+            # Readers of the old file let go first (delete_pdf's rule):
+            # their flush bakes into the old file, and none can later
+            # save its marks onto the new one.
+            pdf_drive._close_in_panels(pdf_handler._safe_basename(base))
+            trash = pdf_drive._move_to_trash
+        info = pdf_handler.save_pdf(
+            settings.user_files(), base, path, root=root, replace=trash
+        )
+        if replace:
+            try:
+                from . import annotation_save
+
+                # Replaced: no pending bake of the old marks may run.
+                annotation_save.pipeline().forget(info["name"])
+            except Exception as e:
+                print(f"[klaus_note] save pipeline forget failed: {e}")
+    except pdf_handler.ReplaceRefused as e:
+        from aqt.utils import show_warning  # window-modal open(), never exec
+
+        show_warning(str(e), parent=mw)
+        return None
     except Exception as e:
         showWarning(f"Could not read PDF: {e}")
         return None
@@ -544,7 +573,9 @@ def import_pdf_file(path: str) -> str | None:
         from . import drive_store
 
         drive_store.record_import(
-            settings.user_files(), info["name"], os.path.basename(path)
+            settings.user_files(),
+            info["name"],
+            info.get("filename") or os.path.basename(path),
         )
     except Exception as e:
         print(f"[klaus_note] drive display-name record failed: {e}")

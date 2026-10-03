@@ -17,7 +17,7 @@ import json
 import math
 import os
 import re
-from typing import Any
+from typing import Any, Callable
 import shutil
 import sys
 import threading
@@ -451,63 +451,150 @@ def list_by_recency(
     return names[:limit] if limit is not None else names
 
 
+class ReplaceRefused(OSError):
+    """A Replace import whose old file could not go to the Trash (#10):
+    nothing was changed, and the message says so in plain words."""
+
+
+def name_in_library(user_files_dir: str, name: str) -> str | None:
+    """The safe name an import of ``name`` would clash with (#10): one
+    already mapped or ingested, including names that sanitize alike
+    ("Lecture 1" and "Lecture_1"). None when the name is free."""
+    safe = _safe_basename(name)
+    free = _unique_safe(user_files_dir, load_library_map(user_files_dir), safe) == safe
+    return None if free else safe
+
+
+def replace_blocker(user_files_dir: str, name: str, root: str | None) -> str | None:
+    """Why a Replace import of ``name`` must be refused, or None (#10).
+    A mapped file that can't be reached (Library folder unavailable, or
+    the file gone from it): Replace would trash nothing and still wipe
+    its marks. Callers ask before closing readers; ``save_pdf`` asks too."""
+    safe = name_in_library(user_files_dir, name)
+    mapped = load_library_map(user_files_dir).get(safe) if safe else None
+    if not mapped:
+        return None
+    if not (root and os.path.isdir(root)):
+        where = "its Library folder isn't available"
+    elif not os.path.isfile(os.path.join(root, mapped)):
+        where = "its file isn't in your Library folder"
+    else:
+        return None
+    return f"Can't replace “{os.path.basename(mapped)}”: {where}."
+
+
 def save_pdf(
-    user_files_dir: str, name: str, raw_path: str, root: str | None = None
+    user_files_dir: str,
+    name: str,
+    raw_path: str,
+    root: str | None = None,
+    replace: Callable[[str], bool] | None = None,
 ) -> dict:
     """Ingest a PDF: per-page text, BM25 .txt, page JSON, raw .pdf copy.
 
     ``root`` (K-073, single-copy invariant): with a Library root
     configured, the ONE copy of the PDF goes straight into the root —
     original filename preserved, mapping recorded — and nothing is
-    written to the legacy ``pdfs/`` store. A RE-import of an
-    already-mapped name overwrites its existing root file in place
-    (same relative path) so no second copy ever appears, mirroring how
-    the legacy store always overwrote ``pdfs/<safe>.pdf``. When the
-    root directory is missing (unplugged drive, deleted folder) the
-    import falls back to the legacy store with a printed note rather
-    than failing — the next migration sweep relocates it.
+    written to the legacy ``pdfs/`` store. When the root directory is
+    missing (unplugged drive, deleted folder) the import falls back to
+    the legacy store with a printed note rather than failing — the next
+    migration sweep relocates it.
+
+    A name already in the Library (:func:`name_in_library`, #10) never
+    overwrites it. By default the import is kept BESIDE it, under a
+    unique file (``_unique_path``) and safe name (``_unique_safe``), the
+    way the rescan ingest names new files (never a path another entry
+    maps, even one missing on disk). ``replace``, the caller's
+    move-to-Trash, replaces it instead. In order, under ``pdf_lock``:
+    copy to a temp file beside the destination, old file to the Trash,
+    temp file into place, then the old document's marks and derived
+    state go (pristine copy, annotations JSON with its baked-id ledger,
+    page index, page records; its prefs entry, !Library tag and
+    retention history stay). Any failure before the swap changes nothing;
+    :class:`ReplaceRefused` when the old file can't be reached or
+    trashed.
+
+    Returns ``name`` (the safe name used), ``page_count``, ``txt_path``
+    and ``filename``, the stored file's name for the Library display.
     """
     pages = repair_garbled_pages(raw_path, extract_pages(raw_path))
-    safe = _safe_basename(name)
-    ctx_dir = os.path.join(user_files_dir, "contexts")
     pdf_dir = os.path.join(user_files_dir, "pdfs")
-    os.makedirs(ctx_dir, exist_ok=True)
     os.makedirs(pdf_dir, exist_ok=True)
+    in_root = bool(root and os.path.isdir(root))
+    if root and not in_root:
+        print(
+            f"[klaus_note] Library root {root!r} is unavailable — "
+            f"importing {name!r} into the legacy store instead."
+        )
+    mapping = load_library_map(user_files_dir)
+    safe = _safe_basename(name)
+    clash = name_in_library(user_files_dir, name)
+    filename = _library_filename(os.path.basename(raw_path), safe)
+    mapped = mapping.get(safe) if clash else None
+    prior = os.path.join(root, mapped) if in_root and mapped else None
+    if replace is not None:
+        blocked = replace_blocker(user_files_dir, name, root)
+        if blocked:
+            raise ReplaceRefused(blocked)
+    taken = set(mapping.values())  # mapped files may be missing on disk
+    replacing = bool(clash and replace is not None)
+    old = (prior or os.path.join(pdf_dir, safe + ".pdf")) if replacing else None
+    with pdf_lock(safe):
+        if prior and replacing:
+            pdf_dest = prior
+        elif in_root:
+            # Beside the clashing file, suffix off ITS name: a name that
+            # only sanitizes alike ("Lecture_1" by "Lecture 1") would
+            # otherwise share its tag (#14).
+            start = mapped if mapped and not os.path.dirname(mapped) else filename
+            pdf_dest = _unique_path(root, start, taken)
+        else:
+            pdf_dest = None
+        if clash and replace is None:
+            safe = _unique_safe(user_files_dir, mapping, safe)
+        pdf_dest = pdf_dest or os.path.join(pdf_dir, safe + ".pdf")
+        # Copy beside the destination first: a failed copy (disk full)
+        # leaves the old file, its marks and the mapping as they were.
+        tmp = os.path.join(
+            os.path.dirname(pdf_dest),
+            f".{os.path.basename(pdf_dest)}.{uuid.uuid4().hex}.tmp",
+        )
+        try:
+            shutil.copy2(raw_path, tmp)
+            if old and os.path.isfile(old) and replace(old) is False:
+                raise ReplaceRefused(
+                    f"“{os.path.basename(old)}” couldn't be moved to "
+                    "the Trash, so nothing was replaced."
+                )
+            os.replace(tmp, pdf_dest)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        if replacing:
+            # The new file starts with no marks: nothing of the old one
+            # may later read as "deleted outside" or rank against it.
+            _drop_stale_original(user_files_dir, safe)
+            marks = annotations_path_for(user_files_dir, safe)
+            if os.path.isfile(marks):
+                os.remove(marks)
+            _drop_document_state(user_files_dir, safe)
+        if in_root:
+            rel = os.path.relpath(pdf_dest, root)
+            if mapping.get(safe) != rel:
+                mapping[safe] = rel
+                save_library_map(user_files_dir, mapping)
+            filename = os.path.basename(pdf_dest)
 
-    full_text = "\n\n".join(pages)
+    ctx_dir = os.path.join(user_files_dir, "contexts")
+    os.makedirs(ctx_dir, exist_ok=True)
     txt_path = os.path.join(ctx_dir, safe + ".txt")
     with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(full_text)
-
-    json_path = os.path.join(ctx_dir, safe + ".json")
-    with open(json_path, "w", encoding="utf-8") as f:
+        f.write("\n\n".join(pages))
+    with open(os.path.join(ctx_dir, safe + ".json"), "w", encoding="utf-8") as f:
         json.dump({"pages": pages, "page_count": len(pages)}, f)
 
-    if root and os.path.isdir(root):
-        mapping = load_library_map(user_files_dir)
-        prior = mapping.get(safe)
-        if prior and os.path.isfile(os.path.join(root, prior)):
-            # Re-import: replace the existing library copy in place.
-            pdf_dest = os.path.join(root, prior)
-            shutil.copy2(raw_path, pdf_dest)
-        else:
-            filename = _library_filename(os.path.basename(raw_path), safe)
-            pdf_dest = _unique_path(root, filename)
-            shutil.copy2(raw_path, pdf_dest)
-            mapping[safe] = os.path.relpath(pdf_dest, root)
-            save_library_map(user_files_dir, mapping)
-    else:
-        if root:
-            print(
-                f"[klaus_note] Library root {root!r} is unavailable — "
-                f"importing {safe!r} into the legacy store instead."
-            )
-        pdf_dest = os.path.join(pdf_dir, safe + ".pdf")
-        shutil.copy2(raw_path, pdf_dest)
-
-    # Re-ingest under the same name: the base file changed, so any
-    # captured pristine original is stale — drop it (the next bake
-    # re-captures from the fresh copy).
+    # A fresh file under this name: any captured pristine is stale (the
+    # next bake re-captures from the fresh copy).
     _drop_stale_original(user_files_dir, safe)
 
     set_active_pdf(user_files_dir, safe)
@@ -515,7 +602,12 @@ def save_pdf(
     # not at its old recency slot (or worse, by the copied file's SOURCE
     # mtime — see list_by_recency).
     touch_last_used(user_files_dir, safe)
-    return {"name": safe, "page_count": len(pages), "txt_path": txt_path}
+    return {
+        "name": safe,
+        "page_count": len(pages),
+        "txt_path": txt_path,
+        "filename": filename,
+    }
 
 
 # The bake's hidden tmp in the Library root (``_commit_bake``).
@@ -813,13 +905,14 @@ def _library_filename(display: str, fallback: str) -> str:
     return name
 
 
-def _unique_path(dest_dir: str, filename: str) -> str:
+def _unique_path(dest_dir: str, filename: str, taken=()) -> str:
     """``filename`` under ``dest_dir``, suffixed " (1)", " (2)", ... on a
-    collision. Never returns a path that already exists on disk."""
+    collision. Never returns a path that already exists on disk, nor one
+    whose path relative to ``dest_dir`` is in ``taken``."""
     stem, ext = os.path.splitext(filename)
     candidate = os.path.join(dest_dir, filename)
     n = 1
-    while os.path.isfile(candidate):
+    while os.path.isfile(candidate) or os.path.relpath(candidate, dest_dir) in taken:
         candidate = os.path.join(dest_dir, f"{stem} ({n}){ext}")
         n += 1
     return candidate
@@ -1655,7 +1748,7 @@ def _load_annotation_doc_strict(user_files_dir: str, name: str) -> dict | None:
 
 
 def save_annotations(
-    user_files_dir: str, name: str, highlights: list[dict]
+    user_files_dir: str, name: str, highlights: list[dict], claim: bool = True
 ) -> bool:
     """Write highlights for ``name`` — SYNCHRONOUS by design (plan B).
 
@@ -1665,6 +1758,11 @@ def save_annotations(
     Top-level keys other than ``highlights`` are preserved (K-081: the
     suppressed_external tombstones used to be dropped on every save).
     True when the file was written.
+
+    ``claim`` (#11): an adopted outside record that differs from its
+    stored copy was edited in Klaus, so it becomes Klaus's (see
+    :func:`_claim_edited_external`). Only the outside-mark mirror, which
+    writes the FILE's version of those records, passes False.
     """
     path = annotations_path_for(user_files_dir, name)
     try:
@@ -1672,13 +1770,64 @@ def save_annotations(
         if doc is None:
             print(f"[klaus_note] annotations unreadable, not written over: {path}")
             return False
+        highlights = list(highlights or [])
+        if claim:
+            highlights = _claim_edited_external(doc, highlights)
         doc["version"] = 1
-        doc["highlights"] = list(highlights or [])
+        doc["highlights"] = highlights
         _atomic_write_json(path, doc)  # a failed write never truncates the marks
         return True
     except (OSError, TypeError, ValueError) as exc:
         print(f"[klaus_note] failed to save annotations {path}: {exc}")
         return False
+
+
+def _claim_edited_external(doc: dict, highlights: list) -> list:
+    """#11: Klaus owns an adopted outside mark from its first Klaus edit.
+
+    Since K-082 the bake regenerates only native records and carries an
+    outside mark's original object verbatim, so an edited external
+    record never reached the file and the next mirror wrote the
+    original back over it. Here, every external record that differs from
+    its stored copy loses ``origin`` (the bake regenerates it, Klaus
+    /NM and all) and its stored copy is tombstoned in the same write, so
+    the carry drops the original from the file and the mirror never
+    re-adopts it.
+    """
+    before: dict = {}
+    for raw in doc.get("highlights") or []:
+        old = _validate_highlight(raw)
+        if old is not None and old.get("origin") == "external":
+            before[old["id"]] = old
+    if not before:
+        return highlights
+    out: list = []
+    tombs: list[dict] = []
+    for rec in highlights:
+        new = _validate_highlight(rec)
+        old = before.get(new["id"]) if new is not None else None
+        if old is not None and new.get("origin") == "external" and new != old:
+            # A claim tombstone lives until the original leaves the file
+            # (the mirror sweeps it then), however late the first bake.
+            tombs.append(dict(_tombstone_entry(old), claim=True))
+            rec = {k: v for k, v in rec.items() if k != "origin"}
+        out.append(rec)
+    if tombs:
+        sup = doc.get("suppressed_external")
+        sup = [x for x in sup if isinstance(x, dict)] if isinstance(sup, list) else []
+        doc["suppressed_external"] = sup + tombs
+    return out
+
+
+def _tombstone_entry(record: dict) -> dict:
+    """The precise tombstone of one outside mark (K-084)."""
+    return {
+        "page": record.get("page"),
+        "kind": record_kind(record),
+        "rects": [list(r) for r in record.get("rects") or []],
+        "text": str(record.get("text") or ""),
+        "ts": time.time(),
+    }
 
 
 def load_suppressed(user_files_dir: str, name: str) -> list[dict]:
@@ -1711,18 +1860,10 @@ def add_suppressed(user_files_dir: str, name: str, record: dict) -> None:
     tombstone blocks the resurrection of the specific deleted mark,
     never the location."""
     try:
-        rects = [list(r) for r in record.get("rects") or []]
-        if not rects:
+        if not record.get("rects"):
             return
-        entry = {
-            "page": record.get("page"),
-            "kind": record_kind(record),
-            "rects": rects,
-            "text": str(record.get("text") or ""),
-            "ts": time.time(),
-        }
         sup = load_suppressed(user_files_dir, name)
-        sup.append(entry)
+        sup.append(_tombstone_entry(record))
         _update_doc_keys(user_files_dir, name, {"suppressed_external": sup})
     except Exception as exc:  # noqa: BLE001
         print(f"[klaus_note] tombstone write failed for {name}: {exc}")
@@ -2757,7 +2898,7 @@ def _tombstone_hits(s: dict, rec: dict) -> bool:
     near the same spot (the old 30%-overlap match blocked those:
     'sometimes my highlight doesn't appear')."""
     ts = s.get("ts")
-    if (
+    if not s.get("claim") and (
         not isinstance(ts, (int, float))
         or time.time() - float(ts) > 600.0
     ):
@@ -2964,7 +3105,8 @@ def _mirror_core(
                 except Exception as exc:  # noqa: BLE001
                     print(f"[klaus_note] tombstone expiry failed: {exc}")
     if changes:
-        save_annotations(user_files_dir, name, records)
+        # The FILE's version of outside marks: never a Klaus edit (#11).
+        save_annotations(user_files_dir, name, records, claim=False)
         print(
             f"[klaus_note] synced {changes} outside annotation "
             f"change(s) for {name}"
@@ -3028,6 +3170,29 @@ def list_contexts(user_files_dir: str) -> list[str]:
     return sorted(f for f in os.listdir(ctx_dir) if f.endswith(".txt"))
 
 
+def _drop_document_state(user_files_dir: str, base: str) -> None:
+    """What Klaus derived from one document's CONTENT: its page index
+    (and match cache) and page records. Shared by a delete and a Replace
+    import (#10). Not here: the prefs entry (it holds the PDF's !Library
+    tag) and the retention history (it follows the tag's cards and can't
+    be rebuilt), both of which a Replace keeps. Lazy imports avoid
+    module cycles; each step is best-effort."""
+    try:
+        from . import pdf_index
+
+        pdf_index.delete(user_files_dir, base)
+    except Exception as exc:
+        print(f"[klaus_note] pdf_index cleanup failed for {base}: {exc}")
+    # user_files/pages/<safe>/ (page_store.py): a re-import under this
+    # safe basename would otherwise inherit a stranger's slide text.
+    try:
+        from . import page_store
+
+        shutil.rmtree(os.path.join(user_files_dir, page_store.SUBDIR, base), ignore_errors=True)
+    except Exception as exc:
+        print(f"[klaus_note] page record cleanup failed for {base}: {exc}")
+
+
 def delete_context(user_files_dir: str, name: str, remove_file=os.remove) -> None:
     """Delete one PDF and everything Klaus derived from it. The PDF
     itself (library-root copy or legacy ``pdfs/`` copy) goes through
@@ -3072,24 +3237,7 @@ def delete_context(user_files_dir: str, name: str, remove_file=os.remove) -> Non
                     pass
         # Lazy import: avoids a module cycle (pdf_index imports pdf_handler at
         # module level, for _safe_basename).
-        try:
-            from . import pdf_index
-
-            pdf_index.delete(user_files_dir, base)
-        except Exception as exc:
-            print(f"[klaus_note] pdf_index cleanup failed for {base}: {exc}")
-        # user_files/pages/<safe>/ is a sibling too (page_store.py) — the
-        # PR1 review fix re-keys it onto a text digest so a bake or a move
-        # cannot orphan it, but an actual delete must still remove it, or a
-        # re-import under this safe basename would inherit a stranger's
-        # slide text and transcript. Lazy import: avoids a module cycle,
-        # matching the pdf_index import just above.
-        try:
-            from . import page_store
-
-            shutil.rmtree(os.path.join(user_files_dir, page_store.SUBDIR, base), ignore_errors=True)
-        except Exception as exc:
-            print(f"[klaus_note] page record cleanup failed for {base}: {exc}")
+        _drop_document_state(user_files_dir, base)
         try:
             from . import drive_store
 

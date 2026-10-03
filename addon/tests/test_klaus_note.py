@@ -446,7 +446,8 @@ try:
 
     time.sleep(0.05)
     t1 = time.time()
-    pdf_handler.save_pdf(sp_tmp, "Old Lecture", raw_pdf)  # re-import, same basename
+    # Re-import, same basename, answered Replace (#10: the default keeps both).
+    pdf_handler.save_pdf(sp_tmp, "Old Lecture", raw_pdf, replace=os.remove)
     lu2 = pdf_handler.load_last_used(sp_tmp)
 finally:
     pdf_handler.extract_pages = _orig_extract_sp
@@ -1581,11 +1582,12 @@ try:
           not os.path.isfile(os.path.join(sc_user, "pdfs", _info["name"] + ".pdf")))
     check("import is mapped",
           pdf_handler.load_library_map(sc_user)[_info["name"]] == "My Notes.pdf")
-    # Re-import the same name: replace in place, never a second copy.
+    # Re-import the same name answered Replace (#10): in place, never a
+    # second copy. (Unanswered, an import keeps both: test_import_replace.)
     with open(sc_src, "wb") as f:
         f.write(b"%PDF-1.4\nv2 longer body\n%%EOF")
-    pdf_handler.save_pdf(sc_user, "My Notes", sc_src, root=sc_root)
-    check("re-import replaces the SAME file in place",
+    pdf_handler.save_pdf(sc_user, "My Notes", sc_src, root=sc_root, replace=os.remove)
+    check("a Replace re-import replaces the SAME file in place",
           open(os.path.join(sc_root, "My Notes.pdf"), "rb").read()
           == b"%PDF-1.4\nv2 longer body\n%%EOF"
           and not os.path.isfile(os.path.join(sc_root, "My Notes (1).pdf")))
