@@ -1,6 +1,6 @@
 # Collections sync through the Klaus Account, automatically, on Anki's sync protocol
 
-> Domain superseded by ADR-0008: klaus.ink is now klaus.so (auth.klaus.so for the Klaus Account, note.klaus.so for the web app).
+> Domain superseded by ADR-0008: klaus.ink is now klaus.so (app.klaus.so for the Klaus account, note.klaus.so for the web app).
 
 Klaus syncs the Collection with klaus.ink under the user's Klaus Account, not with AnkiWeb. klaus.ink runs Anki's own sync server (rslib's, AGPL) behind Klaus Accounts, so Klaus's client is rslib's sync client pointed at klaus.ink, and AnkiMobile and AnkiDroid can still sync with the same Collection through their custom-sync-server setting. Users sign in in their browser (OAuth with PKCE); the token klaus.ink hands back is the sync key, kept in the system keychain. Syncing is automatic: on open, on quit, and in the background whenever the Collection has changed or klaus.ink has changes (Anki's `syncStatus`, which checks locally for free and asks the server at most every 5 minutes), started only after ~30 s without activity, because a sync holds the Collection for its network round-trip. The contract klaus.ink must implement is in `docs/klaus-ink-sync.md`.
 

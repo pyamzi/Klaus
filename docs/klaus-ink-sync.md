@@ -1,6 +1,6 @@
 # klaus.ink sync contract
 
-> Domain superseded by ADR-0008: klaus.ink is now klaus.so (auth.klaus.so for the Klaus Account, note.klaus.so for the web app).
+> Domain superseded by ADR-0008: klaus.ink is now klaus.so (app.klaus.so for the Klaus account, note.klaus.so for the web app).
 
 What the Klaus desktop app expects from klaus.ink (ADR-0007). The app's side is in `crates/bridge` (`account_*`, `sync`, `auto_sync_tick`) and is tested against a fake of this contract in `crates/bridge/tests/bridge.rs`.
 
