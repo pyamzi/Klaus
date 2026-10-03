@@ -98,8 +98,7 @@ const QUIT_DONE: u8 = 2;
 /// Starts the sync on quit, if one is due; false means quit now.
 fn start_quit(app: &AppHandle, quit: &Arc<AtomicU8>) -> bool {
     let bridge = app.state::<Arc<Bridge>>().inner().clone();
-    let account = bridge.sync_account();
-    if account.email.is_empty() || !account.auto_sync {
+    if !bridge.should_auto_sync() {
         quit.store(QUIT_DONE, Ordering::SeqCst);
         return false;
     }
