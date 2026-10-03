@@ -85,29 +85,63 @@ def _current_deck_id(editor) -> int:
         return mw.col.decks.get_current_id()
 
 
-def drop_unused_sidecar(image_name) -> bool:
+def drop_unused_sidecar(image_name, exclude=(), col=None) -> bool:
     """Klaus: the one way a diagram's _<image_name>.excalidraw leaves media.
     Moved to Anki's media trash (syncs as a deletion; Check Media can
     restore it), and only once no note's fields contain image_name, plain
-    or HTML-escaped. True when it went."""
-    sidecar = "_%s.excalidraw" % image_name
-    path = media_path(mw.col.media.dir(), sidecar) if image_name else None
-    if path is None or media_path(mw.col.media.dir(), image_name) is None:
-        return False
+    or HTML-escaped, other than the note ids in exclude (notes about to be
+    deleted). Collection only, no Qt, never raises. True when it went."""
     try:
+        col = col or mw.col
+        sidecar = "_%s.excalidraw" % image_name
+        path = media_path(col.media.dir(), sidecar) if image_name else None
+        if path is None or media_path(col.media.dir(), image_name) is None:
+            return False
         if not os.path.isfile(path):
             return False
+        exclude = {int(nid) for nid in exclude}
         for name in {image_name, html.escape(image_name)}:
             like = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            if mw.col.db.scalar(
-                    "select 1 from notes where flds like ? escape '\\' limit 1",
-                    "%" + like + "%"):
+            users = col.db.list(
+                "select id from notes where flds like ? escape '\\'", "%" + like + "%")
+            if any(nid not in exclude for nid in users):
                 return False
-        mw.col.media.trash_files([sidecar])
+        col.media.trash_files([sidecar])
     except Exception as e:  # noqa: BLE001 - a kept file is the safe failure
         print("[klaus_note] draw: the old scene was kept: %s" % e)
         return False
     return True
+
+
+def on_notes_will_be_deleted(col, ids) -> None:
+    """Klaus (anki.hooks.notes_will_be_deleted): the scenes of the IO notes
+    being deleted go once no other note names their image. Runs inside
+    col.remove_notes before the delete, maybe on the op's thread: the
+    collection only, no Qt, and it never raises (that would break the
+    deletion)."""
+    try:
+        gone = {int(nid) for nid in ids}
+        model = col.models.by_name(IO_MODEL_NAME) if gone else None
+        if not model:
+            return
+        conf = col.get_config("imgocc") or {}
+        im = (conf.get("flds") or {}).get("im", IO_FLDS["im"])
+        names = [f["name"] for f in model["flds"]]
+        if im not in names:
+            return
+        idx = names.index(im)
+        images = set()
+        for flds in col.db.list(
+                "select flds from notes where mid = ? and id in (%s)"
+                % ",".join(str(nid) for nid in gone), model["id"]):
+            fields = flds.split("\x1f")
+            name = img_element_to_path(fields[idx], True) if idx < len(fields) else None
+            if name:
+                images.add(name)
+        for name in sorted(images):
+            drop_unused_sidecar(name, exclude=gone, col=col)
+    except Exception as e:  # noqa: BLE001 - never break note deletion
+        print("[klaus_note] draw: scenes of deleted notes were kept: %s" % e)
 
 
 class ImgOccAdd(object):

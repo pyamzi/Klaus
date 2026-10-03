@@ -99,6 +99,9 @@ def fake_main_window(mgr):
 tips = []
 io.tooltip = lambda msg, *a, **k: tips.append(msg)
 
+anki_hooks = sys.modules["anki.hooks"]
+anki_hooks.notes_will_be_deleted = Hook()
+
 section("conflict guard: the separate add-on installed and enabled")
 check("CONFLICT_ADDON is IOE's AnkiWeb id", io.CONFLICT_ADDON == "1374772155")
 mgr = Mgr(installed=["1374772155", "klaus_note"])
@@ -109,6 +112,7 @@ check("no gui_hooks callback is registered", all(getattr(gh, h) == [] for h in H
       str({h: getattr(gh, h) for h in HOOKS if getattr(gh, h)}))
 check("no menu action is added",
       mwin.form.menuTools.actions == [] and mwin.form.menuHelp.actions == [])
+check("no note-deletion hook is registered", anki_hooks.notes_will_be_deleted == [])
 check("exactly the conflict tooltip is shown", tips == [CONFLICT_TIP], str(tips))
 check("the guard runs before IOE's modules load",
       "klaus_note.image_occlusion.main" not in sys.modules)
@@ -163,6 +167,13 @@ for label, mgr in (("disabled", Mgr(installed=["1374772155"], disabled=["1374772
     check("Help keeps one Image Occlusion entry",
           [a.text for a in mwin.form.menuHelp.actions] == ["Image Occlusion Help…"],
           str([a.text for a in mwin.form.menuHelp.actions]))
+
+
+add_mod = sys.modules.get("klaus_note.image_occlusion.add")
+check("after three setups the note-deletion hook is registered exactly once",
+      add_mod is not None
+      and anki_hooks.notes_will_be_deleted == [add_mod.on_notes_will_be_deleted],
+      str(anki_hooks.notes_will_be_deleted))
 
 
 section("the one setWebExports regex")

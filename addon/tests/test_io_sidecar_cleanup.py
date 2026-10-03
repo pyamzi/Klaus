@@ -28,27 +28,47 @@ for _name in ("aqt.addcards", "aqt.editcurrent", "aqt.reviewer", "anki.notes",
     _permissive_module(_name)
 
 add = importlib.import_module("klaus_note.image_occlusion.add")
+cfg = importlib.import_module("klaus_note.image_occlusion.config")
 excal_tab = importlib.import_module("klaus_note.image_occlusion.excal_tab")
 add.tooltip = lambda *a, **k: None
 SCENE = {"type": "excalidraw", "elements": [],
          "klaus": {"originX": 0, "originY": 0, "padding": 20, "scale": 2}}
 
 
+IO_MID, OTHER_MID = 1700, 1800
+IO_MODEL = {"id": IO_MID, "name": cfg.IO_MODEL_NAME,
+            "flds": [{"name": cfg.IO_FLDS[i]} for i in cfg.IO_FLDS_IDS]}
+
+
 class Col:
-    """The collection as far as the cleanup reads it: notes(flds) in SQLite
-    (the real LIKE runs), a media folder and its trash."""
+    """The collection as far as the cleanup reads it: notes(mid, flds) in
+    SQLite (the real LIKE runs), the IO note type, a media folder and its
+    trash."""
 
     def __init__(self):
         self.media_dir = tempfile.mkdtemp(prefix="io-sidecar-media-")
         self.trashed, self.trash_error = [], None
         self.conn = sqlite3.connect(":memory:")
-        self.conn.execute("create table notes (id integer primary key, flds text)")
-        self.db = types.SimpleNamespace(scalar=self._scalar)
+        self.conn.execute("create table notes (id integer primary key, mid integer, flds text)")
+        self.db_error = None
+        self.db = types.SimpleNamespace(scalar=self._scalar, list=self._list)
         self.media = types.SimpleNamespace(dir=lambda: self.media_dir, trash_files=self._trash)
+        self.models = types.SimpleNamespace(
+            by_name=lambda n: IO_MODEL if n == cfg.IO_MODEL_NAME else None)
+
+    def get_config(self, key, default=None):
+        return {"flds": dict(cfg.IO_FLDS)} if key == "imgocc" else default
 
     def _scalar(self, sql, *args):
+        if self.db_error:
+            raise self.db_error
         row = self.conn.execute(sql, args).fetchone()
         return row[0] if row else None
+
+    def _list(self, sql, *args):
+        if self.db_error:
+            raise self.db_error
+        return [r[0] for r in self.conn.execute(sql, args).fetchall()]
 
     def _trash(self, names):
         if self.trash_error:
@@ -57,10 +77,16 @@ class Col:
             self.trashed.append(n)
             os.remove(os.path.join(self.media_dir, n))
 
-    def note(self, nid, image_name, escape=False):
+    def note(self, nid, image_name, escape=False, mid=IO_MID):
+        """An IO note (fields in the note type's order) showing image_name;
+        with another mid, a plain note naming it in its first field."""
         src = image_name.replace("&", "&amp;") if escape else image_name
-        flds = '<img src="%s">\x1f<img src="abc-ao-O.svg">\x1fabc-ao-%d' % (src, nid)
-        self.conn.execute("insert or replace into notes values (?, ?)", (nid, flds))
+        fields = [""] * len(cfg.IO_FLDS_IDS)
+        fields[cfg.IO_FLDS_IDS.index("id")] = "abc-ao-%d" % nid
+        fields[cfg.IO_FLDS_IDS.index("om")] = '<img src="abc-ao-O.svg">'
+        fields[cfg.IO_FLDS_IDS.index("im" if mid == IO_MID else "id")] = '<img src="%s">' % src
+        self.conn.execute("insert or replace into notes values (?, ?, ?)",
+                          (nid, mid, "\x1f".join(fields)))
 
     def sidecar(self, image_name):
         path = os.path.join(self.media_dir, "_" + image_name + ".excalidraw")
@@ -202,5 +228,87 @@ check("Change Image to a photo: the old diagram's sidecar is trashed, none writt
       err is None and col.trashed == ["_diagram-1.png.excalidraw"]
       and not [n for n in os.listdir(col.media_dir) if n.endswith(".excalidraw")],
       str(os.listdir(col.media_dir)))
+
+
+
+section("PR review: deleting IO notes (anki.hooks.notes_will_be_deleted)")
+hook = getattr(add, "on_notes_will_be_deleted", None)
+check("add.on_notes_will_be_deleted exists", callable(hook))
+QT = []
+add.tooltip = lambda *a, **k: QT.append(a)
+
+
+def deleting(col, ids):
+    """Run the hook as Anki does, before the delete; then delete. add.mw has
+    no collection here: the hook must use the col it is handed."""
+    add.mw = types.SimpleNamespace()
+    try:
+        r = hook(col, ids) if hook else None
+    except Exception as e:  # noqa: BLE001
+        r = e
+    col.conn.execute("delete from notes where id in (%s)" % ",".join(map(str, ids)))
+    return r
+
+
+col = Col()
+side = col.sidecar("diagram-1.png")
+col.note(1, "diagram-1.png")
+col.note(9, "photo.png")
+r = deleting(col, [1])
+check("deleting the only note on the image: its sidecar is trashed",
+      r is None and col.trashed == ["_diagram-1.png.excalidraw"] and not os.path.exists(side),
+      "%r %s" % (r, col.trashed))
+
+col = Col()
+side = col.sidecar("diagram-1.png")
+col.note(1, "diagram-1.png")
+col.note(2, "diagram-1.png")
+deleting(col, [1])
+check("deleting one of two notes sharing the image: kept",
+      os.path.isfile(side) and col.trashed == [], str(col.trashed))
+deleting(col, [2])
+check("...and deleting the last one trashes it", col.trashed == ["_diagram-1.png.excalidraw"])
+
+col = Col()
+side = col.sidecar("diagram-1.png")
+col.note(1, "diagram-1.png")
+col.note(2, "diagram-1.png")
+deleting(col, [1, 2])
+check("deleting every note on the image at once: trashed", col.trashed == ["_diagram-1.png.excalidraw"])
+
+col = Col()
+side = col.sidecar("diagram-1.png")
+col.note(1, "diagram-1.png")
+col.note(5, "diagram-1.png", mid=OTHER_MID)
+deleting(col, [1])
+check("a non-IO note outside the deletion still names the image: kept",
+      os.path.isfile(side) and col.trashed == [])
+
+col = Col()
+side = col.sidecar("diagram-1.png")
+col.note(5, "diagram-1.png", mid=OTHER_MID)
+deleting(col, [5])
+check("deleting a non-IO note that names the image: not an IO note, nothing trashed",
+      os.path.isfile(side) and col.trashed == [])
+
+col = Col()
+side = col.sidecar("diagram-1.png")
+col.note(1, "diagram-1.png")
+col.db_error = RuntimeError("database locked")
+r = deleting(col, [1])
+check("an exception inside is swallowed (returns None, file kept)",
+      r is None and os.path.isfile(side), repr(r))
+col = Col()
+col.trash_error = RuntimeError("backend says no")
+side = col.sidecar("diagram-1.png")
+col.note(1, "diagram-1.png")
+r = deleting(col, [1])
+check("a failing trash_files is swallowed too", r is None and os.path.isfile(side), repr(r))
+col = Col()
+col.models = None  # anything unexpected
+r = deleting(col, [1])
+check("a broken collection object is swallowed", r is None, repr(r))
+check("no anki.hooks deletion ids: nothing happens", deleting(Col(), []) is None)
+check("the hook never touches Qt (no tooltip)", QT == [], str(QT))
 
 raise SystemExit(report())
